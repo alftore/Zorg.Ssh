@@ -1,8 +1,31 @@
 #nullable enable
+Zorg.Ssh.SshConnectionException
+Zorg.Ssh.SshConnectionException.SshConnectionException() -> void
+Zorg.Ssh.SshConnectionException.SshConnectionException(string! message) -> void
+Zorg.Ssh.SshConnectionException.SshConnectionException(string! message, System.Exception! innerException) -> void
+Zorg.Ssh.SshDisconnectedException
+Zorg.Ssh.SshDisconnectedException.Description.get -> string!
+Zorg.Ssh.SshDisconnectedException.ReasonCode.get -> uint
+Zorg.Ssh.SshDisconnectedException.SshDisconnectedException() -> void
+Zorg.Ssh.SshDisconnectedException.SshDisconnectedException(string! message) -> void
+Zorg.Ssh.SshDisconnectedException.SshDisconnectedException(string! message, System.Exception! innerException) -> void
+Zorg.Ssh.SshDisconnectedException.SshDisconnectedException(uint reasonCode, string! description) -> void
 Zorg.Ssh.SshException
 Zorg.Ssh.SshException.SshException() -> void
 Zorg.Ssh.SshException.SshException(string! message) -> void
 Zorg.Ssh.SshException.SshException(string! message, System.Exception! innerException) -> void
+Zorg.Ssh.SshHostKeyException
+Zorg.Ssh.SshHostKeyException.SshHostKeyException() -> void
+Zorg.Ssh.SshHostKeyException.SshHostKeyException(string! message) -> void
+Zorg.Ssh.SshHostKeyException.SshHostKeyException(string! message, System.Exception! innerException) -> void
+Zorg.Ssh.SshNegotiationException
+Zorg.Ssh.SshNegotiationException.Family.get -> string!
+Zorg.Ssh.SshNegotiationException.LocalAlgorithms.get -> System.Collections.Generic.IReadOnlyList<string!>!
+Zorg.Ssh.SshNegotiationException.PeerAlgorithms.get -> System.Collections.Generic.IReadOnlyList<string!>!
+Zorg.Ssh.SshNegotiationException.SshNegotiationException() -> void
+Zorg.Ssh.SshNegotiationException.SshNegotiationException(string! family, System.Collections.Generic.IReadOnlyList<string!>! localAlgorithms, System.Collections.Generic.IReadOnlyList<string!>! peerAlgorithms) -> void
+Zorg.Ssh.SshNegotiationException.SshNegotiationException(string! message) -> void
+Zorg.Ssh.SshNegotiationException.SshNegotiationException(string! message, System.Exception! innerException) -> void
 Zorg.Ssh.SshProtocolException
 Zorg.Ssh.SshProtocolException.SshProtocolException() -> void
 Zorg.Ssh.SshProtocolException.SshProtocolException(string! message) -> void
