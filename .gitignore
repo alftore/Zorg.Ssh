@@ -1,0 +1,31 @@
+# Build output
+[Bb]in/
+[Oo]bj/
+artifacts/
+*.nupkg
+*.snupkg
+TestResults/
+BenchmarkDotNet.Artifacts/
+
+# Local scratch and temporary files (never committed)
+.tmp/
+
+# IDE and OS files
+.claude/
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+.DS_Store
+Thumbs.db
+
+# Secrets and local settings. Test keys are generated during test setup, so no private key belongs here.
+*.env
+appsettings.Local.json
+*.pem
+*.ppk
+id_*
+
+# Snapshot candidates
+*.received.*
