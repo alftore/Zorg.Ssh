@@ -76,7 +76,7 @@ internal sealed class ChannelReadStream(SshChannel channel, PipeReader reader) :
 }
 
 /// <summary>Sends channel data. Disposing it sends EOF, so the far side sees the end of its stdin.</summary>
-internal sealed class ChannelWriteStream(SshChannel channel) : Stream
+internal sealed class ChannelWriteStream(SshChannel channel, uint? extendedType = null) : Stream
 {
     private bool _disposed;
 
@@ -97,7 +97,7 @@ internal sealed class ChannelWriteStream(SshChannel channel) : Stream
     public override ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        return channel.WriteAsync(buffer, cancellationToken);
+        return channel.WriteAsync(buffer, cancellationToken, extendedType);
     }
 
     public override Task WriteAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) =>
@@ -126,7 +126,10 @@ internal sealed class ChannelWriteStream(SshChannel channel) : Stream
             try
             {
                 using CancellationTokenSource limit = new(TimeSpan.FromSeconds(5));
-                await channel.SendEofAsync(limit.Token).ConfigureAwait(false);
+                if (extendedType is null)
+                {
+                    await channel.SendEofAsync(limit.Token).ConfigureAwait(false);
+                }
             }
             catch (Exception ex) when (ex is SshException or OperationCanceledException)
             {

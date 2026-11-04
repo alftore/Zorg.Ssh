@@ -55,6 +55,7 @@ internal sealed class SshChannel : IAsyncDisposable
         Output = new ChannelReadStream(this, _output.Reader);
         ErrorOutput = new ChannelReadStream(this, _errorOutput.Reader);
         Input = new ChannelWriteStream(this);
+        ErrorInput = new ChannelWriteStream(this, extendedType: 1);
     }
 
     public uint LocalId { get; }
@@ -69,6 +70,9 @@ internal sealed class SshChannel : IAsyncDisposable
 
     /// <summary>Gets the stream that sends channel data. Disposing it sends EOF.</summary>
     public Stream Input { get; }
+
+    /// <summary>Gets the stream that sends extended data: stderr, for a server.</summary>
+    public Stream ErrorInput { get; }
 
     /// <summary>Gets the exit status, once the peer has sent one.</summary>
     public int? ExitCode { get; private set; }
@@ -380,6 +384,7 @@ internal sealed class SshChannel : IAsyncDisposable
         await Output.DisposeAsync().ConfigureAwait(false);
         await ErrorOutput.DisposeAsync().ConfigureAwait(false);
         await Input.DisposeAsync().ConfigureAwait(false);
+        await ErrorInput.DisposeAsync().ConfigureAwait(false);
         _requestLock.Dispose();
     }
 
