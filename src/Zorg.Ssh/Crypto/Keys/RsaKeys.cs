@@ -56,8 +56,10 @@ internal sealed class RsaPublicKey : SshPublicKey
         }
 
         // An exponent of 1 would make every value a valid signature of itself, and RSA moduli and exponents are odd.
+        // Real exponents are small, and a huge one would make each verification take a very long time.
+        const int MaxExponentLength = 8;
         bool exponentTooSmall = exponent.IsEmpty || (exponent.Length == 1 && exponent[0] < 3);
-        if (exponentTooSmall || (exponent[^1] & 1) == 0 || (modulus[^1] & 1) == 0 || exponent.Length > modulus.Length)
+        if (exponentTooSmall || (exponent[^1] & 1) == 0 || (modulus[^1] & 1) == 0 || exponent.Length > MaxExponentLength)
         {
             throw new SshProtocolException("The peer sent an invalid RSA public key.");
         }

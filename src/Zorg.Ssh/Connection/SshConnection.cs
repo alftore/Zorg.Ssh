@@ -11,8 +11,9 @@ namespace Zorg.Ssh.Connection;
 
 /// <summary>
 /// The connection protocol (RFC 4254), for either role, on an authenticated transport. It owns the one
-/// receive loop. The loop parses, copies into bounded per-channel buffers, and moves on: application code
-/// runs elsewhere, so a slow reader can't stall rekeying or other channels (Go CVE-2026-39830).
+/// receive loop. Everything the loop runs is synchronous: it parses, copies into bounded per-channel buffers,
+/// and sends replies with <see cref="SshTransport.SendControl"/>. So nothing can stop it reading, not a slow
+/// reader, a full send queue or a parked rekey (Go CVE-2026-39830, and design rule T1).
 /// </summary>
 internal sealed class SshConnection : IAsyncDisposable
 {
@@ -21,13 +22,17 @@ internal sealed class SshConnection : IAsyncDisposable
     private const int OpenFailureResourceShortage = 4;
     private const int MaxPendingOpens = 16;
 
+    private static readonly TimeSpan Grace = TimeSpan.FromSeconds(5);
+
     private readonly SshTransport _transport;
     private readonly int _maxChannels;
     private readonly Lock _gate = new();
     private readonly Dictionary<uint, SshChannel> _channels = [];
     private readonly Dictionary<uint, TaskCompletionSource<SshChannel>> _opening = [];
-    private readonly Channel<(SshChannel Channel, uint Credit)> _windowAdjusts =
-        System.Threading.Channels.Channel.CreateUnbounded<(SshChannel, uint)>(new UnboundedChannelOptions { SingleReader = true });
+
+    // Unbounded in type only: a channel has one entry at most, because its credit is coalesced.
+    private readonly Channel<SshChannel> _windowAdjusts =
+        System.Threading.Channels.Channel.CreateUnbounded<SshChannel>(new UnboundedChannelOptions { SingleReader = true });
     private readonly Channel<IncomingChannelOpen> _incoming =
         System.Threading.Channels.Channel.CreateBounded<IncomingChannelOpen>(MaxPendingOpens);
     private readonly CancellationTokenSource _stop = new();
@@ -101,8 +106,8 @@ internal sealed class SshConnection : IAsyncDisposable
     public ValueTask SendAsync(scoped ReadOnlySpan<byte> payload, CancellationToken cancellationToken) =>
         _transport.SendAsync(payload, cancellationToken);
 
-    /// <summary>Queues a window grant. The number of entries is bounded by channels and the data they've received.</summary>
-    public void QueueWindowAdjust(SshChannel channel, uint credit) => _windowAdjusts.Writer.TryWrite((channel, credit));
+    /// <summary>Asks for a channel's pending credit to be sent. Called at most once until it's taken.</summary>
+    public void QueueWindowAdjust(SshChannel channel) => _windowAdjusts.Writer.TryWrite(channel);
 
     /// <summary>Forgets a fully closed channel, so its id can't be used again.</summary>
     public void Forget(SshChannel channel)
@@ -116,19 +121,31 @@ internal sealed class SshConnection : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         await _stop.CancelAsync().ConfigureAwait(false);
-        if (_loop is not null)
-        {
-            await _loop.ConfigureAwait(false);
-        }
 
+        // Closing first unblocks a receive loop stuck in a stream that ignores cancellation.
+        await _transport.CloseAsync().ConfigureAwait(false);
         _windowAdjusts.Writer.TryComplete();
-        if (_windowLoop is not null)
-        {
-            await _windowLoop.ConfigureAwait(false);
-        }
-
+        await WaitForAsync(_loop).ConfigureAwait(false);
+        await WaitForAsync(_windowLoop).ConfigureAwait(false);
         await _transport.DisposeAsync().ConfigureAwait(false);
         _stop.Dispose();
+    }
+
+    private static async Task WaitForAsync(Task? task)
+    {
+        if (task is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await task.WaitAsync(Grace).ConfigureAwait(false);
+        }
+        catch (TimeoutException)
+        {
+            // The transport keeps what that loop might still be using.
+        }
     }
 
     private SshChannel Register()
@@ -153,8 +170,14 @@ internal sealed class SshConnection : IAsyncDisposable
         byte[] payload = new byte[9];
         try
         {
-            await foreach ((SshChannel channel, uint credit) in _windowAdjusts.Reader.ReadAllAsync(_stop.Token).ConfigureAwait(false))
+            await foreach (SshChannel channel in _windowAdjusts.Reader.ReadAllAsync(_stop.Token).ConfigureAwait(false))
             {
+                uint credit = channel.TakeCredit();
+                if (credit == 0)
+                {
+                    continue;
+                }
+
                 payload[0] = MessageNumber.ChannelWindowAdjust;
                 BinaryPrimitives.WriteUInt32BigEndian(payload.AsSpan(1), channel.RemoteId);
                 BinaryPrimitives.WriteUInt32BigEndian(payload.AsSpan(5), credit);
@@ -175,7 +198,7 @@ internal sealed class SshConnection : IAsyncDisposable
             while (true)
             {
                 ReadOnlyMemory<byte> message = await _transport.ReceiveAsync(_stop.Token).ConfigureAwait(false);
-                await DispatchAsync(message).ConfigureAwait(false);
+                Dispatch(message.Span);
             }
         }
         catch (OperationCanceledException ex) when (_stop.IsCancellationRequested)
@@ -223,120 +246,97 @@ internal sealed class SshConnection : IAsyncDisposable
         _ended.TrySetResult();
 
         // Tells the peer if we can, and closes the socket, so a failure can't leave a half-open connection.
-        await _transport.DisposeAsync().ConfigureAwait(false);
+        await _transport.CloseAsync().ConfigureAwait(false);
     }
 
-    private async ValueTask DispatchAsync(ReadOnlyMemory<byte> message)
+    private void Dispatch(ReadOnlySpan<byte> message)
     {
-        byte number = message.Span[0];
-        switch (number)
+        switch (message[0])
         {
             case MessageNumber.GlobalRequest:
-                await HandleGlobalRequestAsync(message).ConfigureAwait(false);
+                HandleGlobalRequest(message);
                 break;
             case MessageNumber.RequestSuccess:
             case MessageNumber.RequestFailure:
                 // We send no global requests with a reply yet, so any reply is unsolicited. Dropped, never queued.
                 break;
             case MessageNumber.ChannelOpen:
-                await HandleChannelOpenAsync(message).ConfigureAwait(false);
+                HandleChannelOpen(message);
                 break;
             case MessageNumber.ChannelOpenConfirmation:
-                HandleOpenConfirmation(message.Span);
+                HandleOpenConfirmation(message);
                 break;
             case MessageNumber.ChannelOpenFailure:
-                HandleOpenFailure(message.Span);
+                HandleOpenFailure(message);
                 break;
             case MessageNumber.ChannelWindowAdjust:
-                HandleWindowAdjust(message.Span);
+                HandleWindowAdjust(message);
                 break;
             case MessageNumber.ChannelData:
-                HandleData(message.Span, extended: false);
+                HandleData(message, extended: false);
                 break;
             case MessageNumber.ChannelExtendedData:
-                HandleData(message.Span, extended: true);
+                HandleData(message, extended: true);
                 break;
             case MessageNumber.ChannelEof:
-                FindChannel(message.Span).OnEof();
+                FindChannel(message).OnEof();
                 break;
             case MessageNumber.ChannelClose:
-                await HandleCloseAsync(message).ConfigureAwait(false);
+                HandleClose(message);
                 break;
             case MessageNumber.ChannelRequest:
-                await HandleChannelRequestAsync(message).ConfigureAwait(false);
+                HandleChannelRequest(message);
                 break;
             case MessageNumber.ChannelSuccess:
-                FindChannel(message.Span).OnRequestReply(true);
+                FindChannel(message).OnRequestReply(true);
                 break;
             case MessageNumber.ChannelFailure:
-                FindChannel(message.Span).OnRequestReply(false);
+                FindChannel(message).OnRequestReply(false);
                 break;
             default:
-                await SendUnimplementedAsync().ConfigureAwait(false);
+                // A number in the connection range with no meaning.
+                _transport.SendUnimplementedForLastPacket();
                 break;
         }
     }
 
-    private ValueTask SendUnimplementedAsync()
+    private void HandleGlobalRequest(ReadOnlySpan<byte> message)
     {
-        // A number in the connection range with no meaning. The transport has the sequence number, and
-        // the RFC reply carries it, so the transport sends this one.
-        return _transport.SendUnimplementedForLastPacketAsync(_stop.Token);
-    }
-
-    private async ValueTask HandleGlobalRequestAsync(ReadOnlyMemory<byte> message)
-    {
-        bool wantReply;
+        SshReader reader = new(message);
+        reader.ReadByte();
+        reader.ReadBinary();
+        if (reader.ReadBoolean())
         {
-            SshReader reader = new(message.Span);
-            reader.ReadByte();
-            reader.ReadBinary();
-            wantReply = reader.ReadBoolean();
-        }
-
-        if (wantReply)
-        {
-            await SendAsync([MessageNumber.RequestFailure], _stop.Token).ConfigureAwait(false);
+            _transport.SendControl([MessageNumber.RequestFailure]);
         }
     }
 
-    private async ValueTask HandleChannelOpenAsync(ReadOnlyMemory<byte> message)
+    private void HandleChannelOpen(ReadOnlySpan<byte> message)
     {
-        string type;
-        uint remoteId;
-        uint window;
-        uint maxPacket;
-        byte[] extra;
-        {
-            SshReader reader = new(message.Span);
-            reader.ReadByte();
-            type = reader.ReadUtf8String();
-            remoteId = reader.ReadUInt32();
-            window = reader.ReadUInt32();
-            maxPacket = reader.ReadUInt32();
-            extra = reader.RemainingSpan.ToArray();
-        }
+        SshReader reader = new(message);
+        reader.ReadByte();
+        string type = reader.ReadUtf8String();
+        uint remoteId = reader.ReadUInt32();
+        uint window = reader.ReadUInt32();
+        uint maxPacket = reader.ReadUInt32();
+        byte[] extra = reader.RemainingSpan.ToArray();
 
         if (!AcceptIncomingChannels)
         {
-            await SendOpenFailureAsync(remoteId, OpenFailureProhibited, "not allowed").ConfigureAwait(false);
+            SendOpenFailure(remoteId, OpenFailureProhibited, "not allowed");
             return;
         }
 
         if (type != "session")
         {
-            await SendOpenFailureAsync(remoteId, OpenFailureUnknownType, "unsupported channel type").ConfigureAwait(false);
+            SendOpenFailure(remoteId, OpenFailureUnknownType, "unsupported channel type");
             return;
         }
 
-        SshChannel channel;
+        SshChannel? channel = null;
         lock (_gate)
         {
-            if (_channels.Count >= _maxChannels)
-            {
-                channel = null!;
-            }
-            else
+            if (_channels.Count < _maxChannels)
             {
                 channel = Register();
             }
@@ -344,7 +344,7 @@ internal sealed class SshConnection : IAsyncDisposable
 
         if (channel is null)
         {
-            await SendOpenFailureAsync(remoteId, OpenFailureResourceShortage, "too many channels").ConfigureAwait(false);
+            SendOpenFailure(remoteId, OpenFailureResourceShortage, "too many channels");
             return;
         }
 
@@ -353,11 +353,10 @@ internal sealed class SshConnection : IAsyncDisposable
         if (!_incoming.Writer.TryWrite(new IncomingChannelOpen(channel, type, extra)))
         {
             Forget(channel);
-            await SendOpenFailureAsync(remoteId, OpenFailureResourceShortage, "busy").ConfigureAwait(false);
+            SendOpenFailure(remoteId, OpenFailureResourceShortage, "busy");
             return;
         }
 
-        ValueTask send;
         SshWriter writer = new(32);
         try
         {
@@ -366,19 +365,16 @@ internal sealed class SshConnection : IAsyncDisposable
             writer.WriteUInt32(channel.LocalId);
             writer.WriteUInt32(SshChannel.DefaultWindow);
             writer.WriteUInt32(SshChannel.MaxPacket);
-            send = SendAsync(writer.Written, _stop.Token);
+            _transport.SendControl(writer.Written);
         }
         finally
         {
             writer.Dispose();
         }
-
-        await send.ConfigureAwait(false);
     }
 
-    private async ValueTask SendOpenFailureAsync(uint remoteId, int reason, string text)
+    private void SendOpenFailure(uint remoteId, int reason, string text)
     {
-        ValueTask send;
         SshWriter writer = new(64);
         try
         {
@@ -387,14 +383,12 @@ internal sealed class SshConnection : IAsyncDisposable
             writer.WriteUInt32((uint)reason);
             writer.WriteUtf8String(text);
             writer.WriteUtf8String(string.Empty);
-            send = SendAsync(writer.Written, _stop.Token);
+            _transport.SendControl(writer.Written);
         }
         finally
         {
             writer.Dispose();
         }
-
-        await send.ConfigureAwait(false);
     }
 
     private void HandleOpenConfirmation(ReadOnlySpan<byte> message)
@@ -472,35 +466,35 @@ internal sealed class SshConnection : IAsyncDisposable
         channel.OnData(data, extended);
     }
 
-    private async ValueTask HandleCloseAsync(ReadOnlyMemory<byte> message)
+    private void HandleClose(ReadOnlySpan<byte> message)
     {
-        SshChannel channel = FindChannel(message.Span);
+        SshChannel channel = FindChannel(message);
         if (channel.OnClose())
         {
-            byte[] payload = new byte[5];
-            payload[0] = MessageNumber.ChannelClose;
-            BinaryPrimitives.WriteUInt32BigEndian(payload.AsSpan(1), channel.RemoteId);
-            await SendAsync(payload, _stop.Token).ConfigureAwait(false);
+            SendChannelMessage(MessageNumber.ChannelClose, channel);
             channel.FinishIfClosed();
         }
     }
 
-    private async ValueTask HandleChannelRequestAsync(ReadOnlyMemory<byte> message)
+    private void HandleChannelRequest(ReadOnlySpan<byte> message)
     {
-        SshChannel channel = FindChannel(message.Span);
-        bool fail;
+        SshChannel channel = FindChannel(message);
+        SshReader reader = new(message);
+        reader.ReadRaw(5);
+        string type = reader.ReadUtf8String();
+        bool wantReply = reader.ReadBoolean();
+        if (channel.OnRequest(type, wantReply, reader.RemainingSpan))
         {
-            SshReader reader = new(message.Span);
-            reader.ReadRaw(5);
-            string type = reader.ReadUtf8String();
-            bool wantReply = reader.ReadBoolean();
-            fail = channel.OnRequest(type, wantReply, reader.RemainingSpan);
+            SendChannelMessage(MessageNumber.ChannelFailure, channel);
         }
+    }
 
-        if (fail)
-        {
-            await channel.ReplyAsync(false, _stop.Token).ConfigureAwait(false);
-        }
+    private void SendChannelMessage(byte number, SshChannel channel)
+    {
+        Span<byte> payload = stackalloc byte[5];
+        payload[0] = number;
+        BinaryPrimitives.WriteUInt32BigEndian(payload[1..], channel.RemoteId);
+        _transport.SendControl(payload);
     }
 
     private SshChannel FindChannel(ReadOnlySpan<byte> message)

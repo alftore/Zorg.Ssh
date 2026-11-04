@@ -12,6 +12,10 @@ namespace Zorg.Ssh.Transport;
 /// <summary>The key exchange half of the transport. It's role-neutral: the role only picks who speaks first.</summary>
 internal sealed partial class SshTransport
 {
+    private const int MaxPreAuthRekeys = 2;
+
+    private int _parkGeneration;
+    private int _preAuthRekeys;
     private byte[] _ourIdentification = [];
     private byte[] _peerIdentification = [];
     private byte[] _sessionId = [];
@@ -57,8 +61,28 @@ internal sealed partial class SshTransport
     /// Test hook: queues a message past the parking rule, so a test can act as a peer that breaks it.
     /// Nothing in the library calls this.
     /// </summary>
-    internal ValueTask SendIgnoringKexForTestsAsync(byte[] payload, CancellationToken cancellationToken) =>
-        EnqueueKexAsync(OutgoingPacket.Create(payload), cancellationToken);
+    internal void SendIgnoringKexForTests(byte[] payload) =>
+        EnqueueKex(OutgoingPacket.Create(payload));
+
+    /// <summary>Called by the send loop once our NEWKEYS is on the wire and the new cipher is in place.</summary>
+    private void OnNewKeysWritten(int generation)
+    {
+        lock (_kexLock)
+        {
+            if (generation != _parkGeneration)
+            {
+                return;
+            }
+
+            _parked = false;
+            if (_kexStep == KexStep.Idle)
+            {
+                ClearDeadline();
+            }
+        }
+
+        _wake.Writer.TryWrite(true);
+    }
 
     /// <summary>Sends our KEXINIT if no exchange is running. Safe from either loop.</summary>
     private void StartKex()
@@ -75,15 +99,19 @@ internal sealed partial class SshTransport
             OutgoingPacket packet = OutgoingPacket.Create(encoded);
 
             // T3: park first, so that the send loop can't take non-KEX traffic after this KEXINIT.
+            bool wasParked = _parked;
             _parked = true;
             if (!_kexQueue.Writer.TryWrite(packet))
             {
                 // The queue only fills if the peer has stopped reading. A later packet tries again.
                 packet.Release();
-                _parked = false;
+                _parked = wasParked;
                 return;
             }
 
+            // A NEWKEYS from the last exchange can still be queued. It carries the old generation, so
+            // writing it won't unpark this exchange.
+            _parkGeneration++;
             _ourKexInitMessage = message;
             _ourKexInit = encoded;
             _kexStep = KexStep.AwaitPeerInit;
@@ -125,9 +153,16 @@ internal sealed partial class SshTransport
         };
     }
 
-    private async ValueTask HandleKexInitAsync(ReadOnlyMemory<byte> payload, bool wasFirstPacket, CancellationToken cancellationToken)
+    private void HandleKexInit(ReadOnlyMemory<byte> payload, bool wasFirstPacket)
     {
         _peerKexRunning = true;
+
+        // A rekey costs us a signature, so before auth a peer gets only a couple of them.
+        if (_firstKexComplete && _phase != TransportPhase.Connected && ++_preAuthRekeys > MaxPreAuthRekeys)
+        {
+            throw new SshProtocolException("The peer rekeyed too many times before logging in.");
+        }
+
         StartKex();
         KexInitMessage peer = KexInitMessage.Parse(payload.Span);
         _peerKexInit = payload.ToArray();
@@ -176,11 +211,11 @@ internal sealed partial class SshTransport
         if (client)
         {
             _clientPublicValue = _kexMethod.CreateClientPublicValue();
-            await SendKexAsync(MessageNumber.KexEcdhInit, _clientPublicValue, cancellationToken).ConfigureAwait(false);
+            SendKex(MessageNumber.KexEcdhInit, _clientPublicValue);
         }
     }
 
-    private async ValueTask SendKexAsync(byte message, byte[] publicValue, CancellationToken cancellationToken)
+    private void SendKex(byte message, byte[] publicValue)
     {
         byte[] encoded;
         SshWriter writer = new(publicValue.Length + 16);
@@ -195,7 +230,7 @@ internal sealed partial class SshTransport
             writer.Dispose();
         }
 
-        await EnqueueKexAsync(OutgoingPacket.Create(encoded), cancellationToken).ConfigureAwait(false);
+        EnqueueKex(OutgoingPacket.Create(encoded));
     }
 
     private async ValueTask HandleKexMessageAsync(ReadOnlyMemory<byte> payload, CancellationToken cancellationToken)
@@ -212,7 +247,7 @@ internal sealed partial class SshTransport
         switch (_kexStep)
         {
             case KexStep.AwaitExchange when message == MessageNumber.KexEcdhInit && _options.Role == SshRole.Server:
-                await ServerExchangeAsync(payload, cancellationToken).ConfigureAwait(false);
+                ServerExchange(payload);
                 break;
             case KexStep.AwaitExchange when message == MessageNumber.KexEcdhReply && _options.Role == SshRole.Client:
                 await ClientExchangeAsync(payload, cancellationToken).ConfigureAwait(false);
@@ -225,7 +260,7 @@ internal sealed partial class SshTransport
         }
     }
 
-    private async ValueTask ServerExchangeAsync(ReadOnlyMemory<byte> payload, CancellationToken cancellationToken)
+    private void ServerExchange(ReadOnlyMemory<byte> payload)
     {
         byte[] clientPublic;
         {
@@ -259,8 +294,8 @@ internal sealed partial class SshTransport
                 writer.Dispose();
             }
 
-            await EnqueueKexAsync(OutgoingPacket.Create(reply), cancellationToken).ConfigureAwait(false);
-            await InstallKeysAsync(sharedSecret, exchangeHash, cancellationToken).ConfigureAwait(false);
+            EnqueueKex(OutgoingPacket.Create(reply));
+            InstallKeys(sharedSecret, exchangeHash);
         }
         finally
         {
@@ -301,7 +336,10 @@ internal sealed partial class SshTransport
             }
 
             await CheckHostKeyAsync(hostKey, cancellationToken).ConfigureAwait(false);
-            await InstallKeysAsync(sharedSecret, exchangeHash, cancellationToken).ConfigureAwait(false);
+
+            // The check runs application code, and the handshake may have timed out while it did.
+            ThrowIfFailed();
+            InstallKeys(sharedSecret, exchangeHash);
         }
         finally
         {
@@ -354,7 +392,7 @@ internal sealed partial class SshTransport
     }
 
     /// <summary>Derives both directions, queues NEWKEYS carrying the send cipher, and holds the receive cipher for the peer's NEWKEYS.</summary>
-    private async ValueTask InstallKeysAsync(byte[] encodedSharedSecret, byte[] exchangeHash, CancellationToken cancellationToken)
+    private void InstallKeys(byte[] encodedSharedSecret, byte[] exchangeHash)
     {
         if (_sessionId.Length == 0)
         {
@@ -369,21 +407,23 @@ internal sealed partial class SshTransport
         _nextReceiveCipher = client ? serverToClient : clientToServer;
 
         // The transition to AwaitNewKeys comes first: the send loop can't race ahead of us here.
+        int generation;
         lock (_kexLock)
         {
             _kexStep = KexStep.AwaitNewKeys;
+            generation = _parkGeneration;
         }
 
-        OutgoingPacket newKeys = OutgoingPacket.Create([MessageNumber.NewKeys], nextCipher: send, resetSequence: _strictKex);
-        await EnqueueKexAsync(newKeys, cancellationToken).ConfigureAwait(false);
+        OutgoingPacket newKeys = OutgoingPacket.Create([MessageNumber.NewKeys], nextCipher: send, resetSequence: _strictKex, parkGeneration: generation);
+        EnqueueKex(newKeys);
 
         if (!_firstKexComplete && !client && _peerOffersExtInfo)
         {
-            await SendExtInfoAsync(cancellationToken).ConfigureAwait(false);
+            SendExtInfo();
         }
     }
 
-    private async ValueTask SendExtInfoAsync(CancellationToken cancellationToken)
+    private void SendExtInfo()
     {
         byte[] encoded;
         SshWriter writer = new(256);
@@ -400,7 +440,7 @@ internal sealed partial class SshTransport
             writer.Dispose();
         }
 
-        await EnqueueKexAsync(OutgoingPacket.Create(encoded), cancellationToken).ConfigureAwait(false);
+        EnqueueKex(OutgoingPacket.Create(encoded));
     }
 
     private PacketCipher CreateCipher(string cipherName, string? macName, byte[] encodedSharedSecret, byte[] exchangeHash, char ivLetter, char keyLetter, char macLetter)
@@ -501,7 +541,13 @@ internal sealed partial class SshTransport
         lock (_kexLock)
         {
             ReleaseKexState();
-            ClearDeadline();
+
+            // If our NEWKEYS hasn't gone out yet, we're still parked, and the deadline must keep watching.
+            if (!_parked)
+            {
+                ClearDeadline();
+            }
+
             _kexStep = KexStep.Idle;
             _peerKexRunning = false;
         }

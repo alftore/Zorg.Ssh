@@ -35,6 +35,7 @@ internal sealed class PacketReader : IDisposable
     private byte[] _buffer;
     private int _start;
     private int _end;
+    private int _lastPacketLength;
 
     public PacketReader(Stream stream, int maxPacketLength)
     {
@@ -96,6 +97,10 @@ internal sealed class PacketReader : IDisposable
     /// </summary>
     public async ValueTask<ReadOnlyMemory<byte>> ReadPacketAsync(PacketCipher cipher, uint sequenceNumber, CancellationToken cancellationToken)
     {
+        // The caller has finished with the last packet, and its plaintext can hold passwords.
+        _buffer.AsSpan(_start - _lastPacketLength, _lastPacketLength).Clear();
+        _lastPacketLength = 0;
+
         if (_end - _start < 4)
         {
             await FillAsync(4, cancellationToken).ConfigureAwait(false);
@@ -104,7 +109,7 @@ internal sealed class PacketReader : IDisposable
         uint packetLength = cipher.ReadPacketLength(_buffer.AsSpan(_start, 4), sequenceNumber);
         if (packetLength < MinPacketLength || packetLength > (uint)_maxPacketLength)
         {
-            throw new SshProtocolException($"The peer sent a packet with an invalid length ({packetLength}).");
+            throw new SshProtocolException("The peer sent a packet with an invalid length.");
         }
 
         int total = 4 + (int)packetLength + cipher.TagLength;
@@ -124,6 +129,7 @@ internal sealed class PacketReader : IDisposable
 
         ReadOnlyMemory<byte> payload = _buffer.AsMemory(_start + 5, payloadLength);
         _start += total;
+        _lastPacketLength = total;
         return payload;
     }
 

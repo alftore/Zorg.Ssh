@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 
 namespace Zorg.Ssh;
 
@@ -131,11 +132,20 @@ public class SshNegotiationException : SshProtocolException
     /// <param name="localAlgorithms">What this side offered.</param>
     /// <param name="peerAlgorithms">What the peer offered.</param>
     public SshNegotiationException(string family, IReadOnlyList<string> localAlgorithms, IReadOnlyList<string> peerAlgorithms)
-        : base($"No common {family} algorithm. This side offers [{string.Join(", ", localAlgorithms)}]; the peer offers [{string.Join(", ", peerAlgorithms)}]. Enable a shared algorithm on either side.")
+        : base($"No common {family} algorithm. This side offers [{Summarise(localAlgorithms)}]; the peer offers [{Summarise(peerAlgorithms)}]. Enable a shared algorithm on either side.")
     {
         Family = family;
         LocalAlgorithms = localAlgorithms;
         PeerAlgorithms = peerAlgorithms;
+    }
+
+    private static string Summarise(IReadOnlyList<string> names)
+    {
+        const int MaxNames = 32;
+        const int MaxLength = 64;
+        IEnumerable<string> shown = names.Take(MaxNames).Select(static n => n.Length <= MaxLength ? n : n[..MaxLength] + "...");
+        string more = names.Count > MaxNames ? $", and {names.Count - MaxNames} more" : string.Empty;
+        return string.Join(", ", shown) + more;
     }
 
     /// <summary>Gets the algorithm family that failed.</summary>

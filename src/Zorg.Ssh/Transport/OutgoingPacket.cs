@@ -16,13 +16,14 @@ internal readonly struct OutgoingPacket
     private const int BackRoom = 128;
     private const int MinPadding = 4;
 
-    private OutgoingPacket(byte[] buffer, int payloadLength, PacketCipher? nextCipher, bool resetSequence, bool isTerminal)
+    private OutgoingPacket(byte[] buffer, int payloadLength, PacketCipher? nextCipher, bool resetSequence, bool isTerminal, int parkGeneration)
     {
         Buffer = buffer;
         PayloadLength = payloadLength;
         NextCipher = nextCipher;
         ResetSequence = resetSequence;
         IsTerminal = isTerminal;
+        ParkGeneration = parkGeneration;
     }
 
     public byte[] Buffer { get; }
@@ -38,15 +39,19 @@ internal readonly struct OutgoingPacket
     /// <summary>Gets whether the send loop ends after this packet: it's a DISCONNECT.</summary>
     public bool IsTerminal { get; }
 
+    /// <summary>Gets the key exchange a NEWKEYS belongs to. A stale one must not unpark the next exchange.</summary>
+    public int ParkGeneration { get; }
+
     public static OutgoingPacket Create(
         scoped ReadOnlySpan<byte> payload,
         PacketCipher? nextCipher = null,
         bool resetSequence = false,
-        bool isTerminal = false)
+        bool isTerminal = false,
+        int parkGeneration = 0)
     {
         byte[] buffer = ArrayPool<byte>.Shared.Rent(FrontRoom + payload.Length + BackRoom);
         payload.CopyTo(buffer.AsSpan(FrontRoom));
-        return new OutgoingPacket(buffer, payload.Length, nextCipher, resetSequence, isTerminal);
+        return new OutgoingPacket(buffer, payload.Length, nextCipher, resetSequence, isTerminal, parkGeneration);
     }
 
     /// <summary>Writes the length, padding length and random padding. Returns the packet length before the tag.</summary>

@@ -206,7 +206,7 @@ public class HostilePeerTests
         {
             MarkConnected(client, server);
             client.RequestRekey();
-            await client.SendIgnoringKexForTestsAsync([MessageNumber.ChannelData, 1], Ct);
+            client.SendIgnoringKexForTests([MessageNumber.ChannelData, 1]);
             await Assert.ThrowsAnyAsync<SshProtocolException>(async () => await server.ReceiveAsync(Ct));
         }
     }

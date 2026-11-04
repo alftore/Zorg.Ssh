@@ -1,6 +1,7 @@
 using System;
 using System.Buffers.Binary;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Security.Cryptography;
 using System.Text;
@@ -17,21 +18,36 @@ namespace Zorg.Ssh.Transport;
 /// <see cref="ReceiveAsync"/> is the only reader and must not be called concurrently. It handles every
 /// transport message itself, so whoever drives it also drives key exchange. <see cref="SendAsync"/> may be
 /// called from any thread.
+/// <para>
+/// T1, the rule everything here rests on: the receive path never waits on the send side. What it has to send
+/// goes to a small queue with a non-blocking write, and a full queue means the peer has stopped reading,
+/// which ends the connection. Otherwise a peer, or just a full send queue during a rekey, could stop us
+/// reading the very message that would free it.
+/// </para>
 /// </summary>
 internal sealed partial class SshTransport : IAsyncDisposable
 {
     private const int KexQueueCapacity = 16;
+    private const int ControlQueueCapacity = 256;
     private const int MaxDisconnectText = 256;
+    private const int MaxSendPayload = 40 * 1024;
+
+    /// <summary>The most packets under one key. Past this the sequence number repeats, and with it the ChaCha20 nonce.</summary>
+    private const long MaxPacketsPerKey = (1L << 32) - 2;
+
+    private static readonly TimeSpan Grace = TimeSpan.FromSeconds(1);
 
     private readonly Stream _stream;
     private readonly TransportOptions _options;
     private readonly PacketReader _reader;
     private readonly Channel<OutgoingPacket> _sendQueue;
+    private readonly Channel<OutgoingPacket> _controlQueue;
     private readonly Channel<OutgoingPacket> _kexQueue;
     private readonly Channel<bool> _wake;
     private readonly CancellationTokenSource _closing = new();
     private readonly Lock _kexLock = new();
     private readonly TaskCompletionSource _sendLoopDone = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly TaskCompletionSource _shutdownDone = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     // Owned by the send loop.
 #pragma warning disable CA2213 // The send loop disposes it when it ends, because only that loop may touch it.
@@ -58,8 +74,8 @@ internal sealed partial class SshTransport : IAsyncDisposable
     private volatile int _sendLoopStarted;
     private long _lastKexTimestamp;
     private ITimer? _deadline;
-
-    private Exception? Failure => Volatile.Read(ref _failureSlot);
+    private int _shutdownStarted;
+    private int _receiving;
 
     private SshTransport(Stream stream, TransportOptions options)
     {
@@ -67,6 +83,11 @@ internal sealed partial class SshTransport : IAsyncDisposable
         _options = options;
         _reader = new PacketReader(stream, options.MaxPacketLength);
         _sendQueue = Channel.CreateBounded<OutgoingPacket>(new BoundedChannelOptions(options.SendQueueCapacity)
+        {
+            SingleReader = true,
+            FullMode = BoundedChannelFullMode.Wait,
+        });
+        _controlQueue = Channel.CreateBounded<OutgoingPacket>(new BoundedChannelOptions(ControlQueueCapacity)
         {
             SingleReader = true,
             FullMode = BoundedChannelFullMode.Wait,
@@ -100,6 +121,8 @@ internal sealed partial class SshTransport : IAsyncDisposable
 
     /// <summary>Gets the host key the server proved it holds. Null on a server.</summary>
     public SshPublicKey? PeerHostKey => _peerHostKey;
+
+    private Exception? Failure => Volatile.Read(ref _failureSlot);
 
     /// <summary>
     /// Runs the version exchange and the first key exchange over a connected stream. The stream belongs to
@@ -153,14 +176,41 @@ internal sealed partial class SshTransport : IAsyncDisposable
 
     /// <summary>
     /// Queues a message, waiting while the queue is full. Non-KEX traffic stays queued during a key exchange.
-    /// <paramref name="payload"/> is copied, so it can be reused when this returns.
+    /// <paramref name="payload"/> is copied, so it can be reused when this returns. The receive path must
+    /// use <see cref="SendControl"/> instead.
     /// </summary>
     public ValueTask SendAsync(scoped ReadOnlySpan<byte> payload, CancellationToken cancellationToken)
     {
         ThrowIfFailed();
+        if (payload.Length > MaxSendPayload)
+        {
+            throw new ArgumentException("The message is larger than the transport sends.", nameof(payload));
+        }
+
         OutgoingPacket packet = OutgoingPacket.Create(payload);
         return EnqueueAsync(packet, cancellationToken);
     }
+
+    /// <summary>
+    /// Queues a small reply without ever waiting, for use in the receive path. It's sent ahead of queued data,
+    /// and held back during a key exchange. A full queue means the peer has asked for replies it isn't
+    /// reading, which ends the connection.
+    /// </summary>
+    public void SendControl(scoped ReadOnlySpan<byte> payload)
+    {
+        ThrowIfFailed();
+        OutgoingPacket packet = OutgoingPacket.Create(payload);
+        if (!_controlQueue.Writer.TryWrite(packet))
+        {
+            packet.Discard();
+            throw new SshProtocolException("The peer isn't reading the replies to its requests.");
+        }
+
+        _wake.Writer.TryWrite(true);
+    }
+
+    /// <summary>Replies UNIMPLEMENTED to the packet just returned by <see cref="ReceiveAsync"/>.</summary>
+    public void SendUnimplementedForLastPacket() => SendUnimplemented(_lastReceivedSequence);
 
     /// <summary>
     /// Asks for a rekey now. Does nothing if one is already running, or before auth has finished: OpenSSH
@@ -175,20 +225,48 @@ internal sealed partial class SshTransport : IAsyncDisposable
         }
     }
 
-    /// <summary>Sends DISCONNECT if possible, then closes the stream and releases everything.</summary>
-    public async ValueTask DisposeAsync()
+    /// <summary>
+    /// Sends what's queued and a DISCONNECT if that's possible within a moment, then closes the stream. Any
+    /// <see cref="ReceiveAsync"/> running ends. Nothing is released yet: that's <see cref="DisposeAsync"/>,
+    /// which comes after the caller has stopped reading.
+    /// </summary>
+    public async ValueTask CloseAsync()
     {
-        Exception closed = new SshConnectionException("The connection was closed by this side. Connect again to continue.");
-        if (Interlocked.CompareExchange(ref _failureSlot, closed, null) is null)
+        if (Failure is null && _sendLoopStarted != 0)
         {
-            TryQueueDisconnect(DisconnectReason.ByApplication, "closed");
+            OutgoingPacket goodbye = BuildDisconnect(DisconnectReason.ByApplication, "closed");
+            if (!_sendQueue.Writer.TryWrite(goodbye) && !_kexQueue.Writer.TryWrite(goodbye))
+            {
+                goodbye.Discard();
+            }
+
+            _wake.Writer.TryWrite(true);
+            await WaitBrieflyAsync(_sendLoopDone.Task).ConfigureAwait(false);
         }
 
+        Exception closed = new SshConnectionException("The connection was closed by this side. Connect again to continue.");
+        Interlocked.CompareExchange(ref _failureSlot, closed, null);
         await ShutdownAsync().ConfigureAwait(false);
-        _reader.Dispose();
-        DisposeCipher(_receiveCipher);
-        _receiveCipher = NoneCipher.Instance;
-        _closing.Dispose();
+    }
+
+    /// <summary>Closes the connection and releases everything. Call it after the receive path has stopped.</summary>
+    public async ValueTask DisposeAsync()
+    {
+        await CloseAsync().ConfigureAwait(false);
+
+        // A reader stuck in a stream that ignores cancellation still owns these, so they go to the GC instead.
+        if (Volatile.Read(ref _receiving) == 0)
+        {
+            _reader.Dispose();
+            DisposeCipher(_receiveCipher);
+            _receiveCipher = NoneCipher.Instance;
+            lock (_kexLock)
+            {
+                ReleaseKexState();
+            }
+
+            _closing.Dispose();
+        }
     }
 
     private static void DisposeCipher(PacketCipher cipher)
@@ -199,7 +277,7 @@ internal sealed partial class SshTransport : IAsyncDisposable
         }
     }
 
-    /// <summary>Removes control characters and caps the length, so peer text can't forge log lines or bloat messages.</summary>
+    /// <summary>Removes control and invisible formatting characters and caps the length, so peer text can't forge log lines or hide what it says.</summary>
     private static string Sanitise(string text)
     {
         StringBuilder clean = new(Math.Min(text.Length, MaxDisconnectText));
@@ -210,13 +288,76 @@ internal sealed partial class SshTransport : IAsyncDisposable
                 break;
             }
 
-            if (!char.IsControl(c))
+            if (char.GetUnicodeCategory(c) is not (UnicodeCategory.Control or UnicodeCategory.Format
+                or UnicodeCategory.LineSeparator or UnicodeCategory.ParagraphSeparator or UnicodeCategory.Surrogate))
             {
                 clean.Append(c);
             }
         }
 
         return clean.ToString();
+    }
+
+    /// <summary>Gives each waiter its own exception object, with the first failure as the cause, so stack traces stay meaningful.</summary>
+    private static SshException Wrap(Exception failure) => failure switch
+    {
+        SshDisconnectedException e => new SshDisconnectedException(e.ReasonCode, e.Description),
+        SshConnectionException e => new SshConnectionException(e.Message, e),
+        SshHostKeyException e => new SshHostKeyException(e.Message, e),
+        SshProtocolException e => new SshProtocolException(e.Message, e),
+        _ => new SshException(failure.Message, failure),
+    };
+
+    private static SshConnectionException Translate(Exception ex) =>
+        ex is SshConnectionException connection
+            ? connection
+            : new SshConnectionException("The connection was lost. Connect again to continue.", ex);
+
+    private static SshDisconnectedException ParseDisconnect(ReadOnlySpan<byte> payload)
+    {
+        SshReader reader = new(payload);
+        reader.ReadByte();
+        uint code = reader.ReadUInt32();
+        string description;
+        try
+        {
+            description = Sanitise(reader.ReadUtf8String());
+        }
+        catch (SshProtocolException)
+        {
+            description = string.Empty;
+        }
+
+        return new SshDisconnectedException(code, description);
+    }
+
+    private static OutgoingPacket BuildDisconnect(uint reason, string text)
+    {
+        SshWriter writer = new(64);
+        try
+        {
+            writer.WriteByte(MessageNumber.Disconnect);
+            writer.WriteUInt32(reason);
+            writer.WriteUtf8String(text);
+            writer.WriteUInt32(0);
+            return OutgoingPacket.Create(writer.Written, isTerminal: true);
+        }
+        finally
+        {
+            writer.Dispose();
+        }
+    }
+
+    /// <summary>Waits a short time. A peer or stream that won't cooperate can't hold us longer than that.</summary>
+    private static async Task WaitBrieflyAsync(Task task)
+    {
+        try
+        {
+            await task.WaitAsync(Grace).ConfigureAwait(false);
+        }
+        catch (TimeoutException)
+        {
+        }
     }
 
     private async Task HandshakeAsync(CancellationToken cancellationToken)
@@ -240,15 +381,16 @@ internal sealed partial class SshTransport : IAsyncDisposable
             TransportLog.PeerIdentified(_options.Logger, PeerIdentification);
             InitialiseKex(ourIdentification, peerIdentification);
         }
-        catch (Exception ex) when (ex is not SshException && !cancellationToken.IsCancellationRequested)
-        {
-            throw Fail(Translate(ex), null);
-        }
         catch (SshException ex)
         {
             throw Fail(ex, null);
         }
+        catch (Exception ex) when (ex is not SshException && !cancellationToken.IsCancellationRequested)
+        {
+            throw Fail(Translate(ex), null);
+        }
 
+        ThrowIfFailed();
         _sendLoopStarted = 1;
         _ = Task.Run(SendLoopAsync, CancellationToken.None);
         StartKex();
@@ -264,6 +406,7 @@ internal sealed partial class SshTransport : IAsyncDisposable
     private async ValueTask<ReadOnlyMemory<byte>?> ReceiveOneAsync(CancellationToken cancellationToken)
     {
         ThrowIfFailed();
+        Interlocked.Increment(ref _receiving);
         try
         {
             // A token that can't fire needs no linked source, which saves an allocation per packet.
@@ -293,14 +436,10 @@ internal sealed partial class SshTransport : IAsyncDisposable
             bool firstAfterNewKeys = _firstPacketAfterNewKeys;
             _firstPacketAfterNewKeys = false;
 
-            // Once started, a rekey must finish whatever the caller does with its token, or the two
-            // sides fall out of step. Only the first exchange can be abandoned, because that ends the connection.
-            CancellationToken kexToken = _firstKexComplete ? _closing.Token : token;
-
             switch (decision)
             {
                 case MessageDecision.Unimplemented:
-                    await SendUnimplementedAsync(sequence, kexToken).ConfigureAwait(false);
+                    SendUnimplemented(sequence);
                     return null;
                 case MessageDecision.Disconnect:
                     throw new SshProtocolException($"The peer sent message {message}, which isn't allowed in this state.");
@@ -323,11 +462,11 @@ internal sealed partial class SshTransport : IAsyncDisposable
                     ParseExtInfo(payload.Span);
                     return null;
                 case MessageNumber.KexInit:
-                    await HandleKexInitAsync(payload, first, kexToken).ConfigureAwait(false);
+                    HandleKexInit(payload, first);
                     return null;
                 case MessageNumber.NewKeys:
                 case >= 30 and <= 49:
-                    await HandleKexMessageAsync(payload, kexToken).ConfigureAwait(false);
+                    await HandleKexMessageAsync(payload, token).ConfigureAwait(false);
                     return null;
                 default:
                     return payload;
@@ -361,6 +500,16 @@ internal sealed partial class SshTransport : IAsyncDisposable
         {
             throw Fail(Translate(ex), null);
         }
+#pragma warning disable CA1031 // Guarantee 3: even a bug in here reaches callers as an SshException, and ends the connection.
+        catch (Exception ex)
+#pragma warning restore CA1031
+        {
+            throw Fail(new SshException("The connection failed unexpectedly. This is a bug in Zorg.Ssh.", ex), DisconnectReason.ProtocolError);
+        }
+        finally
+        {
+            Interlocked.Decrement(ref _receiving);
+        }
     }
 
     private void AdvanceReceiveSequence()
@@ -369,6 +518,11 @@ internal sealed partial class SshTransport : IAsyncDisposable
         if (++_receiveSequence == 0 && !_firstKexComplete && _strictKex)
         {
             throw new SshProtocolException("The sequence number wrapped during the initial key exchange.");
+        }
+
+        if (_packetsReceived >= MaxPacketsPerKey)
+        {
+            throw new SshProtocolException("The peer sent too many packets under one key.");
         }
     }
 
@@ -385,24 +539,6 @@ internal sealed partial class SshTransport : IAsyncDisposable
             TransportLog.RekeyStarting(_options.Logger, bytes, packets);
             StartKex();
         }
-    }
-
-    private static SshDisconnectedException ParseDisconnect(ReadOnlySpan<byte> payload)
-    {
-        SshReader reader = new(payload);
-        reader.ReadByte();
-        uint code = reader.ReadUInt32();
-        string description;
-        try
-        {
-            description = Sanitise(reader.ReadUtf8String());
-        }
-        catch (SshProtocolException)
-        {
-            description = string.Empty;
-        }
-
-        return new SshDisconnectedException(code, description);
     }
 
     private void ParseExtInfo(ReadOnlySpan<byte> payload)
@@ -427,12 +563,12 @@ internal sealed partial class SshTransport : IAsyncDisposable
         _peerExtensions = extensions;
     }
 
-    private async ValueTask SendUnimplementedAsync(uint sequence, CancellationToken cancellationToken)
+    private void SendUnimplemented(uint sequence)
     {
-        byte[] payload = new byte[5];
+        Span<byte> payload = stackalloc byte[5];
         payload[0] = MessageNumber.Unimplemented;
-        BinaryPrimitives.WriteUInt32BigEndian(payload.AsSpan(1), sequence);
-        await EnqueueKexAsync(OutgoingPacket.Create(payload), cancellationToken).ConfigureAwait(false);
+        BinaryPrimitives.WriteUInt32BigEndian(payload[1..], sequence);
+        SendControl(payload);
     }
 
     private async ValueTask EnqueueAsync(OutgoingPacket packet, CancellationToken cancellationToken)
@@ -451,17 +587,16 @@ internal sealed partial class SshTransport : IAsyncDisposable
         _wake.Writer.TryWrite(true);
     }
 
-    private async ValueTask EnqueueKexAsync(OutgoingPacket packet, CancellationToken cancellationToken)
+    /// <summary>
+    /// Queues a KEX message without waiting. An exchange holds a few at most, so a full queue means the
+    /// peer has stopped reading, and the exchange can't finish anyway.
+    /// </summary>
+    private void EnqueueKex(OutgoingPacket packet)
     {
-        try
-        {
-            await _kexQueue.Writer.WriteAsync(packet, cancellationToken).ConfigureAwait(false);
-        }
-        catch (Exception ex) when (ex is ChannelClosedException or OperationCanceledException)
+        if (!_kexQueue.Writer.TryWrite(packet))
         {
             packet.Discard();
-            ThrowIfFailed();
-            throw;
+            throw new SshConnectionException("The peer stopped reading during a key exchange. Connect again to continue.");
         }
 
         _wake.Writer.TryWrite(true);
@@ -483,7 +618,7 @@ internal sealed partial class SshTransport : IAsyncDisposable
                 {
                     return;
                 }
-                else if (!_parked && _sendQueue.Reader.TryRead(out packet))
+                else if (!_parked && (_controlQueue.Reader.TryRead(out packet) || _sendQueue.Reader.TryRead(out packet)))
                 {
                     // T3: checked before every take, so nothing non-KEX can follow our KEXINIT.
                 }
@@ -501,13 +636,15 @@ internal sealed partial class SshTransport : IAsyncDisposable
                 }
             }
         }
-        catch (Exception ex) when (ex is OperationCanceledException or IOException or ObjectDisposedException or ChannelClosedException)
-        {
-            Fail(Translate(ex), null);
-        }
         catch (SshException ex)
         {
             Fail(ex, null);
+        }
+#pragma warning disable CA1031 // Whatever ends this loop must be recorded, or senders wait for ever.
+        catch (Exception ex)
+#pragma warning restore CA1031
+        {
+            Fail(Translate(ex), null);
         }
         finally
         {
@@ -522,6 +659,11 @@ internal sealed partial class SshTransport : IAsyncDisposable
         bool installed = false;
         try
         {
+            if (_packetsSent >= MaxPacketsPerKey)
+            {
+                throw new SshConnectionException("Too many packets went out under one key, and a rekey isn't allowed here. Connect again to continue.");
+            }
+
             PacketCipher cipher = _sendCipher;
             int length = packet.Frame(cipher);
             cipher.Seal(packet.Buffer.AsSpan(0, length + cipher.TagLength), _sendSequence);
@@ -543,8 +685,7 @@ internal sealed partial class SshTransport : IAsyncDisposable
 
                 _bytesSent = 0;
                 _packetsSent = 0;
-                _parked = false;
-                _wake.Writer.TryWrite(true);
+                OnNewKeysWritten(packet.ParkGeneration);
             }
             else
             {
@@ -597,21 +738,6 @@ internal sealed partial class SshTransport : IAsyncDisposable
         }
     }
 
-    /// <summary>Gives each waiter its own exception object, with the first failure as the cause, so stack traces stay meaningful.</summary>
-    private static SshException Wrap(Exception failure) => failure switch
-    {
-        SshDisconnectedException e => new SshDisconnectedException(e.ReasonCode, e.Description),
-        SshConnectionException e => new SshConnectionException(e.Message, e),
-        SshHostKeyException e => new SshHostKeyException(e.Message, e),
-        SshProtocolException e => new SshProtocolException(e.Message, e),
-        _ => new SshException(failure.Message, failure),
-    };
-
-    private static SshConnectionException Translate(Exception ex) =>
-        ex is SshConnectionException connection
-            ? connection
-            : new SshConnectionException("The connection was lost. Connect again to continue.", ex);
-
     /// <summary>Records the first failure, tells the peer if we can, and shuts everything down.</summary>
     private SshException Fail(SshException failure, uint? disconnectReason)
     {
@@ -621,7 +747,11 @@ internal sealed partial class SshTransport : IAsyncDisposable
             if (disconnectReason is { } reason)
             {
                 // The text is ours, and fixed: no peer data or secret reaches the wire.
-                TryQueueDisconnect(reason, "protocol error");
+                OutgoingPacket goodbye = BuildDisconnect(reason, "protocol error");
+                if (!_kexQueue.Writer.TryWrite(goodbye))
+                {
+                    goodbye.Discard();
+                }
             }
 
             // Always: a read or write waiting on the stream only ends when the shutdown cancels it.
@@ -632,29 +762,10 @@ internal sealed partial class SshTransport : IAsyncDisposable
         return Failure as SshException ?? failure;
     }
 
-    private void TryQueueDisconnect(uint reason, string text)
-    {
-        SshWriter writer = new(64);
-        try
-        {
-            writer.WriteByte(MessageNumber.Disconnect);
-            writer.WriteUInt32(reason);
-            writer.WriteUtf8String(text);
-            writer.WriteUInt32(0);
-            OutgoingPacket packet = OutgoingPacket.Create(writer.Written, isTerminal: true);
-            if (!_kexQueue.Writer.TryWrite(packet))
-            {
-                packet.Release();
-            }
-        }
-        finally
-        {
-            writer.Dispose();
-        }
-
-        _wake.Writer.TryWrite(true);
-    }
-
+    /// <summary>
+    /// Stops the loops and closes the stream. Every wait here is short and bounded, because the stream may be
+    /// one that ignores cancellation. It frees nothing the receive path could be using: that's for dispose.
+    /// </summary>
     private async Task ShutdownAsync()
     {
         if (Interlocked.Exchange(ref _shutdownStarted, 1) != 0)
@@ -665,41 +776,37 @@ internal sealed partial class SshTransport : IAsyncDisposable
 
         try
         {
-            ClearDeadline();
-            if (_sendLoopStarted != 0)
+            lock (_kexLock)
             {
-                // Give the DISCONNECT a moment, but a peer that doesn't read can't hold us here.
-                using CancellationTokenSource grace = new(TimeSpan.FromSeconds(1), _options.TimeProvider);
-                try
-                {
-                    await _sendLoopDone.Task.WaitAsync(grace.Token).ConfigureAwait(false);
-                }
-                catch (OperationCanceledException)
-                {
-                }
-            }
-
-            try
-            {
-                await _closing.CancelAsync().ConfigureAwait(false);
-            }
-            catch (ObjectDisposedException)
-            {
+                ClearDeadline();
             }
 
             if (_sendLoopStarted != 0)
             {
-                await _sendLoopDone.Task.ConfigureAwait(false);
+                // Lets a DISCONNECT out, but a peer that doesn't read can't hold us here.
+                await WaitBrieflyAsync(_sendLoopDone.Task).ConfigureAwait(false);
             }
 
+            await _closing.CancelAsync().ConfigureAwait(false);
             _sendQueue.Writer.TryComplete();
+            _controlQueue.Writer.TryComplete();
             _kexQueue.Writer.TryComplete();
-            while (_sendQueue.Reader.TryRead(out OutgoingPacket packet) || _kexQueue.Reader.TryRead(out packet))
+            await WaitBrieflyAsync(_stream.DisposeAsync().AsTask()).ConfigureAwait(false);
+
+            if (_sendLoopStarted != 0)
             {
-                packet.Discard();
+                await WaitBrieflyAsync(_sendLoopDone.Task).ConfigureAwait(false);
             }
 
-            await _stream.DisposeAsync().ConfigureAwait(false);
+            if (_sendLoopStarted == 0 || _sendLoopDone.Task.IsCompleted)
+            {
+                while (_sendQueue.Reader.TryRead(out OutgoingPacket packet)
+                    || _controlQueue.Reader.TryRead(out packet)
+                    || _kexQueue.Reader.TryRead(out packet))
+                {
+                    packet.Discard();
+                }
+            }
         }
         catch (Exception ex) when (ex is IOException or ObjectDisposedException)
         {
@@ -707,15 +814,7 @@ internal sealed partial class SshTransport : IAsyncDisposable
         }
         finally
         {
-            lock (_kexLock)
-            {
-                ReleaseKexState();
-            }
-
             _shutdownDone.TrySetResult();
         }
     }
-
-    private readonly TaskCompletionSource _shutdownDone = new(TaskCreationOptions.RunContinuationsAsynchronously);
-    private int _shutdownStarted;
 }

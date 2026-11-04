@@ -40,6 +40,7 @@ internal sealed class SshChannel : IAsyncDisposable
     private uint _remoteMaxPacket;
     private long _receiveWindow = DefaultWindow;
     private uint _consumed;
+    private bool _creditQueued;
     private TaskCompletionSource? _windowWaiter;
     private TaskCompletionSource<bool>? _requestReply;
     private bool _eofSent;
@@ -351,21 +352,38 @@ internal sealed class SshChannel : IAsyncDisposable
     /// <summary>Credits data the application has read, and grows the window once half of it is used.</summary>
     public void OnConsumed(int bytes)
     {
-        uint credit = 0;
+        bool queue = false;
         lock (_gate)
         {
             _consumed += (uint)bytes;
-            if (_consumed >= DefaultWindow / 2 && !_closeSent)
+            if (_consumed >= DefaultWindow / 2 && !_closeSent && !_creditQueued)
             {
-                credit = _consumed;
-                _consumed = 0;
-                _receiveWindow += credit;
+                _creditQueued = true;
+                queue = true;
             }
         }
 
-        if (credit != 0)
+        if (queue)
         {
-            _connection.QueueWindowAdjust(this, credit);
+            _connection.QueueWindowAdjust(this);
+        }
+    }
+
+    /// <summary>Takes the credit to grant, which is everything read so far. Each channel is queued once at most.</summary>
+    public uint TakeCredit()
+    {
+        lock (_gate)
+        {
+            _creditQueued = false;
+            if (_closeSent)
+            {
+                return 0;
+            }
+
+            uint credit = _consumed;
+            _consumed = 0;
+            _receiveWindow += credit;
+            return credit;
         }
     }
 
