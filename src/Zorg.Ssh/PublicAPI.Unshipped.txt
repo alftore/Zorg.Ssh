@@ -1,8 +1,56 @@
 #nullable enable
+Zorg.Ssh.HostKeyPolicy
+Zorg.Ssh.SshAuthenticationException
+Zorg.Ssh.SshAuthenticationException.AllowedMethods.get -> System.Collections.Generic.IReadOnlyList<string!>!
+Zorg.Ssh.SshAuthenticationException.AttemptedMethods.get -> System.Collections.Generic.IReadOnlyList<string!>!
+Zorg.Ssh.SshAuthenticationException.SshAuthenticationException() -> void
+Zorg.Ssh.SshAuthenticationException.SshAuthenticationException(string! message) -> void
+Zorg.Ssh.SshAuthenticationException.SshAuthenticationException(string! message, System.Collections.Generic.IReadOnlyList<string!>! attemptedMethods, System.Collections.Generic.IReadOnlyList<string!>! allowedMethods) -> void
+Zorg.Ssh.SshAuthenticationException.SshAuthenticationException(string! message, System.Exception! innerException) -> void
+Zorg.Ssh.SshClient
+Zorg.Ssh.SshClient.DisposeAsync() -> System.Threading.Tasks.ValueTask
+Zorg.Ssh.SshClient.ExecuteAsync(string! command, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Zorg.Ssh.SshCommandResult!>!
+Zorg.Ssh.SshClient.ServerVersion.get -> string!
+Zorg.Ssh.SshClient.StartProcessAsync(string! command, Zorg.Ssh.SshProcessOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Zorg.Ssh.SshProcess!>!
+Zorg.Ssh.SshClient.StartShellAsync(Zorg.Ssh.SshProcessOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Zorg.Ssh.SshProcess!>!
+Zorg.Ssh.SshClientOptions
+Zorg.Ssh.SshClientOptions.BannerHandler.get -> System.Action<string!>?
+Zorg.Ssh.SshClientOptions.BannerHandler.init -> void
+Zorg.Ssh.SshClientOptions.ConnectTimeout.get -> System.TimeSpan
+Zorg.Ssh.SshClientOptions.ConnectTimeout.init -> void
+Zorg.Ssh.SshClientOptions.Credentials.get -> System.Collections.Generic.IReadOnlyList<Zorg.Ssh.SshCredential!>!
+Zorg.Ssh.SshClientOptions.Credentials.init -> void
+Zorg.Ssh.SshClientOptions.Host.get -> string!
+Zorg.Ssh.SshClientOptions.Host.init -> void
+Zorg.Ssh.SshClientOptions.HostKeyPolicy.get -> Zorg.Ssh.HostKeyPolicy!
+Zorg.Ssh.SshClientOptions.HostKeyPolicy.init -> void
+Zorg.Ssh.SshClientOptions.LoggerFactory.get -> Microsoft.Extensions.Logging.ILoggerFactory?
+Zorg.Ssh.SshClientOptions.LoggerFactory.init -> void
+Zorg.Ssh.SshClientOptions.MaxCommandOutputBytes.get -> int
+Zorg.Ssh.SshClientOptions.MaxCommandOutputBytes.init -> void
+Zorg.Ssh.SshClientOptions.Port.get -> int
+Zorg.Ssh.SshClientOptions.Port.init -> void
+Zorg.Ssh.SshClientOptions.SshClientOptions() -> void
+Zorg.Ssh.SshClientOptions.UserName.get -> string!
+Zorg.Ssh.SshClientOptions.UserName.init -> void
+Zorg.Ssh.SshCommandResult
+Zorg.Ssh.SshCommandResult.<Clone>$() -> Zorg.Ssh.SshCommandResult!
+Zorg.Ssh.SshCommandResult.Deconstruct(out int? ExitCode, out string? ExitSignal, out string! StandardOutput, out string! StandardError) -> void
+Zorg.Ssh.SshCommandResult.Equals(Zorg.Ssh.SshCommandResult? other) -> bool
+Zorg.Ssh.SshCommandResult.ExitCode.get -> int?
+Zorg.Ssh.SshCommandResult.ExitCode.init -> void
+Zorg.Ssh.SshCommandResult.ExitSignal.get -> string?
+Zorg.Ssh.SshCommandResult.ExitSignal.init -> void
+Zorg.Ssh.SshCommandResult.SshCommandResult(int? ExitCode, string? ExitSignal, string! StandardOutput, string! StandardError) -> void
+Zorg.Ssh.SshCommandResult.StandardError.get -> string!
+Zorg.Ssh.SshCommandResult.StandardError.init -> void
+Zorg.Ssh.SshCommandResult.StandardOutput.get -> string!
+Zorg.Ssh.SshCommandResult.StandardOutput.init -> void
 Zorg.Ssh.SshConnectionException
 Zorg.Ssh.SshConnectionException.SshConnectionException() -> void
 Zorg.Ssh.SshConnectionException.SshConnectionException(string! message) -> void
 Zorg.Ssh.SshConnectionException.SshConnectionException(string! message, System.Exception! innerException) -> void
+Zorg.Ssh.SshCredential
 Zorg.Ssh.SshDisconnectedException
 Zorg.Ssh.SshDisconnectedException.Description.get -> string!
 Zorg.Ssh.SshDisconnectedException.ReasonCode.get -> uint
@@ -18,6 +66,19 @@ Zorg.Ssh.SshHostKeyException
 Zorg.Ssh.SshHostKeyException.SshHostKeyException() -> void
 Zorg.Ssh.SshHostKeyException.SshHostKeyException(string! message) -> void
 Zorg.Ssh.SshHostKeyException.SshHostKeyException(string! message, System.Exception! innerException) -> void
+Zorg.Ssh.SshHostKeyInfo
+Zorg.Ssh.SshHostKeyInfo.<Clone>$() -> Zorg.Ssh.SshHostKeyInfo!
+Zorg.Ssh.SshHostKeyInfo.Deconstruct(out string! Host, out int Port, out string! KeyType, out string! Sha256Fingerprint) -> void
+Zorg.Ssh.SshHostKeyInfo.Equals(Zorg.Ssh.SshHostKeyInfo? other) -> bool
+Zorg.Ssh.SshHostKeyInfo.Host.get -> string!
+Zorg.Ssh.SshHostKeyInfo.Host.init -> void
+Zorg.Ssh.SshHostKeyInfo.KeyType.get -> string!
+Zorg.Ssh.SshHostKeyInfo.KeyType.init -> void
+Zorg.Ssh.SshHostKeyInfo.Port.get -> int
+Zorg.Ssh.SshHostKeyInfo.Port.init -> void
+Zorg.Ssh.SshHostKeyInfo.Sha256Fingerprint.get -> string!
+Zorg.Ssh.SshHostKeyInfo.Sha256Fingerprint.init -> void
+Zorg.Ssh.SshHostKeyInfo.SshHostKeyInfo(string! Host, int Port, string! KeyType, string! Sha256Fingerprint) -> void
 Zorg.Ssh.SshNegotiationException
 Zorg.Ssh.SshNegotiationException.Family.get -> string!
 Zorg.Ssh.SshNegotiationException.LocalAlgorithms.get -> System.Collections.Generic.IReadOnlyList<string!>!
@@ -26,7 +87,61 @@ Zorg.Ssh.SshNegotiationException.SshNegotiationException() -> void
 Zorg.Ssh.SshNegotiationException.SshNegotiationException(string! family, System.Collections.Generic.IReadOnlyList<string!>! localAlgorithms, System.Collections.Generic.IReadOnlyList<string!>! peerAlgorithms) -> void
 Zorg.Ssh.SshNegotiationException.SshNegotiationException(string! message) -> void
 Zorg.Ssh.SshNegotiationException.SshNegotiationException(string! message, System.Exception! innerException) -> void
+Zorg.Ssh.SshProcess
+Zorg.Ssh.SshProcess.DisposeAsync() -> System.Threading.Tasks.ValueTask
+Zorg.Ssh.SshProcess.ExitCode.get -> int?
+Zorg.Ssh.SshProcess.ExitSignal.get -> string?
+Zorg.Ssh.SshProcess.ResizeAsync(int columns, int rows, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+Zorg.Ssh.SshProcess.StandardError.get -> System.IO.Stream!
+Zorg.Ssh.SshProcess.StandardInput.get -> System.IO.Stream!
+Zorg.Ssh.SshProcess.StandardOutput.get -> System.IO.Stream!
+Zorg.Ssh.SshProcess.WaitForExitAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+Zorg.Ssh.SshProcessOptions
+Zorg.Ssh.SshProcessOptions.Environment.get -> System.Collections.Generic.IReadOnlyDictionary<string!, string!>?
+Zorg.Ssh.SshProcessOptions.Environment.init -> void
+Zorg.Ssh.SshProcessOptions.Pty.get -> Zorg.Ssh.SshPtyOptions?
+Zorg.Ssh.SshProcessOptions.Pty.init -> void
+Zorg.Ssh.SshProcessOptions.SshProcessOptions() -> void
+Zorg.Ssh.SshPrompt
+Zorg.Ssh.SshPrompt.<Clone>$() -> Zorg.Ssh.SshPrompt!
+Zorg.Ssh.SshPrompt.Deconstruct(out string! Text, out bool Echo) -> void
+Zorg.Ssh.SshPrompt.Echo.get -> bool
+Zorg.Ssh.SshPrompt.Echo.init -> void
+Zorg.Ssh.SshPrompt.Equals(Zorg.Ssh.SshPrompt? other) -> bool
+Zorg.Ssh.SshPrompt.SshPrompt(string! Text, bool Echo) -> void
+Zorg.Ssh.SshPrompt.Text.get -> string!
+Zorg.Ssh.SshPrompt.Text.init -> void
 Zorg.Ssh.SshProtocolException
 Zorg.Ssh.SshProtocolException.SshProtocolException() -> void
 Zorg.Ssh.SshProtocolException.SshProtocolException(string! message) -> void
 Zorg.Ssh.SshProtocolException.SshProtocolException(string! message, System.Exception! innerException) -> void
+Zorg.Ssh.SshPtyOptions
+Zorg.Ssh.SshPtyOptions.Columns.get -> int
+Zorg.Ssh.SshPtyOptions.Columns.init -> void
+Zorg.Ssh.SshPtyOptions.Rows.get -> int
+Zorg.Ssh.SshPtyOptions.Rows.init -> void
+Zorg.Ssh.SshPtyOptions.SshPtyOptions() -> void
+Zorg.Ssh.SshPtyOptions.Terminal.get -> string!
+Zorg.Ssh.SshPtyOptions.Terminal.init -> void
+override Zorg.Ssh.SshCommandResult.Equals(object? obj) -> bool
+override Zorg.Ssh.SshCommandResult.GetHashCode() -> int
+override Zorg.Ssh.SshCommandResult.ToString() -> string!
+override Zorg.Ssh.SshHostKeyInfo.Equals(object? obj) -> bool
+override Zorg.Ssh.SshHostKeyInfo.GetHashCode() -> int
+override Zorg.Ssh.SshHostKeyInfo.ToString() -> string!
+override Zorg.Ssh.SshPrompt.Equals(object? obj) -> bool
+override Zorg.Ssh.SshPrompt.GetHashCode() -> int
+override Zorg.Ssh.SshPrompt.ToString() -> string!
+static Zorg.Ssh.HostKeyPolicy.AcceptAnyUnsafe() -> Zorg.Ssh.HostKeyPolicy!
+static Zorg.Ssh.HostKeyPolicy.Custom(System.Func<Zorg.Ssh.SshHostKeyInfo!, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask<bool>>! check) -> Zorg.Ssh.HostKeyPolicy!
+static Zorg.Ssh.HostKeyPolicy.Fingerprint(string! sha256Fingerprint) -> Zorg.Ssh.HostKeyPolicy!
+static Zorg.Ssh.SshClient.ConnectAsync(Zorg.Ssh.SshClientOptions! options, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Zorg.Ssh.SshClient!>!
+static Zorg.Ssh.SshClient.ConnectOverStreamAsync(System.IO.Stream! stream, Zorg.Ssh.SshClientOptions! options, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Zorg.Ssh.SshClient!>!
+static Zorg.Ssh.SshCommandResult.operator !=(Zorg.Ssh.SshCommandResult? left, Zorg.Ssh.SshCommandResult? right) -> bool
+static Zorg.Ssh.SshCommandResult.operator ==(Zorg.Ssh.SshCommandResult? left, Zorg.Ssh.SshCommandResult? right) -> bool
+static Zorg.Ssh.SshCredential.FromKeyboardInteractive(System.Func<System.Collections.Generic.IReadOnlyList<Zorg.Ssh.SshPrompt!>!, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<string!>!>>! respond) -> Zorg.Ssh.SshCredential!
+static Zorg.Ssh.SshCredential.FromPassword(string! password) -> Zorg.Ssh.SshCredential!
+static Zorg.Ssh.SshHostKeyInfo.operator !=(Zorg.Ssh.SshHostKeyInfo? left, Zorg.Ssh.SshHostKeyInfo? right) -> bool
+static Zorg.Ssh.SshHostKeyInfo.operator ==(Zorg.Ssh.SshHostKeyInfo? left, Zorg.Ssh.SshHostKeyInfo? right) -> bool
+static Zorg.Ssh.SshPrompt.operator !=(Zorg.Ssh.SshPrompt? left, Zorg.Ssh.SshPrompt? right) -> bool
+static Zorg.Ssh.SshPrompt.operator ==(Zorg.Ssh.SshPrompt? left, Zorg.Ssh.SshPrompt? right) -> bool

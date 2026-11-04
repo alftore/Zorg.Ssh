@@ -44,6 +44,7 @@ internal sealed partial class SshTransport : IAsyncDisposable
     // Owned by the receive path.
     private PacketCipher _receiveCipher = NoneCipher.Instance;
     private uint _receiveSequence;
+    private uint _lastReceivedSequence;
     private bool _anyPacketReceived;
     private long _bytesReceived;
     private long _packetsReceived;
@@ -271,6 +272,7 @@ internal sealed partial class SshTransport : IAsyncDisposable
                 : null;
             CancellationToken token = linked?.Token ?? _closing.Token;
             uint sequence = _receiveSequence;
+            _lastReceivedSequence = sequence;
             ReadOnlyMemory<byte> payload = await _reader.ReadPacketAsync(_receiveCipher, sequence, token).ConfigureAwait(false);
             AdvanceReceiveSequence();
             bool first = !_anyPacketReceived;
