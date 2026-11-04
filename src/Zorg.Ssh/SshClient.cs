@@ -220,6 +220,26 @@ public sealed class SshClient : IAsyncDisposable
     /// <returns>A task that completes when the connection is closed.</returns>
     public ValueTask DisposeAsync() => _connection.DisposeAsync();
 
+    /// <summary>Opens a session channel and starts a subsystem on it, such as <c>sftp</c>.</summary>
+    internal async Task<SshChannel> OpenSubsystemAsync(string name, CancellationToken cancellationToken)
+    {
+        SshChannel channel = await _connection.OpenChannelAsync("session", cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (!await channel.SendRequestAsync("subsystem", Encode(w => w.String(name)), cancellationToken).ConfigureAwait(false))
+            {
+                throw new SshException($"The server refused the {name} subsystem. It may not be enabled there.");
+            }
+
+            return channel;
+        }
+        catch
+        {
+            await channel.DisposeAsync().ConfigureAwait(false);
+            throw;
+        }
+    }
+
     /// <summary>Test hook: starts a rekey now.</summary>
     internal void RequestRekey() => _connection.Transport.RequestRekey();
 
