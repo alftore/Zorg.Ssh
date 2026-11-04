@@ -29,7 +29,7 @@ internal sealed class SshRequestWriter
     public void Bytes(byte[] value)
     {
         UInt32((uint)value.Length);
-        _parts.Add(value);
+        _parts.Add((byte[])value.Clone()); // A copy, because Clear zeroes what this holds.
     }
 
     public byte[] ToArray()
