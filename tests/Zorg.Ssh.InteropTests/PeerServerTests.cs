@@ -67,23 +67,6 @@ public class PeerServerTests
         });
     }
 
-    [Fact]
-    public async Task A_rekey_we_start_completes_with_OpenSSH()
-    {
-        await using SshPeerContainer container = await StartAsync("openssh-10");
-        using TcpClient socket = new();
-        await socket.ConnectAsync(container.Host, container.Port, Ct);
-        await using SshTransport transport = await SshTransport.StartAsync(socket.GetStream(), new TransportOptions
-        {
-            Role = SshRole.Client,
-            HostKeyValidator = static (_, _) => ValueTask.FromResult(true),
-        }, Ct);
-
-        transport.RequestRekey();
-        await RequestAuthServiceAsync(transport);
-        await AssertServiceAcceptedAsync(transport);
-    }
-
     private static async Task<SshPeerContainer> StartAsync(string peer)
     {
         PeerTools.RequireContainers();

@@ -161,11 +161,17 @@ internal sealed partial class SshTransport : IAsyncDisposable
         return EnqueueAsync(packet, cancellationToken);
     }
 
-    /// <summary>Asks for a rekey now. Does nothing if one is already running.</summary>
+    /// <summary>
+    /// Asks for a rekey now. Does nothing if one is already running, or before auth has finished: OpenSSH
+    /// servers refuse KEXINIT until then, so we never start one earlier. We still answer a peer that does.
+    /// </summary>
     public void RequestRekey()
     {
         ThrowIfFailed();
-        StartKex();
+        if (_phase == TransportPhase.Connected)
+        {
+            StartKex();
+        }
     }
 
     /// <summary>Sends DISCONNECT if possible, then closes the stream and releases everything.</summary>
@@ -366,7 +372,7 @@ internal sealed partial class SshTransport : IAsyncDisposable
 
     private void CheckRekeyLimits(long bytes, long packets)
     {
-        if (!_options.RekeyEnabled || !_firstKexComplete || _kexStep != KexStep.Idle)
+        if (!_options.RekeyEnabled || _phase != TransportPhase.Connected || _kexStep != KexStep.Idle)
         {
             return;
         }
