@@ -277,7 +277,9 @@ internal sealed class SshChannel : IAsyncDisposable
 
         if (done)
         {
-            ReleaseWaiters(_failure!);
+            // Paramiko-based servers can finish a command and close before replying to its request. The
+            // exit status has the real outcome, so a clean close counts as the request having run.
+            ReleaseWaiters(_failure!, closedCleanly: true);
             _connection.Forget(this);
             _closed.TrySetResult();
         }
@@ -340,7 +342,7 @@ internal sealed class SshChannel : IAsyncDisposable
         _output.Writer.Complete(failure);
         _errorOutput.Writer.Complete(failure);
         _requests.Writer.TryComplete();
-        ReleaseWaiters(failure);
+        ReleaseWaiters(failure, closedCleanly: false);
         _closed.TrySetResult();
     }
 
@@ -385,7 +387,7 @@ internal sealed class SshChannel : IAsyncDisposable
 
     private static Pipe NewPipe() => new(new PipeOptions(pauseWriterThreshold: 0, useSynchronizationContext: false));
 
-    private void ReleaseWaiters(Exception failure)
+    private void ReleaseWaiters(Exception failure, bool closedCleanly)
     {
         TaskCompletionSource? window;
         TaskCompletionSource<bool>? reply;
@@ -398,7 +400,14 @@ internal sealed class SshChannel : IAsyncDisposable
         }
 
         window?.TrySetResult();
-        reply?.TrySetException(failure);
+        if (closedCleanly)
+        {
+            reply?.TrySetResult(true);
+        }
+        else
+        {
+            reply?.TrySetException(failure);
+        }
     }
 
     private void ThrowIfFailed()

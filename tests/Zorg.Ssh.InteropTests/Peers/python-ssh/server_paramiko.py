@@ -10,9 +10,12 @@ class Server(paramiko.ServerInterface):
     def check_channel_request(self, kind, chanid):
         return paramiko.OPEN_SUCCEEDED if kind == "session" else paramiko.OPEN_FAILED_ADMINISTRATIVELY_PROHIBITED
     def check_channel_exec_request(self, channel, command):
-        channel.send(f"paramiko {paramiko.__version__}\n".encode())
-        channel.send_exit_status(0)
-        channel.close()
+        # Paramiko replies to the request after this returns, so the work runs on another thread.
+        def run():
+            channel.send(f"paramiko {paramiko.__version__}\n".encode())
+            channel.send_exit_status(0)
+            channel.close()
+        threading.Timer(0.05, run).start()
         return True
 
 def serve(conn):
@@ -20,7 +23,8 @@ def serve(conn):
     t.add_server_key(HOST_KEY)
     try:
         t.start_server(server=Server())
-        t.accept(30)
+        # Keep the reference: Paramiko holds channels weakly, and collecting one closes it.
+        channel = t.accept(30)
         while t.is_active():
             t.join(1)
     except Exception as e:
