@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using Zorg.Ssh.Crypto.Keys;
+using Zorg.Ssh.Protocol;
 
 namespace Zorg.Ssh.Crypto;
 
@@ -21,6 +23,30 @@ internal abstract class SshPublicKey
     /// It never throws because of the blob's contents.
     /// </summary>
     public abstract bool Verify(string signatureAlgorithm, ReadOnlySpan<byte> data, ReadOnlySpan<byte> signatureBlob);
+
+    /// <summary>
+    /// Reads a public key blob. Anything malformed or unsupported, including trailing data and an RSA modulus
+    /// below 2048 bits, throws <see cref="SshProtocolException"/>.
+    /// </summary>
+    public static SshPublicKey Parse(ReadOnlySpan<byte> blob)
+    {
+        SshReader reader = new(blob);
+        string keyType = reader.ReadUtf8String();
+        if (keyType == Ed25519PublicKey.Name)
+        {
+            return Ed25519PublicKey.ParseBody(ref reader);
+        }
+
+        if (keyType == RsaPublicKey.Name)
+        {
+            return RsaPublicKey.ParseBody(ref reader, blob);
+        }
+
+        // The peer's text stays out of the message: it's unchecked, and messages reach logs.
+        NistCurve curve = NistCurve.FromKeyType(keyType)
+            ?? throw new SshProtocolException("The peer sent a public key of an unsupported type.");
+        return EcdsaPublicKey.ParseBody(curve, ref reader);
+    }
 }
 
 /// <summary>A private key that can sign, as a server host key or for publickey auth. Dispose it to zero the key.</summary>
@@ -34,6 +60,18 @@ internal abstract class SshPrivateKey : IDisposable
 
     /// <summary>Signs data, and returns the signature blob: <c>string algorithm</c>, <c>string signature</c>.</summary>
     public abstract byte[] Sign(string signatureAlgorithm, ReadOnlySpan<byte> data);
+
+    /// <summary>Makes a new random Ed25519 key.</summary>
+    public static SshPrivateKey GenerateEd25519() => Ed25519PrivateKey.Generate();
+
+    /// <summary>Makes a new random ECDSA key.</summary>
+    /// <param name="curveKeyType">The key type, for example <c>ecdsa-sha2-nistp256</c>.</param>
+    public static SshPrivateKey GenerateEcdsa(string curveKeyType) => EcdsaPrivateKey.Generate(
+        NistCurve.FromKeyType(curveKeyType) ?? throw new ArgumentException("That isn't a supported ECDSA key type.", nameof(curveKeyType)));
+
+    /// <summary>Makes a new random RSA key.</summary>
+    /// <param name="bits">The modulus size, at least 2048.</param>
+    public static SshPrivateKey GenerateRsa(int bits) => RsaPrivateKey.Generate(bits);
 
     /// <summary>Zeroes the key.</summary>
     public void Dispose()
