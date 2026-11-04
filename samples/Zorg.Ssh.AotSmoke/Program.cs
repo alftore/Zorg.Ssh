@@ -1,4 +1,5 @@
 using System;
+using Zorg.Ssh.AotSmoke;
 using Zorg.Ssh.Protocol;
 
 // Published with Native AOT and executed in CI. Trimming keeps only what's used, so every
@@ -19,5 +20,8 @@ writer.WriteNameList(["curve25519-sha256", "none"]);
 SshReader reader = new(writer.Written);
 Check("name-list round trip", reader.ReadNameList().Length == 2);
 writer.Dispose();
+
+CipherSmoke.Run(Check);
+KeySmoke.Run(Check);
 
 return failures == 0 ? 0 : 1;

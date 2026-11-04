@@ -35,4 +35,5 @@ Rules:
 | Package | Reason |
 |---|---|
 | Microsoft.Testing.Extensions.CodeCoverage 18.12.0 | Zorg.Json uses it, but it's under proprietary Microsoft terms that limit use to designing, developing and testing, not an open licence. `coverlet.MTP` does the same job under MIT. |
+| Testcontainers 4.16.0 | MIT and it worked on Podman, but it adds 12 packages for what a small direct harness does (spike S3). The harness also binds to loopback only. |
 | FluentAssertions, Moq, Verify | Licence changes or a licence declaration step in recent versions. Plain xunit assertions are enough. |
