@@ -1,0 +1,51 @@
+<Project>
+  <PropertyGroup>
+    <!-- Language and framework -->
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>14.0</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+
+    <!-- Quality gates. GenerateDocumentationFile stays on in every project: IDE0005 needs it at build. -->
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <MSBuildTreatWarningsAsErrors>true</MSBuildTreatWarningsAsErrors>
+    <AnalysisLevel>latest-all</AnalysisLevel>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <Features>strict</Features>
+
+    <!-- Determinism -->
+    <Deterministic>true</Deterministic>
+    <ContinuousIntegrationBuild Condition="'$(CI)' == 'true' or '$(GITHUB_ACTIONS)' == 'true'">true</ContinuousIntegrationBuild>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
+
+    <!-- Packaging metadata -->
+    <VersionPrefix>0.1.0</VersionPrefix>
+    <VersionSuffix>alpha</VersionSuffix>
+    <Authors>Zorg.Ssh contributors</Authors>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+    <IsPackable>false</IsPackable>
+
+    <!-- Relative to the repo root, so a checkout path that contains "src" or "tests" can't change the result. -->
+    <ZorgProjectPath>$([MSBuild]::MakeRelative($(MSBuildThisFileDirectory), $(MSBuildProjectDirectory)))</ZorgProjectPath>
+  </PropertyGroup>
+
+  <!-- Library projects (src/) -->
+  <PropertyGroup Condition="$(ZorgProjectPath.StartsWith('src'))">
+    <IsPackable>true</IsPackable>
+    <IsAotCompatible>true</IsAotCompatible>
+    <!-- Off because BouncyCastle 2.7.0 isn't marked AOT-compatible, which fails with IL3058.
+         The gate is samples/Zorg.Ssh.AotSmoke instead: published with Native AOT and executed. -->
+    <VerifyReferenceAotCompatibility>false</VerifyReferenceAotCompatibility>
+    <EnablePackageValidation>true</EnablePackageValidation>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(IsPackable)' == 'true'">
+    <None Include="$(MSBuildThisFileDirectory)PACKAGE.md" Pack="true" PackagePath="README.md" />
+  </ItemGroup>
+</Project>

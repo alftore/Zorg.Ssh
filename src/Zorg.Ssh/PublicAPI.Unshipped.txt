@@ -1,0 +1,9 @@
+#nullable enable
+Zorg.Ssh.SshException
+Zorg.Ssh.SshException.SshException() -> void
+Zorg.Ssh.SshException.SshException(string! message) -> void
+Zorg.Ssh.SshException.SshException(string! message, System.Exception! innerException) -> void
+Zorg.Ssh.SshProtocolException
+Zorg.Ssh.SshProtocolException.SshProtocolException() -> void
+Zorg.Ssh.SshProtocolException.SshProtocolException(string! message) -> void
+Zorg.Ssh.SshProtocolException.SshProtocolException(string! message, System.Exception! innerException) -> void

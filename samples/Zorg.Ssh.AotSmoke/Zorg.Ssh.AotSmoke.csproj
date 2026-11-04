@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <PublishAot>true</PublishAot>
+    <!-- Report each trim and AOT warning, not one summary warning per assembly. -->
+    <TrimmerSingleWarn>false</TrimmerSingleWarn>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <!-- See Directory.Build.props: this published and executed sample is the gate. -->
+    <VerifyReferenceAotCompatibility>false</VerifyReferenceAotCompatibility>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Zorg.Ssh\Zorg.Ssh.csproj" />
+  </ItemGroup>
+
+</Project>

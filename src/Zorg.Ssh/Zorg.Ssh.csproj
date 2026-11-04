@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <Description>Async-first SSH client and server library for .NET.</Description>
+    <PackageTags>ssh;sftp;openssh;async</PackageTags>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="BouncyCastle.Cryptography" />
+    <PackageReference Include="Microsoft.CodeAnalysis.PublicApiAnalyzers" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <AdditionalFiles Include="PublicAPI.Shipped.txt" />
+    <AdditionalFiles Include="PublicAPI.Unshipped.txt" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Zorg.Ssh.Tests" />
+    <InternalsVisibleTo Include="Zorg.Ssh.InteropTests" />
+    <InternalsVisibleTo Include="Zorg.Ssh.Benchmarks" />
+    <InternalsVisibleTo Include="Zorg.Ssh.AotSmoke" />
+  </ItemGroup>
+
+</Project>
