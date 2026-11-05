@@ -144,12 +144,31 @@ Everything in a session comes from an authenticated client, but it's still under
 What the server doesn't do for you:
 
 - There's no shell, no process launching and no real terminal. `Pty` only tells you what was asked for. A later `window-change` is accepted, but your handler isn't told about it.
-- There's no SFTP server. The subsystem request reaches your handler, and the client's `OpenSftpAsync` then fails.
 - There's no port forwarding. Those channels are refused.
 
 The token cancels when the server stops, and when the client closes the session or goes away. Reads on `Input` then end or fail, and writes fail with an `SshException`, so a handler that does other long work has to watch for that itself.
 
 If a handler throws, the error is logged, the client gets exit code 1, and it learns nothing about why.
+
+## SFTP
+
+`SftpServer.ServeAsync` serves one SFTP session from a directory. Call it from `SessionHandler` for the `sftp` subsystem.
+
+```csharp
+SftpServerOptions sftp = new() { RootDirectory = "/srv/sftp", ReadOnly = true };
+SshServerOptions options = new()
+{
+    HostKeys = [hostKey],
+    PasswordHandler = (request, ct) => ValueTask.FromResult(
+        IsPasswordRight(request.UserName, request.Password) ? SshAuthDecision.Accept : SshAuthDecision.Reject),
+    SessionHandler = (session, ct) =>
+        session.Kind == SshSessionKind.Subsystem && session.Command == "sftp"
+            ? SftpServer.ServeAsync(session, sftp, ct)
+            : Task.FromResult(1),
+};
+```
+
+The client sees `RootDirectory` as `/`, and paths and symlinks that lead out of it are refused. That check can't be airtight against another process on the same machine changing the directory at the same moment, because .NET has no `openat`. Don't share a root with anyone you don't trust to write to it. Disk use isn't limited, and metadata requests run one at a time across the whole process.
 
 ## Limits
 

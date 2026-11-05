@@ -351,6 +351,35 @@ public sealed class UpperLayerRegressionTests : IDisposable
         await Assert.ThrowsAsync<SshConnectionException>(() => server.ServeStreamAsync(a, Ct));
     }
 
+    // Found by the SFTP server work: closing a session first must not break the connection for the next one.
+    [Fact]
+    public async Task R1_closing_an_sftp_session_leaves_the_connection_usable()
+    {
+        System.IO.DirectoryInfo root = System.IO.Directory.CreateTempSubdirectory("zorg-ssh-r1");
+        try
+        {
+            Zorg.Ssh.Sftp.SftpServerOptions sftp = new() { RootDirectory = root.FullName };
+            await using SshServer server = await SshServer.StartAsync(
+                Options((session, ct) => session.Kind == SshSessionKind.Subsystem
+                    ? Zorg.Ssh.Sftp.SftpServer.ServeAsync(session, sftp, ct)
+                    : Task.FromResult(4)),
+                Ct);
+
+            await using SshClient client = await SshClient.ConnectAsync(ClientOptions(server), Ct);
+            for (int i = 0; i < 5; i++)
+            {
+                Zorg.Ssh.Sftp.SftpClient session = await client.OpenSftpAsync(Ct);
+                await session.WriteAllBytesAsync($"file{i}", new byte[] { 1, 2, 3 }, Ct);
+                await session.DisposeAsync();
+                Assert.Equal(4, (await client.ExecuteAsync("x", Ct)).ExitCode);
+            }
+        }
+        finally
+        {
+            root.Delete(recursive: true);
+        }
+    }
+
     // R21.
     [Fact]
     public async Task R21_a_lost_connection_is_not_reported_as_an_exit()

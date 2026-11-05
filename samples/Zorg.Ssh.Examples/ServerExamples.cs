@@ -4,6 +4,7 @@ using System.IO;
 using System.Net;
 using System.Security.Cryptography;
 using System.Text;
+using Zorg.Ssh.Sftp;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -65,6 +66,24 @@ internal static class ServerExamples
             PasswordHandler = (request, ct) => ValueTask.FromResult(
                 IsPasswordRight(request.UserName, request.Password) ? SshAuthDecision.Accept : SshAuthDecision.Reject),
             SessionHandler = RunSessionAsync,
+        };
+        // end-doc
+        return options;
+    }
+
+    public static SshServerOptions SftpOnly(SshHostKey hostKey)
+    {
+        // doc:server-sftp
+        SftpServerOptions sftp = new() { RootDirectory = "/srv/sftp", ReadOnly = true };
+        SshServerOptions options = new()
+        {
+            HostKeys = [hostKey],
+            PasswordHandler = (request, ct) => ValueTask.FromResult(
+                IsPasswordRight(request.UserName, request.Password) ? SshAuthDecision.Accept : SshAuthDecision.Reject),
+            SessionHandler = (session, ct) =>
+                session.Kind == SshSessionKind.Subsystem && session.Command == "sftp"
+                    ? SftpServer.ServeAsync(session, sftp, ct)
+                    : Task.FromResult(1),
         };
         // end-doc
         return options;
