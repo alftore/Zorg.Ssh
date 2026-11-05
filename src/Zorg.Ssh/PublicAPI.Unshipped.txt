@@ -166,7 +166,11 @@ Zorg.Ssh.SshAuthenticationException.SshAuthenticationException(string! message, 
 Zorg.Ssh.SshClient
 Zorg.Ssh.SshClient.DisposeAsync() -> System.Threading.Tasks.ValueTask
 Zorg.Ssh.SshClient.ExecuteAsync(string! command, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Zorg.Ssh.SshCommandResult!>!
+Zorg.Ssh.SshClient.ForwardDynamicPortAsync(System.Net.IPEndPoint? localEndPoint = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Zorg.Ssh.SshForward!>!
+Zorg.Ssh.SshClient.ForwardLocalPortAsync(System.Net.IPEndPoint? localEndPoint, string! remoteHost, int remotePort, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Zorg.Ssh.SshForward!>!
+Zorg.Ssh.SshClient.ForwardRemotePortAsync(string! remoteAddress, int remotePort, string! localHost, int localPort, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Zorg.Ssh.SshRemoteForward!>!
 Zorg.Ssh.SshClient.OpenSftpAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Zorg.Ssh.Sftp.SftpClient!>!
+Zorg.Ssh.SshClient.OpenTcpStreamAsync(string! host, int port, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.IO.Stream!>!
 Zorg.Ssh.SshClient.ServerVersion.get -> string!
 Zorg.Ssh.SshClient.StartProcessAsync(string! command, Zorg.Ssh.SshProcessOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Zorg.Ssh.SshProcess!>!
 Zorg.Ssh.SshClient.StartShellAsync(Zorg.Ssh.SshProcessOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Zorg.Ssh.SshProcess!>!
@@ -183,12 +187,18 @@ Zorg.Ssh.SshClientOptions.Host.get -> string!
 Zorg.Ssh.SshClientOptions.Host.init -> void
 Zorg.Ssh.SshClientOptions.HostKeyPolicy.get -> Zorg.Ssh.HostKeyPolicy!
 Zorg.Ssh.SshClientOptions.HostKeyPolicy.init -> void
+Zorg.Ssh.SshClientOptions.JumpHost.get -> Zorg.Ssh.SshClient?
+Zorg.Ssh.SshClientOptions.JumpHost.init -> void
 Zorg.Ssh.SshClientOptions.LoggerFactory.get -> Microsoft.Extensions.Logging.ILoggerFactory?
 Zorg.Ssh.SshClientOptions.LoggerFactory.init -> void
 Zorg.Ssh.SshClientOptions.MaxCommandOutputBytes.get -> int
 Zorg.Ssh.SshClientOptions.MaxCommandOutputBytes.init -> void
+Zorg.Ssh.SshClientOptions.MaxForwardedConnections.get -> int
+Zorg.Ssh.SshClientOptions.MaxForwardedConnections.init -> void
 Zorg.Ssh.SshClientOptions.Port.get -> int
 Zorg.Ssh.SshClientOptions.Port.init -> void
+Zorg.Ssh.SshClientOptions.SocksHandshakeTimeout.get -> System.TimeSpan
+Zorg.Ssh.SshClientOptions.SocksHandshakeTimeout.init -> void
 Zorg.Ssh.SshClientOptions.SshClientOptions() -> void
 Zorg.Ssh.SshClientOptions.UserName.get -> string!
 Zorg.Ssh.SshClientOptions.UserName.init -> void
@@ -216,6 +226,21 @@ Zorg.Ssh.SshConnectionException.SshConnectionException() -> void
 Zorg.Ssh.SshConnectionException.SshConnectionException(string! message) -> void
 Zorg.Ssh.SshConnectionException.SshConnectionException(string! message, System.Exception! innerException) -> void
 Zorg.Ssh.SshCredential
+Zorg.Ssh.SshDirectTcpRequest
+Zorg.Ssh.SshDirectTcpRequest.<Clone>$() -> Zorg.Ssh.SshDirectTcpRequest!
+Zorg.Ssh.SshDirectTcpRequest.Deconstruct(out Zorg.Ssh.SshPrincipal! Principal, out string! Host, out int Port, out string! OriginatorAddress, out int OriginatorPort) -> void
+Zorg.Ssh.SshDirectTcpRequest.Equals(Zorg.Ssh.SshDirectTcpRequest? other) -> bool
+Zorg.Ssh.SshDirectTcpRequest.Host.get -> string!
+Zorg.Ssh.SshDirectTcpRequest.Host.init -> void
+Zorg.Ssh.SshDirectTcpRequest.OriginatorAddress.get -> string!
+Zorg.Ssh.SshDirectTcpRequest.OriginatorAddress.init -> void
+Zorg.Ssh.SshDirectTcpRequest.OriginatorPort.get -> int
+Zorg.Ssh.SshDirectTcpRequest.OriginatorPort.init -> void
+Zorg.Ssh.SshDirectTcpRequest.Port.get -> int
+Zorg.Ssh.SshDirectTcpRequest.Port.init -> void
+Zorg.Ssh.SshDirectTcpRequest.Principal.get -> Zorg.Ssh.SshPrincipal!
+Zorg.Ssh.SshDirectTcpRequest.Principal.init -> void
+Zorg.Ssh.SshDirectTcpRequest.SshDirectTcpRequest(Zorg.Ssh.SshPrincipal! Principal, string! Host, int Port, string! OriginatorAddress, int OriginatorPort) -> void
 Zorg.Ssh.SshDisconnectedException
 Zorg.Ssh.SshDisconnectedException.Description.get -> string!
 Zorg.Ssh.SshDisconnectedException.ReasonCode.get -> uint
@@ -227,6 +252,13 @@ Zorg.Ssh.SshException
 Zorg.Ssh.SshException.SshException() -> void
 Zorg.Ssh.SshException.SshException(string! message) -> void
 Zorg.Ssh.SshException.SshException(string! message, System.Exception! innerException) -> void
+Zorg.Ssh.SshForward
+Zorg.Ssh.SshForward.ActiveConnections.get -> int
+Zorg.Ssh.SshForward.DisposeAsync() -> System.Threading.Tasks.ValueTask
+Zorg.Ssh.SshForward.LocalEndPoint.get -> System.Net.IPEndPoint!
+Zorg.Ssh.SshForwardDecision
+Zorg.Ssh.SshForwardDecision.Allow = 1 -> Zorg.Ssh.SshForwardDecision
+Zorg.Ssh.SshForwardDecision.Deny = 0 -> Zorg.Ssh.SshForwardDecision
 Zorg.Ssh.SshHostConfig
 Zorg.Ssh.SshHostConfig.<Clone>$() -> Zorg.Ssh.SshHostConfig!
 Zorg.Ssh.SshHostConfig.Deconstruct(out string! HostName, out int Port, out string! User, out System.Collections.Generic.IReadOnlyList<string!>! IdentityFiles, out bool IdentitiesOnly, out System.Collections.Generic.IReadOnlyList<string!>! UserKnownHostsFiles, out Zorg.Ssh.SshStrictHostKeyChecking StrictHostKeyChecking, out string? ProxyJump) -> void
@@ -358,6 +390,11 @@ Zorg.Ssh.SshPublicKeyRequest.Sha256Fingerprint.init -> void
 Zorg.Ssh.SshPublicKeyRequest.SshPublicKeyRequest(string! UserName, string! KeyType, string! Sha256Fingerprint) -> void
 Zorg.Ssh.SshPublicKeyRequest.UserName.get -> string!
 Zorg.Ssh.SshPublicKeyRequest.UserName.init -> void
+Zorg.Ssh.SshRemoteForward
+Zorg.Ssh.SshRemoteForward.ActiveConnections.get -> int
+Zorg.Ssh.SshRemoteForward.DisposeAsync() -> System.Threading.Tasks.ValueTask
+Zorg.Ssh.SshRemoteForward.RemoteAddress.get -> string!
+Zorg.Ssh.SshRemoteForward.RemotePort.get -> int
 Zorg.Ssh.SshServer
 Zorg.Ssh.SshServer.DisposeAsync() -> System.Threading.Tasks.ValueTask
 Zorg.Ssh.SshServer.LocalEndPoint.get -> System.Net.IPEndPoint!
@@ -369,6 +406,8 @@ Zorg.Ssh.SshServerOptions.Algorithms.get -> Zorg.Ssh.SshAlgorithms!
 Zorg.Ssh.SshServerOptions.Algorithms.init -> void
 Zorg.Ssh.SshServerOptions.Banner.get -> string?
 Zorg.Ssh.SshServerOptions.Banner.init -> void
+Zorg.Ssh.SshServerOptions.DirectTcpHandler.get -> System.Func<Zorg.Ssh.SshDirectTcpRequest!, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask<Zorg.Ssh.SshForwardDecision>>?
+Zorg.Ssh.SshServerOptions.DirectTcpHandler.init -> void
 Zorg.Ssh.SshServerOptions.HostKeys.get -> System.Collections.Generic.IReadOnlyList<Zorg.Ssh.SshHostKey!>!
 Zorg.Ssh.SshServerOptions.HostKeys.init -> void
 Zorg.Ssh.SshServerOptions.LoggerFactory.get -> Microsoft.Extensions.Logging.ILoggerFactory?
@@ -444,6 +483,9 @@ override Zorg.Ssh.Sftp.SftpFileSystemInfo.ToString() -> string!
 override Zorg.Ssh.SshCommandResult.Equals(object? obj) -> bool
 override Zorg.Ssh.SshCommandResult.GetHashCode() -> int
 override Zorg.Ssh.SshCommandResult.ToString() -> string!
+override Zorg.Ssh.SshDirectTcpRequest.Equals(object? obj) -> bool
+override Zorg.Ssh.SshDirectTcpRequest.GetHashCode() -> int
+override Zorg.Ssh.SshDirectTcpRequest.ToString() -> string!
 override Zorg.Ssh.SshHostConfig.Equals(object? obj) -> bool
 override Zorg.Ssh.SshHostConfig.GetHashCode() -> int
 override Zorg.Ssh.SshHostConfig.ToString() -> string!
@@ -489,6 +531,8 @@ static Zorg.Ssh.SshCredential.FromKeyboardInteractive(System.Func<System.Collect
 static Zorg.Ssh.SshCredential.FromPassword(string! password) -> Zorg.Ssh.SshCredential!
 static Zorg.Ssh.SshCredential.FromPrivateKey(string! keyText, string? passphrase = null) -> Zorg.Ssh.SshCredential!
 static Zorg.Ssh.SshCredential.FromPrivateKeyFile(string! path, string? passphrase = null, string? certificatePath = null) -> Zorg.Ssh.SshCredential!
+static Zorg.Ssh.SshDirectTcpRequest.operator !=(Zorg.Ssh.SshDirectTcpRequest? left, Zorg.Ssh.SshDirectTcpRequest? right) -> bool
+static Zorg.Ssh.SshDirectTcpRequest.operator ==(Zorg.Ssh.SshDirectTcpRequest? left, Zorg.Ssh.SshDirectTcpRequest? right) -> bool
 static Zorg.Ssh.SshHostConfig.operator !=(Zorg.Ssh.SshHostConfig? left, Zorg.Ssh.SshHostConfig? right) -> bool
 static Zorg.Ssh.SshHostConfig.operator ==(Zorg.Ssh.SshHostConfig? left, Zorg.Ssh.SshHostConfig? right) -> bool
 static Zorg.Ssh.SshHostKey.GenerateEd25519() -> Zorg.Ssh.SshHostKey!

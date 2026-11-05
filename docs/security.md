@@ -90,7 +90,7 @@ Not implemented in this version:
 
 - **SCP**, and it won't be added. It's a shell-command protocol with a history of path injection. Use SFTP.
 - **Compression**, which is left out of version 1. OpenSSH 10.6 disabled LZ77 in compression because of a side channel.
-- Port forwarding (local, remote and dynamic) and jump hosts.
+- Remote forwarding on the server: it refuses every `tcpip-forward` request.
 - ssh-agent, and agent forwarding.
 - OpenSSH certificates. `@cert-authority` lines in `known_hosts` aren't used to trust a host.
 - `~/.ssh/config` parsing.
@@ -102,7 +102,7 @@ Not implemented in this version:
 - Changing an expired password from the client: it fails with `SshAuthenticationException`.
 - SFTP versions other than 3.
 
-Forwarding, the agent, certificates and config parsing are planned. Nothing here is a promise of a date.
+The agent, certificates and config parsing are planned. Nothing here is a promise of a date.
 
 ## Unverified
 

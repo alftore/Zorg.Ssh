@@ -95,15 +95,38 @@ public class ClientSessionTests
         await using SshClient client = await SshClient.ConnectAsync(Options(container, SshCredential.FromPassword(Password)), Ct);
         await using SshProcess process = await client.StartProcessAsync("cat", null, Ct);
 
+        // Both sides stream at once, but the writer stays a little ahead of the reader. Flat out both ways, Podman's
+        // published port on this host can stall for good, with real ssh and with no SSH at all, so this can't go flat out.
+        const int Chunk = 32 * 1024;
+        const int MaxLead = 128 * 1024;
         byte[] data = RandomNumberGenerator.GetBytes(8_000_000);
+        long read = 0;
         Task writer = Task.Run(async () =>
         {
-            await process.StandardInput.WriteAsync(data, Ct);
+            for (int offset = 0; offset < data.Length; offset += Chunk)
+            {
+                while (offset - Volatile.Read(ref read) > MaxLead)
+                {
+                    await Task.Delay(1, Ct);
+                }
+
+                await process.StandardInput.WriteAsync(data.AsMemory(offset, Math.Min(Chunk, data.Length - offset)), Ct);
+            }
+
             await process.StandardInput.DisposeAsync();
         }, Ct);
         using MemoryStream received = new();
-        await process.StandardOutput.CopyToAsync(received, Ct);
-        await writer;
+        Task reader = Task.Run(async () =>
+        {
+            byte[] buffer = new byte[64 * 1024];
+            int count;
+            while ((count = await process.StandardOutput.ReadAsync(buffer, Ct)) != 0)
+            {
+                await received.WriteAsync(buffer.AsMemory(0, count), Ct);
+                Interlocked.Add(ref read, count);
+            }
+        }, Ct);
+        await Task.WhenAll(writer, reader).WaitAsync(TimeSpan.FromSeconds(60), Ct);
         await process.WaitForExitAsync(Ct);
         Assert.True(data.AsSpan().SequenceEqual(received.GetBuffer().AsSpan(0, (int)received.Length)));
         Assert.Equal(0, process.ExitCode);

@@ -44,6 +44,36 @@ public sealed class SshClientOptions
     /// <summary>Gets the most output <see cref="SshClient.ExecuteAsync"/> keeps, per stream, before it fails. The default is 64 MiB. Use <see cref="SshClient.StartProcessAsync"/> for more.</summary>
     public int MaxCommandOutputBytes { get; init; } = 64 * 1024 * 1024;
 
+    /// <summary>
+    /// Gets a connected client to reach this host through, as <c>ssh -J</c> does. Null, the default, connects directly.
+    /// <see cref="Host"/> and <see cref="Port"/> are then as the jump host sees them, and <see cref="HostKeyPolicy"/>
+    /// still checks this host: the jump host vouches for nothing. The caller keeps ownership of the jump host, and this
+    /// connection ends with it. Chains work: the jump host can have its own jump host.
+    /// </summary>
+    /// <example>
+    /// <code>
+    /// await using SshClient bastion = await SshClient.ConnectAsync(bastionOptions, cancellationToken);
+    /// await using SshClient inner = await SshClient.ConnectAsync(new SshClientOptions
+    /// {
+    ///     Host = "10.0.0.5",
+    ///     UserName = "alice",
+    ///     Credentials = [SshCredential.FromPassword(password)],
+    ///     HostKeyPolicy = HostKeyPolicy.Fingerprint(innerFingerprint),
+    ///     JumpHost = bastion,
+    /// }, cancellationToken);
+    /// </code>
+    /// </example>
+    public SshClient? JumpHost { get; init; }
+
+    /// <summary>Gets the most connections each forward carries at once. The default is 64. Past this, a forward refuses new connections until one ends.</summary>
+    public int MaxForwardedConnections { get; init; } = 64;
+
+    /// <summary>
+    /// Gets the time a client of <see cref="SshClient.ForwardDynamicPortAsync"/> has to finish its SOCKS handshake.
+    /// The default is 10 seconds. Anyone local can connect to that port, so one that says nothing must not keep its slot.
+    /// </summary>
+    public TimeSpan SocksHandshakeTimeout { get; init; } = TimeSpan.FromSeconds(10);
+
     /// <summary>Gets a handler for the server's login banner. Its text is chosen by the server.</summary>
     public Action<string>? BannerHandler { get; init; }
 

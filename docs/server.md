@@ -144,7 +144,7 @@ Everything in a session comes from an authenticated client, but it's still under
 What the server doesn't do for you:
 
 - There's no shell, no process launching and no real terminal. `Pty` only tells you what was asked for. A later `window-change` is accepted, but your handler isn't told about it.
-- There's no port forwarding. Those channels are refused.
+- There's no remote forwarding: `tcpip-forward` is refused. `direct-tcpip` channels are refused too, unless you set `DirectTcpHandler`. On allow, the server itself makes the connection, so decide on the target, not just the user.
 
 The token cancels when the server stops, and when the client closes the session or goes away. Reads on `Input` then end or fail, and writes fail with an `SshException`, so a handler that does other long work has to watch for that itself.
 

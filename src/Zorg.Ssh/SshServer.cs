@@ -11,6 +11,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Zorg.Ssh.Auth;
 using Zorg.Ssh.Connection;
+using Zorg.Ssh.Forwarding;
 using Zorg.Ssh.Protocol;
 using Zorg.Ssh.Transport;
 
@@ -37,6 +38,7 @@ public sealed partial class SshServer : IAsyncDisposable
     private const int MaxEnvironmentEntries = 64;
     private const int MaxEnvironmentName = 256;
     private const int MaxEnvironmentValue = 8 * 1024;
+    private const int MaxForwardHost = 255;
 
     private readonly SshServerOptions _options;
     private readonly ILogger _logger;
@@ -192,6 +194,29 @@ public sealed partial class SshServer : IAsyncDisposable
         return new SshPtyRequest(terminal, (int)Math.Min(reader.ReadUInt32(), 65535), (int)Math.Min(reader.ReadUInt32(), 65535));
     }
 
+    /// <summary>Reads a direct-tcpip open. Returns null for one that names no real target, which the handler never sees.</summary>
+    private static SshDirectTcpRequest? ParseDirectTcp(byte[] extra, SshPrincipal principal)
+    {
+        try
+        {
+            SshReader reader = new(extra);
+            string host = reader.ReadUtf8String();
+            uint port = reader.ReadUInt32();
+            string origin = reader.ReadUtf8String();
+            uint originPort = reader.ReadUInt32();
+            if (host.Length is 0 or > MaxForwardHost || port is 0 or > 65535 || host.Any(char.IsControl))
+            {
+                return null;
+            }
+
+            return new SshDirectTcpRequest(principal, host, (int)port, PeerText.Clean(origin, MaxForwardHost), (int)Math.Min(originPort, 65535));
+        }
+        catch (SshProtocolException)
+        {
+            return null;
+        }
+    }
+
     private async Task AcceptLoopAsync()
     {
         while (true)
@@ -300,7 +325,11 @@ public sealed partial class SshServer : IAsyncDisposable
                 user.Methods,
                 user.Key is null ? null : HostKeyPolicy.ComputeFingerprint(user.Key.Blob.Span));
 
-            SshConnection connection = new(transport, _options.MaxSessionsPerConnection) { AcceptIncomingChannels = true };
+            SshConnection connection = new(transport, _options.MaxSessionsPerConnection)
+            {
+                AcceptIncomingChannels = true,
+                AcceptDirectTcp = _options.DirectTcpHandler is not null,
+            };
             transport = null;
             await using (connection.ConfigureAwait(false))
             {
@@ -378,7 +407,9 @@ public sealed partial class SshServer : IAsyncDisposable
         {
             await foreach (IncomingChannelOpen open in connection.IncomingChannels.ReadAllAsync(_stop.Token).ConfigureAwait(false))
             {
-                sessions.Add(Task.Run(() => ServeSessionAsync(connection, open.Channel, principal), CancellationToken.None));
+                sessions.Add(open.Channel is { } channel
+                    ? Task.Run(() => ServeSessionAsync(connection, channel, principal), CancellationToken.None)
+                    : Task.Run(() => ServeDirectTcpAsync(connection, open, principal), CancellationToken.None));
                 sessions.RemoveAll(static s => s.IsCompleted);
             }
         }
@@ -388,6 +419,86 @@ public sealed partial class SshServer : IAsyncDisposable
         }
 
         await Task.WhenAll(sessions).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Owns one direct-tcpip connection from start to end, like <see cref="ServeSessionAsync"/>. The client hears
+    /// the answer only after the handler and the connect, so a refusal is a refused channel, not a closed one.
+    /// </summary>
+    private async Task ServeDirectTcpAsync(SshConnection connection, IncomingChannelOpen open, SshPrincipal principal)
+    {
+        try
+        {
+            (Socket? target, int refusal) = await ConnectDirectTcpAsync(open, principal).ConfigureAwait(false);
+            if (target is null)
+            {
+                await connection.RefuseIncomingAsync(open, refusal, "refused").ConfigureAwait(false);
+                return;
+            }
+
+            SshChannel channel;
+            try
+            {
+                channel = await connection.AcceptIncomingAsync(open).ConfigureAwait(false);
+            }
+            catch
+            {
+                target.Dispose();
+                throw;
+            }
+
+            await TcpRelay.RunAsync(channel, target, _stop.Token).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is SshException or OperationCanceledException or IOException or SocketException or ObjectDisposedException)
+        {
+            LogConnectionEnded(_logger, ex);
+        }
+        finally
+        {
+            connection.ReleaseIncomingSession();
+        }
+    }
+
+    /// <summary>Asks the handler, and connects if it said yes. Without a socket, the second value is the reason to refuse with.</summary>
+    private async Task<(Socket? Target, int Refusal)> ConnectDirectTcpAsync(IncomingChannelOpen open, SshPrincipal principal)
+    {
+        if (ParseDirectTcp(open.Extra, principal) is not { } request)
+        {
+            return (null, SshConnection.OpenFailureProhibited);
+        }
+
+        // Both steps can take as long as they like otherwise, and the client's slot goes with them.
+        using CancellationTokenSource limit = CancellationTokenSource.CreateLinkedTokenSource(_stop.Token);
+        limit.CancelAfter(_options.LoginGraceTime);
+        try
+        {
+            SshForwardDecision decision = await _options.DirectTcpHandler!(request, limit.Token).AsTask().WaitAsync(limit.Token).ConfigureAwait(false);
+            if (decision != SshForwardDecision.Allow)
+            {
+                return (null, SshConnection.OpenFailureProhibited);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            return (null, SshConnection.OpenFailureProhibited);
+        }
+#pragma warning disable CA1031 // S4: application code can throw anything, and the peer learns nothing from it.
+        catch (Exception ex)
+#pragma warning restore CA1031
+        {
+            LogHandlerFailed(_logger, ex);
+            return (null, SshConnection.OpenFailureProhibited);
+        }
+
+        try
+        {
+            return (await TcpRelay.ConnectAsync(request.Host, request.Port, limit.Token).ConfigureAwait(false), 0);
+        }
+        catch (Exception ex) when (ex is SocketException or OperationCanceledException)
+        {
+            LogConnectionEnded(_logger, ex);
+            return (null, SshConnection.OpenFailureConnectFailed);
+        }
     }
 
     /// <summary>

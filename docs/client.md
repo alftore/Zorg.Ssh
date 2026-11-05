@@ -69,6 +69,40 @@ await tcp.ConnectAsync("jump.example.com", 10022, cancellationToken);
 await using SshClient client = await SshClient.ConnectOverStreamAsync(tcp.GetStream(), options, cancellationToken);
 ```
 
+### Through a jump host
+
+Set `JumpHost` to a connected client. `Host` and `Port` are then as the jump host sees them, and `HostKeyPolicy` still checks this host: the jump host vouches for nothing.
+
+```csharp
+await using SshClient bastion = await SshClient.ConnectAsync(bastionOptions, cancellationToken);
+await using SshClient inner = await SshClient.ConnectAsync(new SshClientOptions
+{
+    Host = "10.0.0.5",
+    UserName = "alice",
+    Credentials = [SshCredential.FromPassword(password)],
+    HostKeyPolicy = HostKeyPolicy.Fingerprint(innerFingerprint),
+    JumpHost = bastion,
+}, cancellationToken);
+```
+
+## Port forwarding
+
+```csharp
+// ssh -L: a local port that leads to a target the server can reach. Null binds a free loopback port.
+await using SshForward local = await client.ForwardLocalPortAsync(null, "db.internal", 5432, cancellationToken);
+
+// ssh -D: a SOCKS5 proxy, CONNECT only, no login. SOCKS4 isn't supported.
+await using SshForward proxy = await client.ForwardDynamicPortAsync(null, cancellationToken);
+
+// ssh -R: a port on the server that leads back here. Port 0 lets the server choose.
+await using SshRemoteForward remote = await client.ForwardRemotePortAsync("127.0.0.1", 0, "localhost", 8080, cancellationToken);
+
+// No listener at all: one connection, as a stream.
+await using Stream stream = await client.OpenTcpStreamAsync("db.internal", 5432, cancellationToken);
+```
+
+Anyone who can reach a local forward's port can use it with no login, so think before binding anything but loopback. Each forward carries at most `MaxForwardedConnections` at once, and disposing it closes its listener and its connections. A forward also closes when the SSH connection ends.
+
 ## Credentials
 
 ```csharp
@@ -258,4 +292,4 @@ Output from a shell with a terminal holds prompts and control sequences. To run 
 
 ## What's not here
 
-The client has no port forwarding, jump host support, SSH agent, certificates or `~/.ssh/config` parsing. See [security.md](security.md#out-of-scope).
+The client has no SSH agent, certificates or `~/.ssh/config` parsing. See [security.md](security.md#out-of-scope).

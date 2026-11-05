@@ -10,6 +10,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Zorg.Ssh.Auth;
 using Zorg.Ssh.Connection;
+using Zorg.Ssh.Forwarding;
 using Zorg.Ssh.Sftp;
 using Zorg.Ssh.Transport;
 
@@ -75,21 +76,27 @@ public sealed class SshProcessOptions
 /// SshCommandResult result = await client.ExecuteAsync("uname -a", cancellationToken);
 /// </code>
 /// </example>
-public sealed class SshClient : IAsyncDisposable
+public sealed partial class SshClient : IAsyncDisposable
 {
     private readonly SshConnection _connection;
     private readonly SshClientOptions _options;
+    private readonly RemoteForwardTable _remoteForwards;
+    private readonly ILogger _logger;
+    private int _disposed;
 
-    private SshClient(SshConnection connection, SshClientOptions options)
+    private SshClient(SshConnection connection, SshClientOptions options, RemoteForwardTable remoteForwards, ILogger logger)
     {
         _connection = connection;
         _options = options;
+        _remoteForwards = remoteForwards;
+        _logger = logger;
+        _ = CloseForwardsWhenEndedAsync();
     }
 
     /// <summary>Gets the server's identification string, for example <c>SSH-2.0-OpenSSH_10.6</c>. It's chosen by the server.</summary>
     public string ServerVersion => _connection.Transport.PeerIdentification;
 
-    /// <summary>Connects, checks the server's host key, and logs in.</summary>
+    /// <summary>Connects, checks the server's host key, and logs in. With <see cref="SshClientOptions.JumpHost"/> set, the connection goes through that client.</summary>
     /// <param name="options">Where to connect, and how to log in.</param>
     /// <param name="cancellationToken">Cancels the connection attempt.</param>
     /// <returns>A connected client.</returns>
@@ -109,6 +116,21 @@ public sealed class SshClient : IAsyncDisposable
         timeout.CancelAfter(options.ConnectTimeout);
 
 #pragma warning disable CA2000 // Ownership passes to the transport, which closes the stream on every path.
+        if (options.JumpHost is { } jumpHost)
+        {
+            Stream tunnel;
+            try
+            {
+                tunnel = await jumpHost.OpenTcpStreamAsync(options.Host, options.Port, timeout.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException ex) when (!cancellationToken.IsCancellationRequested)
+            {
+                throw new SshConnectionException($"Connecting to {options.Host}:{options.Port} through the jump host timed out. Check the host and port, or raise ConnectTimeout.", ex);
+            }
+
+            return await ConnectCoreAsync(tunnel, options, timeout.Token, cancellationToken).ConfigureAwait(false);
+        }
+
         Socket socket = new(SocketType.Stream, ProtocolType.Tcp) { NoDelay = true };
         NetworkStream stream;
         try
@@ -139,7 +161,7 @@ public sealed class SshClient : IAsyncDisposable
 
     /// <summary>Connects over a stream you've already opened, such as a proxy tunnel. The client owns the stream from here on.</summary>
     /// <param name="stream">The connected stream.</param>
-    /// <param name="options">How to log in. <see cref="SshClientOptions.Host"/> is still used for the host key check.</param>
+    /// <param name="options">How to log in. <see cref="SshClientOptions.Host"/> is still used for the host key check. <see cref="SshClientOptions.JumpHost"/> is ignored: the stream is the route.</param>
     /// <param name="cancellationToken">Cancels the connection attempt.</param>
     /// <returns>A connected client.</returns>
     /// <example>
@@ -241,9 +263,16 @@ public sealed class SshClient : IAsyncDisposable
         return await SftpClient.OpenOverChannelAsync(channel, ServerVersion, cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>Closes the connection.</summary>
+    /// <summary>Closes every forward, and then the connection. A client that used this one as a jump host loses its connection too.</summary>
     /// <returns>A task that completes when the connection is closed.</returns>
-    public ValueTask DisposeAsync() => _connection.DisposeAsync();
+    public async ValueTask DisposeAsync()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) == 0)
+        {
+            await CloseForwardsAsync().ConfigureAwait(false);
+            await _connection.DisposeAsync().ConfigureAwait(false);
+        }
+    }
 
     /// <summary>Opens a session channel and starts a subsystem on it, such as <c>sftp</c>.</summary>
     internal async Task<SshChannel> OpenSubsystemAsync(string name, CancellationToken cancellationToken)
@@ -296,9 +325,10 @@ public sealed class SshClient : IAsyncDisposable
             transport = await SshTransport.StartAsync(stream, transportOptions, timeoutToken).ConfigureAwait(false);
             ClientAuthenticator authenticator = new(transport, options.UserName, options.BannerHandler);
             await authenticator.AuthenticateAsync(options.Credentials, timeoutToken).ConfigureAwait(false);
-            SshConnection connection = new(transport);
+            RemoteForwardTable remoteForwards = new();
+            SshConnection connection = new(transport) { ForwardedChannelHandler = remoteForwards.HandleOpen };
             connection.Start();
-            return new SshClient(connection, options);
+            return new SshClient(connection, options, remoteForwards, logger);
         }
         catch (OperationCanceledException ex) when (!callerToken.IsCancellationRequested)
         {

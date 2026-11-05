@@ -216,4 +216,36 @@ internal static class ClientExamples
         }
         // end-doc
     }
+
+    public static async Task JumpHost(SshClientOptions bastionOptions, string password, string innerFingerprint, CancellationToken cancellationToken)
+    {
+        // doc:jump-host
+        await using SshClient bastion = await SshClient.ConnectAsync(bastionOptions, cancellationToken);
+        await using SshClient inner = await SshClient.ConnectAsync(new SshClientOptions
+        {
+            Host = "10.0.0.5",
+            UserName = "alice",
+            Credentials = [SshCredential.FromPassword(password)],
+            HostKeyPolicy = HostKeyPolicy.Fingerprint(innerFingerprint),
+            JumpHost = bastion,
+        }, cancellationToken);
+        // end-doc
+    }
+
+    public static async Task Forwarding(SshClient client, CancellationToken cancellationToken)
+    {
+        // doc:forwarding
+        // ssh -L: a local port that leads to a target the server can reach. Null binds a free loopback port.
+        await using SshForward local = await client.ForwardLocalPortAsync(null, "db.internal", 5432, cancellationToken);
+
+        // ssh -D: a SOCKS5 proxy, CONNECT only, no login. SOCKS4 isn't supported.
+        await using SshForward proxy = await client.ForwardDynamicPortAsync(null, cancellationToken);
+
+        // ssh -R: a port on the server that leads back here. Port 0 lets the server choose.
+        await using SshRemoteForward remote = await client.ForwardRemotePortAsync("127.0.0.1", 0, "localhost", 8080, cancellationToken);
+
+        // No listener at all: one connection, as a stream.
+        await using Stream stream = await client.OpenTcpStreamAsync("db.internal", 5432, cancellationToken);
+        // end-doc
+    }
 }

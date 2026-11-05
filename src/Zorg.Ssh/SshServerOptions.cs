@@ -188,6 +188,30 @@ public sealed class SshServerSession
     public Stream Error { get; }
 }
 
+/// <summary>What a <see cref="SshServerOptions.DirectTcpHandler"/> decided.</summary>
+public enum SshForwardDecision
+{
+    /// <summary>The connection is refused.</summary>
+    Deny,
+
+    /// <summary>The server connects to the target, and carries the data.</summary>
+    Allow,
+}
+
+/// <summary>A logged-in client asks the server to open a TCP connection for it.</summary>
+/// <param name="Principal">Who asked.</param>
+/// <param name="Host">The target host, chosen by the client. Names resolve on the server, so a rule on names alone can be dodged with an address.</param>
+/// <param name="Port">The target port.</param>
+/// <param name="OriginatorAddress">Where the client says the connection came from. It's unverified.</param>
+/// <param name="OriginatorPort">The port the client says the connection came from. It's unverified.</param>
+/// <example>
+/// <code>
+/// DirectTcpHandler = (request, ct) => ValueTask.FromResult(
+///     request.Host == "db.internal" &amp;&amp; request.Port == 5432 ? SshForwardDecision.Allow : SshForwardDecision.Deny),
+/// </code>
+/// </example>
+public sealed record SshDirectTcpRequest(SshPrincipal Principal, string Host, int Port, string OriginatorAddress, int OriginatorPort);
+
 /// <summary>What <see cref="SshServer.StartAsync"/> needs. It listens on loopback unless told otherwise.</summary>
 /// <example>
 /// <code>
@@ -221,6 +245,16 @@ public sealed class SshServerOptions
     public required Func<SshServerSession, CancellationToken, Task<int>> SessionHandler { get; init; }
 
     /// <summary>
+    /// Gets the decision on each direct-tcpip channel: a client asking the server to connect somewhere, as with
+    /// <c>ssh -L</c>. Null, the default, refuses them all. On <see cref="SshForwardDecision.Allow"/> the server itself
+    /// makes the connection, so this is what stands between a logged-in user and the server's own network. Decide on
+    /// the target, not just the user. A handler that throws, or takes longer than <see cref="LoginGraceTime"/>, has
+    /// denied. Each connection counts towards <see cref="MaxSessionsPerConnection"/>.
+    /// The server doesn't offer remote forwarding: it refuses every <c>tcpip-forward</c> request.
+    /// </summary>
+    public Func<SshDirectTcpRequest, CancellationToken, ValueTask<SshForwardDecision>>? DirectTcpHandler { get; init; }
+
+    /// <summary>
     /// Gets the methods that must all pass, for example <c>["publickey", "password"]</c> for two-factor login.
     /// Null, the default, means any one offered method is enough. The server enforces this, whatever handlers return.
     /// </summary>
@@ -247,7 +281,7 @@ public sealed class SshServerOptions
     /// <summary>Gets the failed login attempts allowed per connection. The default is 6.</summary>
     public int MaxAuthAttempts { get; init; } = 6;
 
-    /// <summary>Gets the most sessions per connection. The default is 10.</summary>
+    /// <summary>Gets the most sessions per connection, counting direct-tcpip connections. The default is 10.</summary>
     public int MaxSessionsPerConnection { get; init; } = 10;
 
     /// <summary>Gets the logger factory. Passwords and keys are never logged.</summary>

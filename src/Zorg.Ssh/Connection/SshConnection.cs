@@ -17,10 +17,16 @@ namespace Zorg.Ssh.Connection;
 /// </summary>
 internal sealed class SshConnection : IAsyncDisposable
 {
-    private const int OpenFailureProhibited = 1;
-    private const int OpenFailureUnknownType = 3;
-    private const int OpenFailureResourceShortage = 4;
+    public const int OpenFailureProhibited = 1;
+    public const int OpenFailureConnectFailed = 2;
+    public const int OpenFailureUnknownType = 3;
+    public const int OpenFailureResourceShortage = 4;
+
+    private const string SessionChannel = "session";
+    private const string DirectTcpChannel = "direct-tcpip";
+    private const string ForwardedTcpChannel = "forwarded-tcpip";
     private const int MaxPendingOpens = 16;
+    private const int MaxPendingGlobalRequests = 32;
 
     private static readonly TimeSpan Grace = TimeSpan.FromSeconds(5);
 
@@ -30,12 +36,21 @@ internal sealed class SshConnection : IAsyncDisposable
     private readonly Dictionary<uint, SshChannel> _channels = [];
     private readonly Dictionary<uint, TaskCompletionSource<SshChannel>> _opening = [];
 
+    // Replies carry no id, so they're matched by order: first sent, first answered (RFC 4254 section 4).
+    private readonly LinkedList<PendingGlobalRequest> _globalRequests = new();
+
+    // Not disposed, like the channel's: it holds nothing without AvailableWaitHandle, and a late caller must get a clean error.
+#pragma warning disable CA2213
+    private readonly SemaphoreSlim _globalRequestOrder = new(1, 1);
+#pragma warning restore CA2213
+
     // Unbounded in type only: a channel has two entries at most, a credit and a close.
     private readonly Channel<(SshChannel Channel, bool Close)> _deferred =
         System.Threading.Channels.Channel.CreateUnbounded<(SshChannel, bool)>(new UnboundedChannelOptions { SingleReader = true });
     private readonly Channel<IncomingChannelOpen> _incoming =
         System.Threading.Channels.Channel.CreateBounded<IncomingChannelOpen>(MaxPendingOpens);
     private readonly CancellationTokenSource _stop = new();
+    private readonly CancellationToken _stopToken;
     private readonly TaskCompletionSource _ended = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private uint _nextId;
     private int _incomingSessions;
@@ -47,12 +62,28 @@ internal sealed class SshConnection : IAsyncDisposable
     {
         _transport = transport;
         _maxChannels = maxChannels;
+
+        // Kept apart from the source, which is gone by the time a late accept might ask for it.
+        _stopToken = _stop.Token;
     }
 
-    /// <summary>Gets or sets whether the peer may open channels. A client refuses them until forwarding exists.</summary>
+    /// <summary>Gets or sets whether the peer may open session channels. A client leaves this off.</summary>
     public bool AcceptIncomingChannels { get; init; }
 
-    /// <summary>Gets channels the peer opened and we've confirmed, for a server.</summary>
+    /// <summary>Gets or sets whether the peer may open direct-tcpip channels, for a server that has a handler for them.</summary>
+    public bool AcceptDirectTcp { get; init; }
+
+    /// <summary>
+    /// Gets or sets who decides a forwarded-tcpip open, for a client. It runs in the receive loop, so it must not
+    /// wait. It returns 0 if it took the open, and must then answer with <see cref="AcceptIncomingAsync"/> or
+    /// <see cref="RefuseIncomingAsync"/>, or else the reason to refuse with. Without it, every such open is refused.
+    /// </summary>
+    public Func<IncomingChannelOpen, int>? ForwardedChannelHandler { get; init; }
+
+    /// <summary>
+    /// Gets what the peer opened, for a server. A session arrives confirmed, with its <see cref="IncomingChannelOpen.Channel"/>.
+    /// A direct-tcpip open arrives without one, waiting for <see cref="AcceptIncomingAsync"/> or <see cref="RefuseIncomingAsync"/>.
+    /// </summary>
     public ChannelReader<IncomingChannelOpen> IncomingChannels => _incoming.Reader;
 
     /// <summary>Gets a task that completes when the connection ends. It never faults.</summary>
@@ -68,8 +99,8 @@ internal sealed class SshConnection : IAsyncDisposable
         _senderLoop = Task.Run(SenderLoopAsync, CancellationToken.None);
     }
 
-    /// <summary>Opens a channel and waits for the peer to confirm it.</summary>
-    public async Task<SshChannel> OpenChannelAsync(string type, CancellationToken cancellationToken)
+    /// <summary>Opens a channel and waits for the peer to confirm it. <paramref name="extra"/> is what the channel type adds to the message.</summary>
+    public async Task<SshChannel> OpenChannelAsync(string type, CancellationToken cancellationToken, byte[]? extra = null)
     {
         SshChannel channel;
         TaskCompletionSource<SshChannel> confirmed = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -85,7 +116,7 @@ internal sealed class SshConnection : IAsyncDisposable
         }
 
         ValueTask send;
-        SshWriter writer = new(64);
+        SshWriter writer = new(64 + (extra?.Length ?? 0));
         try
         {
             writer.WriteByte(MessageNumber.ChannelOpen);
@@ -93,6 +124,7 @@ internal sealed class SshConnection : IAsyncDisposable
             writer.WriteUInt32(channel.LocalId);
             writer.WriteUInt32(SshChannel.DefaultWindow);
             writer.WriteUInt32(SshChannel.MaxPacket);
+            writer.WriteRaw(extra);
             send = SendAsync(writer.Written, cancellationToken);
         }
         finally
@@ -126,6 +158,149 @@ internal sealed class SshConnection : IAsyncDisposable
             _ = CloseWhenConfirmedAsync(confirmed.Task);
             throw;
         }
+    }
+
+    /// <summary>
+    /// Confirms a channel the peer opened, and returns it. Until now it had no local id, so nothing the peer
+    /// sends can reach it early. A failure here ends only this open.
+    /// </summary>
+    public async Task<SshChannel> AcceptIncomingAsync(IncomingChannelOpen open)
+    {
+        SshChannel? channel = null;
+        lock (_gate)
+        {
+            if (_failure is { } failure)
+            {
+                throw new SshConnectionException("The connection has ended. Connect again to continue.", failure);
+            }
+
+            if (_channels.Count < _maxChannels)
+            {
+                channel = Register();
+            }
+        }
+
+        if (channel is null)
+        {
+            await RefuseIncomingAsync(open, OpenFailureResourceShortage, "too many channels").ConfigureAwait(false);
+            throw new SshException("Too many channels are open on this connection, so a forwarded connection was refused.");
+        }
+
+        ValueTask send;
+        SshWriter writer = new(32);
+        try
+        {
+            channel.SetRemote(open.RemoteId, open.Window, open.MaxPacket);
+            WriteConfirmation(ref writer, open.RemoteId, channel.LocalId);
+            send = SendAsync(writer.Written, _stopToken);
+        }
+        catch
+        {
+            Forget(channel);
+            throw;
+        }
+        finally
+        {
+            writer.Dispose();
+        }
+
+        try
+        {
+            await send.ConfigureAwait(false);
+        }
+        catch
+        {
+            Forget(channel);
+            throw;
+        }
+
+        return channel;
+    }
+
+    /// <summary>Refuses a channel the peer opened. It goes through the send queue, so it isn't for the receive loop.</summary>
+    public async ValueTask RefuseIncomingAsync(IncomingChannelOpen open, int reason, string text)
+    {
+        ValueTask send;
+        SshWriter writer = new(64);
+        try
+        {
+            WriteOpenFailure(ref writer, open.RemoteId, reason, text);
+            send = SendAsync(writer.Written, _stopToken);
+        }
+        finally
+        {
+            writer.Dispose();
+        }
+
+        await send.ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Sends a global request that wants a reply, and returns once it's on its way. The task it returns ends with
+    /// the data of a success reply, or null for a failure. If nobody awaits that task, the request still holds its
+    /// place in the line, so later replies still find their own requests.
+    /// <paramref name="onReply"/> runs in the receive loop before the task completes, so whatever it does happens
+    /// before the next message is read. It must not wait.
+    /// </summary>
+    public async Task<Task<byte[]?>> StartGlobalRequestAsync(string name, byte[] data, Action<byte[]?>? onReply, CancellationToken cancellationToken)
+    {
+        byte[] payload;
+        SshWriter writer = new(32 + name.Length + data.Length);
+        try
+        {
+            writer.WriteByte(MessageNumber.GlobalRequest);
+            writer.WriteUtf8String(name);
+            writer.WriteBoolean(true);
+            writer.WriteRaw(data);
+            payload = writer.ToArray();
+        }
+        finally
+        {
+            writer.Dispose();
+        }
+
+        PendingGlobalRequest pending = new(onReply);
+
+        // Held across the send, so the order of the line is the order on the wire.
+        await _globalRequestOrder.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            lock (_gate)
+            {
+                if (_failure is { } failure)
+                {
+                    throw new SshConnectionException("The connection has ended. Connect again to continue.", failure);
+                }
+
+                if (_globalRequests.Count >= MaxPendingGlobalRequests)
+                {
+                    throw new SshException("Too many requests are waiting for the server. It may have stopped answering.");
+                }
+
+                _globalRequests.AddLast(pending);
+            }
+
+            try
+            {
+                await SendAsync(payload, cancellationToken).ConfigureAwait(false);
+            }
+            catch
+            {
+                // Never sent, so no reply will come for it.
+                lock (_gate)
+                {
+                    _globalRequests.Remove(pending);
+                }
+
+                throw;
+            }
+        }
+        finally
+        {
+            _globalRequestOrder.Release();
+        }
+
+        return pending.Reply.Task;
     }
 
     public ValueTask SendAsync(scoped ReadOnlySpan<byte> payload, CancellationToken cancellationToken) =>
@@ -270,13 +445,16 @@ internal sealed class SshConnection : IAsyncDisposable
     {
         SshChannel[] channels;
         TaskCompletionSource<SshChannel>[] opening;
+        PendingGlobalRequest[] requests;
         lock (_gate)
         {
             _failure ??= failure;
             channels = [.. _channels.Values];
             opening = [.. _opening.Values];
+            requests = [.. _globalRequests];
             _channels.Clear();
             _opening.Clear();
+            _globalRequests.Clear();
         }
 
         foreach (SshChannel channel in channels)
@@ -287,6 +465,11 @@ internal sealed class SshConnection : IAsyncDisposable
         foreach (TaskCompletionSource<SshChannel> open in opening)
         {
             open.TrySetException(new SshConnectionException("The connection ended while opening a channel.", failure));
+        }
+
+        foreach (PendingGlobalRequest request in requests)
+        {
+            request.Reply.TrySetException(new SshConnectionException("The connection ended before the server answered.", failure));
         }
 
         _incoming.Writer.TryComplete();
@@ -305,7 +488,7 @@ internal sealed class SshConnection : IAsyncDisposable
                 break;
             case MessageNumber.RequestSuccess:
             case MessageNumber.RequestFailure:
-                // We send no global requests with a reply yet, so any reply is unsolicited. Dropped, never queued.
+                HandleGlobalReply(message);
                 break;
             case MessageNumber.ChannelOpen:
                 HandleChannelOpen(message);
@@ -358,6 +541,38 @@ internal sealed class SshConnection : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// Hands a reply to the oldest waiting request. A reply with no request waiting is dropped, never queued: it
+    /// costs nothing, and can't block this loop or answer a later request (Go CVE-2026-39830).
+    /// </summary>
+    private void HandleGlobalReply(ReadOnlySpan<byte> message)
+    {
+        PendingGlobalRequest? pending;
+        lock (_gate)
+        {
+            pending = _globalRequests.First?.Value;
+            if (pending is null)
+            {
+                return;
+            }
+
+            _globalRequests.RemoveFirst();
+        }
+
+        byte[]? reply = message[0] == MessageNumber.RequestSuccess ? message[1..].ToArray() : null;
+        try
+        {
+            pending.OnReply?.Invoke(reply);
+        }
+        catch (SshException ex)
+        {
+            pending.Reply.TrySetException(ex);
+            throw;
+        }
+
+        pending.Reply.TrySetResult(reply);
+    }
+
     private void HandleChannelOpen(ReadOnlySpan<byte> message)
     {
         SshReader reader = new(message);
@@ -366,7 +581,17 @@ internal sealed class SshConnection : IAsyncDisposable
         uint remoteId = reader.ReadUInt32();
         uint window = reader.ReadUInt32();
         uint maxPacket = reader.ReadUInt32();
-        byte[] extra = reader.RemainingSpan.ToArray();
+
+        if (type == ForwardedTcpChannel && ForwardedChannelHandler is { } handler)
+        {
+            int refusal = handler(NewDeferredOpen(type, remoteId, window, maxPacket, reader));
+            if (refusal != 0)
+            {
+                SendOpenFailure(remoteId, refusal, "not allowed");
+            }
+
+            return;
+        }
 
         if (!AcceptIncomingChannels)
         {
@@ -374,32 +599,79 @@ internal sealed class SshConnection : IAsyncDisposable
             return;
         }
 
-        if (type != "session")
+        switch (type)
         {
-            SendOpenFailure(remoteId, OpenFailureUnknownType, "unsupported channel type");
-            return;
+            case SessionChannel:
+                OpenIncomingSession(remoteId, window, maxPacket);
+                break;
+            case DirectTcpChannel when AcceptDirectTcp:
+                QueueDirectTcpOpen(NewDeferredOpen(type, remoteId, window, maxPacket, reader));
+                break;
+            case DirectTcpChannel:
+                SendOpenFailure(remoteId, OpenFailureProhibited, "not allowed");
+                break;
+            default:
+                SendOpenFailure(remoteId, OpenFailureUnknownType, "unsupported channel type");
+                break;
+        }
+    }
+
+    private static IncomingChannelOpen NewDeferredOpen(string type, uint remoteId, uint window, uint maxPacket, SshReader reader)
+    {
+        // Checked here, because the channel itself comes later, and away from this loop.
+        if (maxPacket == 0)
+        {
+            throw new SshProtocolException("The peer sent a channel maximum packet size of zero.");
         }
 
-        SshChannel? channel = null;
+        return new IncomingChannelOpen(type, remoteId, window, maxPacket, reader.RemainingSpan.ToArray());
+    }
+
+    private bool TryTakeIncomingSlot()
+    {
         lock (_gate)
         {
             // Counted by session, not by channel: a closed channel can still have its handler running.
             if (_incomingSessions < _maxChannels)
             {
                 _incomingSessions++;
-                channel = Register();
+                return true;
             }
         }
 
-        if (channel is null)
+        return false;
+    }
+
+    private void QueueDirectTcpOpen(IncomingChannelOpen open)
+    {
+        if (!TryTakeIncomingSlot())
+        {
+            SendOpenFailure(open.RemoteId, OpenFailureResourceShortage, "too many channels");
+        }
+        else if (!_incoming.Writer.TryWrite(open))
+        {
+            ReleaseIncomingSession();
+            SendOpenFailure(open.RemoteId, OpenFailureResourceShortage, "busy");
+        }
+    }
+
+    private void OpenIncomingSession(uint remoteId, uint window, uint maxPacket)
+    {
+        if (!TryTakeIncomingSlot())
         {
             SendOpenFailure(remoteId, OpenFailureResourceShortage, "too many channels");
             return;
         }
 
+        SshChannel channel;
+        lock (_gate)
+        {
+            channel = Register();
+        }
+
         channel.SetRemote(remoteId, window, maxPacket);
         channel.QueueIncomingRequests = true;
-        if (!_incoming.Writer.TryWrite(new IncomingChannelOpen(channel, type, extra)))
+        if (!_incoming.Writer.TryWrite(new IncomingChannelOpen(SessionChannel, remoteId, window, maxPacket, []) { Channel = channel }))
         {
             Forget(channel);
             ReleaseIncomingSession();
@@ -410,11 +682,7 @@ internal sealed class SshConnection : IAsyncDisposable
         SshWriter writer = new(32);
         try
         {
-            writer.WriteByte(MessageNumber.ChannelOpenConfirmation);
-            writer.WriteUInt32(remoteId);
-            writer.WriteUInt32(channel.LocalId);
-            writer.WriteUInt32(SshChannel.DefaultWindow);
-            writer.WriteUInt32(SshChannel.MaxPacket);
+            WriteConfirmation(ref writer, remoteId, channel.LocalId);
             _transport.SendControl(writer.Written);
         }
         finally
@@ -423,16 +691,30 @@ internal sealed class SshConnection : IAsyncDisposable
         }
     }
 
+    private static void WriteConfirmation(ref SshWriter writer, uint remoteId, uint localId)
+    {
+        writer.WriteByte(MessageNumber.ChannelOpenConfirmation);
+        writer.WriteUInt32(remoteId);
+        writer.WriteUInt32(localId);
+        writer.WriteUInt32(SshChannel.DefaultWindow);
+        writer.WriteUInt32(SshChannel.MaxPacket);
+    }
+
+    private static void WriteOpenFailure(ref SshWriter writer, uint remoteId, int reason, string text)
+    {
+        writer.WriteByte(MessageNumber.ChannelOpenFailure);
+        writer.WriteUInt32(remoteId);
+        writer.WriteUInt32((uint)reason);
+        writer.WriteUtf8String(text);
+        writer.WriteUtf8String(string.Empty);
+    }
+
     private void SendOpenFailure(uint remoteId, int reason, string text)
     {
         SshWriter writer = new(64);
         try
         {
-            writer.WriteByte(MessageNumber.ChannelOpenFailure);
-            writer.WriteUInt32(remoteId);
-            writer.WriteUInt32((uint)reason);
-            writer.WriteUtf8String(text);
-            writer.WriteUtf8String(string.Empty);
+            WriteOpenFailure(ref writer, remoteId, reason, text);
             _transport.SendControl(writer.Written);
         }
         finally
@@ -563,5 +845,17 @@ internal sealed class SshConnection : IAsyncDisposable
     }
 }
 
-/// <summary>A channel the peer opened.</summary>
-internal sealed record IncomingChannelOpen(SshChannel Channel, string Type, byte[] Extra);
+/// <summary>A channel the peer opened. <paramref name="Extra"/> is what its type adds to the message.</summary>
+internal sealed record IncomingChannelOpen(string Type, uint RemoteId, uint Window, uint MaxPacket, byte[] Extra)
+{
+    /// <summary>Gets the channel, if it has been confirmed already.</summary>
+    public SshChannel? Channel { get; init; }
+}
+
+/// <summary>A global request waiting for its reply.</summary>
+internal sealed class PendingGlobalRequest(Action<byte[]?>? onReply)
+{
+    public Action<byte[]?>? OnReply { get; } = onReply;
+
+    public TaskCompletionSource<byte[]?> Reply { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+}

@@ -11,7 +11,7 @@ An async SSH client and server library for .NET 10, with an SFTP client, written
 - Server: password and public key login, your own handlers for exec, shell and subsystem sessions, and an SFTP server rooted at a directory.
 - Current algorithms only, including ML-KEM and sntrup761 hybrid key exchange, and strict key exchange against Terrapin. `SshAlgorithms` narrows the lists.
 
-It has no SCP or compression, and no forwarding, agent, certificates or `~/.ssh/config` yet. See [what's out of scope](docs/security.md#out-of-scope).
+It has no SCP or compression, and no agent, certificates or `~/.ssh/config` yet. See [what's out of scope](docs/security.md#out-of-scope).
 
 ## Sample
 
