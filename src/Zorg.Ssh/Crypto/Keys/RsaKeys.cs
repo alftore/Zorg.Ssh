@@ -169,6 +169,20 @@ internal sealed class RsaPrivateKey : SshPrivateKey
         return new RsaPrivateKey(RSA.Create(bits));
     }
 
+    /// <summary>Makes a key that owns a loaded BCL key. If this throws, the BCL key has been disposed.</summary>
+    public static RsaPrivateKey Adopt(RSA key)
+    {
+        try
+        {
+            return new RsaPrivateKey(key);
+        }
+        catch
+        {
+            key.Dispose();
+            throw;
+        }
+    }
+
     /// <inheritdoc/>
     public override byte[] Sign(string signatureAlgorithm, ReadOnlySpan<byte> data)
     {

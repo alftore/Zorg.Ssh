@@ -142,6 +142,20 @@ internal sealed class EcdsaPrivateKey : SshPrivateKey
     /// <summary>Makes a new random key on a curve.</summary>
     public static EcdsaPrivateKey Generate(NistCurve curve) => new(curve, ECDsa.Create(curve.Curve));
 
+    /// <summary>Makes a key that owns a loaded BCL key on this curve. If this throws, the BCL key has been disposed.</summary>
+    public static EcdsaPrivateKey Adopt(NistCurve curve, ECDsa key)
+    {
+        try
+        {
+            return new EcdsaPrivateKey(curve, key);
+        }
+        catch
+        {
+            key.Dispose();
+            throw;
+        }
+    }
+
     /// <inheritdoc/>
     public override byte[] Sign(string signatureAlgorithm, ReadOnlySpan<byte> data)
     {
