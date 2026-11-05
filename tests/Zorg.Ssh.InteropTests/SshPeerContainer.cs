@@ -185,6 +185,7 @@ public sealed class SshPeerContainer : IAsyncDisposable
 {
     private const string OwnerLabel = "zorg.ssh.interop.owner";
     private const int MaxRunAttempts = 3;
+    private const string NoBanner = "No SSH banner";
 
     private static readonly TimeSpan CliTimeout = TimeSpan.FromSeconds(60);
     private static readonly TimeSpan BuildTimeout = TimeSpan.FromMinutes(15);
@@ -234,21 +235,30 @@ public sealed class SshPeerContainer : IAsyncDisposable
     {
         await Sweep.Value;
 
-        string id = await RunContainerAsync(image, command, cancellationToken);
-
-        try
+        // Podman's published port sometimes accepts but never reaches the container: sshd logs no connection at all,
+        // however long the probe goes on. A new container gets a new port. One that exits is a real failure, and isn't retried.
+        for (int attempt = 1; ; attempt++)
         {
-            int port = await GetPublishedPortAsync(id, cancellationToken);
+            string id = await RunContainerAsync(image, command, cancellationToken);
 
-            const string Host = "127.0.0.1";
-            TimeSpan timeout = readyTimeout ?? TimeSpan.FromSeconds(60);
-            string banner = await WaitForBannerAsync(id, Host, port, timeout, cancellationToken);
-            return new SshPeerContainer(id, Host, port, banner);
-        }
-        catch
-        {
-            await RemoveAsync(id);
-            throw;
+            try
+            {
+                int port = await GetPublishedPortAsync(id, cancellationToken);
+
+                const string Host = "127.0.0.1";
+                TimeSpan timeout = readyTimeout ?? TimeSpan.FromSeconds(20);
+                string banner = await WaitForBannerAsync(id, Host, port, timeout, cancellationToken);
+                return new SshPeerContainer(id, Host, port, banner);
+            }
+            catch (ContainerStartException e) when (attempt < MaxRunAttempts && e.Message.StartsWith(NoBanner, StringComparison.Ordinal))
+            {
+                await RemoveAsync(id);
+            }
+            catch
+            {
+                await RemoveAsync(id);
+                throw;
+            }
         }
     }
 
@@ -359,7 +369,7 @@ public sealed class SshPeerContainer : IAsyncDisposable
         }
 
         throw new ContainerStartException(
-            $"No SSH banner from container {Short(id)} on {host}:{port} after {timeout}. Last: {lastFailure}\n" +
+            $"{NoBanner} from container {Short(id)} on {host}:{port} after {timeout}. Last: {lastFailure}\n" +
             await ReadLogsAsync(id, cancellationToken));
     }
 

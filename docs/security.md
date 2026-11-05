@@ -91,13 +91,11 @@ Not implemented in this version:
 - **SCP**, and it won't be added. It's a shell-command protocol with a history of path injection. Use SFTP.
 - **Compression**, which is left out of version 1. OpenSSH 10.6 disabled LZ77 in compression because of a side channel.
 - Remote forwarding on the server: it refuses every `tcpip-forward` request.
-- ssh-agent, and agent forwarding.
-- OpenSSH certificates. `@cert-authority` lines in `known_hosts` aren't used to trust a host.
-- `~/.ssh/config` parsing.
+- Agent forwarding. Logging in through a local ssh-agent is supported.
+- User certificates on the server: it refuses them. The client can log in with one, and trusts host certificates through `@cert-authority` lines.
+- Following `ProxyJump` from a config file. `SshClientOptions.FromConfig` reads a subset of `~/.ssh/config` and refuses such a host. Use `SshClientOptions.JumpHost` instead.
 - X11 forwarding, GSSAPI, host-based login, security keys (`sk-`), PKCS#11 and ML-DSA signatures.
 - Legacy algorithms. Old network equipment that needs them won't connect.
-- Choosing algorithms, as above.
-- An SFTP server. `SftpClient` is client only.
 - Keyboard-interactive login and password changes on the server side.
 - Changing an expired password from the client: it fails with `SshAuthenticationException`.
 - SFTP versions other than 3.
