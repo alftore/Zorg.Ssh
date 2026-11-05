@@ -30,16 +30,17 @@ internal sealed class SshConnection : IAsyncDisposable
     private readonly Dictionary<uint, SshChannel> _channels = [];
     private readonly Dictionary<uint, TaskCompletionSource<SshChannel>> _opening = [];
 
-    // Unbounded in type only: a channel has one entry at most, because its credit is coalesced.
-    private readonly Channel<SshChannel> _windowAdjusts =
-        System.Threading.Channels.Channel.CreateUnbounded<SshChannel>(new UnboundedChannelOptions { SingleReader = true });
+    // Unbounded in type only: a channel has two entries at most, a credit and a close.
+    private readonly Channel<(SshChannel Channel, bool Close)> _deferred =
+        System.Threading.Channels.Channel.CreateUnbounded<(SshChannel, bool)>(new UnboundedChannelOptions { SingleReader = true });
     private readonly Channel<IncomingChannelOpen> _incoming =
         System.Threading.Channels.Channel.CreateBounded<IncomingChannelOpen>(MaxPendingOpens);
     private readonly CancellationTokenSource _stop = new();
     private readonly TaskCompletionSource _ended = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private uint _nextId;
+    private int _incomingSessions;
     private Task? _loop;
-    private Task? _windowLoop;
+    private Task? _senderLoop;
     private Exception? _failure;
 
     public SshConnection(SshTransport transport, int maxChannels = 256)
@@ -64,7 +65,7 @@ internal sealed class SshConnection : IAsyncDisposable
     public void Start()
     {
         _loop = Task.Run(ReceiveLoopAsync, CancellationToken.None);
-        _windowLoop = Task.Run(WindowLoopAsync, CancellationToken.None);
+        _senderLoop = Task.Run(SenderLoopAsync, CancellationToken.None);
     }
 
     /// <summary>Opens a channel and waits for the peer to confirm it.</summary>
@@ -99,15 +100,51 @@ internal sealed class SshConnection : IAsyncDisposable
             writer.Dispose();
         }
 
-        await send.ConfigureAwait(false);
-        return await confirmed.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await send.ConfigureAwait(false);
+        }
+        catch
+        {
+            // The peer never heard of it, so there's nothing to wait for.
+            lock (_gate)
+            {
+                _opening.Remove(channel.LocalId);
+                _channels.Remove(channel.LocalId);
+            }
+
+            throw;
+        }
+
+        try
+        {
+            return await confirmed.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            // The peer's answer is still on its way, and the slot stays taken until it arrives.
+            _ = CloseWhenConfirmedAsync(confirmed.Task);
+            throw;
+        }
     }
 
     public ValueTask SendAsync(scoped ReadOnlySpan<byte> payload, CancellationToken cancellationToken) =>
         _transport.SendAsync(payload, cancellationToken);
 
     /// <summary>Asks for a channel's pending credit to be sent. Called at most once until it's taken.</summary>
-    public void QueueWindowAdjust(SshChannel channel) => _windowAdjusts.Writer.TryWrite(channel);
+    public void QueueWindowAdjust(SshChannel channel) => _deferred.Writer.TryWrite((channel, false));
+
+    /// <summary>Asks for a CLOSE, which goes behind anything queued for the channel. The receive loop can't wait for that itself.</summary>
+    public void QueueClose(SshChannel channel) => _deferred.Writer.TryWrite((channel, true));
+
+    /// <summary>Frees a session slot taken when the peer opened a channel. Called when the whole session is over.</summary>
+    public void ReleaseIncomingSession()
+    {
+        lock (_gate)
+        {
+            _incomingSessions--;
+        }
+    }
 
     /// <summary>Forgets a fully closed channel, so its id can't be used again.</summary>
     public void Forget(SshChannel channel)
@@ -124,9 +161,9 @@ internal sealed class SshConnection : IAsyncDisposable
 
         // Closing first unblocks a receive loop stuck in a stream that ignores cancellation.
         await _transport.CloseAsync().ConfigureAwait(false);
-        _windowAdjusts.Writer.TryComplete();
+        _deferred.Writer.TryComplete();
         await WaitForAsync(_loop).ConfigureAwait(false);
-        await WaitForAsync(_windowLoop).ConfigureAwait(false);
+        await WaitForAsync(_senderLoop).ConfigureAwait(false);
         await _transport.DisposeAsync().ConfigureAwait(false);
         _stop.Dispose();
     }
@@ -148,6 +185,19 @@ internal sealed class SshConnection : IAsyncDisposable
         }
     }
 
+    private static async Task CloseWhenConfirmedAsync(Task<SshChannel> confirmed)
+    {
+        try
+        {
+            SshChannel channel = await confirmed.ConfigureAwait(false);
+            await channel.DisposeAsync().ConfigureAwait(false);
+        }
+        catch (SshException)
+        {
+            // Refused, or the connection ended. Either way the slot has been freed.
+        }
+    }
+
     private SshChannel Register()
     {
         if (_channels.Count >= _maxChannels)
@@ -165,23 +215,20 @@ internal sealed class SshConnection : IAsyncDisposable
         return channel;
     }
 
-    private async Task WindowLoopAsync()
+    private async Task SenderLoopAsync()
     {
-        byte[] payload = new byte[9];
         try
         {
-            await foreach (SshChannel channel in _windowAdjusts.Reader.ReadAllAsync(_stop.Token).ConfigureAwait(false))
+            await foreach ((SshChannel channel, bool close) in _deferred.Reader.ReadAllAsync(_stop.Token).ConfigureAwait(false))
             {
-                uint credit = channel.TakeCredit();
-                if (credit == 0)
+                if (close)
                 {
-                    continue;
+                    await channel.CloseAsync(_stop.Token).ConfigureAwait(false);
                 }
-
-                payload[0] = MessageNumber.ChannelWindowAdjust;
-                BinaryPrimitives.WriteUInt32BigEndian(payload.AsSpan(1), channel.RemoteId);
-                BinaryPrimitives.WriteUInt32BigEndian(payload.AsSpan(5), credit);
-                await SendAsync(payload, _stop.Token).ConfigureAwait(false);
+                else
+                {
+                    await channel.GrantCreditAsync(_stop.Token).ConfigureAwait(false);
+                }
             }
         }
         catch (Exception ex) when (ex is OperationCanceledException or SshException)
@@ -336,8 +383,10 @@ internal sealed class SshConnection : IAsyncDisposable
         SshChannel? channel = null;
         lock (_gate)
         {
-            if (_channels.Count < _maxChannels)
+            // Counted by session, not by channel: a closed channel can still have its handler running.
+            if (_incomingSessions < _maxChannels)
             {
+                _incomingSessions++;
                 channel = Register();
             }
         }
@@ -353,6 +402,7 @@ internal sealed class SshConnection : IAsyncDisposable
         if (!_incoming.Writer.TryWrite(new IncomingChannelOpen(channel, type, extra)))
         {
             Forget(channel);
+            ReleaseIncomingSession();
             SendOpenFailure(remoteId, OpenFailureResourceShortage, "busy");
             return;
         }
@@ -471,8 +521,7 @@ internal sealed class SshConnection : IAsyncDisposable
         SshChannel channel = FindChannel(message);
         if (channel.OnClose())
         {
-            SendChannelMessage(MessageNumber.ChannelClose, channel);
-            channel.FinishIfClosed();
+            QueueClose(channel);
         }
     }
 

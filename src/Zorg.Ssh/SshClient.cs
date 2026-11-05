@@ -111,6 +111,7 @@ public sealed class SshClient : IAsyncDisposable
         NetworkStream stream;
         try
         {
+            socket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.KeepAlive, true);
             await socket.ConnectAsync(options.Host, options.Port, timeout.Token).ConfigureAwait(false);
             stream = new NetworkStream(socket, ownsSocket: true);
         }
@@ -173,9 +174,13 @@ public sealed class SshClient : IAsyncDisposable
         {
             await process.StandardInput.DisposeAsync().ConfigureAwait(false);
 
-            // Both streams share the channel window, so both must be read at once or the server stalls.
-            Task<string> output = ReadAllAsync(process.StandardOutput, cancellationToken);
-            Task<string> error = ReadAllAsync(process.StandardError, cancellationToken);
+            // Both streams share the channel window, so both must be read at once or the server stalls. And when
+            // one fails, the other stops too, or it would wait for output the full window now holds back.
+            using CancellationTokenSource reading = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+#pragma warning disable CA2025 // Both are awaited below, before the source is disposed.
+            Task<string> output = ReadAllAsync(process.StandardOutput, reading);
+            Task<string> error = ReadAllAsync(process.StandardError, reading);
+#pragma warning restore CA2025
             await Task.WhenAll(output, error).ConfigureAwait(false);
             await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
             return new SshCommandResult(process.ExitCode, process.ExitSignal, await output.ConfigureAwait(false), await error.ConfigureAwait(false));
@@ -313,8 +318,9 @@ public sealed class SshClient : IAsyncDisposable
         return writer.ToArray();
     }
 
-    private async Task<string> ReadAllAsync(Stream stream, CancellationToken cancellationToken)
+    private async Task<string> ReadAllAsync(Stream stream, CancellationTokenSource reading)
     {
+        CancellationToken cancellationToken = reading.Token;
         using MemoryStream all = new();
         byte[] buffer = new byte[32 * 1024];
         while (true)
@@ -327,6 +333,7 @@ public sealed class SshClient : IAsyncDisposable
 
             if (all.Length + read > _options.MaxCommandOutputBytes)
             {
+                await reading.CancelAsync().ConfigureAwait(false);
                 throw new SshException($"The command wrote more than {_options.MaxCommandOutputBytes} bytes. Use StartProcessAsync to stream it, or raise MaxCommandOutputBytes.");
             }
 
@@ -426,7 +433,15 @@ public sealed class SshProcess : IAsyncDisposable
     /// Console.WriteLine(process.ExitCode);
     /// </code>
     /// </example>
-    public Task WaitForExitAsync(CancellationToken cancellationToken = default) => _channel.Closed.WaitAsync(cancellationToken);
+    /// <exception cref="SshConnectionException">The connection was lost, so how the process ended isn't known.</exception>
+    public async Task WaitForExitAsync(CancellationToken cancellationToken = default)
+    {
+        await _channel.Closed.WaitAsync(cancellationToken).ConfigureAwait(false);
+        if (_channel.ConnectionFailure is { } failure && ExitCode is null && ExitSignal is null)
+        {
+            throw new SshConnectionException("The connection was lost before the process ended. It may still be running.", failure);
+        }
+    }
 
     /// <summary>Tells the terminal its new size.</summary>
     /// <param name="columns">The width in characters.</param>

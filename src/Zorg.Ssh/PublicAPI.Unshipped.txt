@@ -125,8 +125,7 @@ Zorg.Ssh.Sftp.SftpUnsafeNameException.SftpUnsafeNameException(string! message) -
 Zorg.Ssh.Sftp.SftpUnsafeNameException.SftpUnsafeNameException(string! message, System.Exception! innerException) -> void
 Zorg.Ssh.Sftp.SftpUnsafeNameException.SftpUnsafeNameException(string! message, string! entryName, string? path) -> void
 Zorg.Ssh.SshAuthDecision
-Zorg.Ssh.SshAuthDecision.Accept = 2 -> Zorg.Ssh.SshAuthDecision
-Zorg.Ssh.SshAuthDecision.Partial = 1 -> Zorg.Ssh.SshAuthDecision
+Zorg.Ssh.SshAuthDecision.Accept = 1 -> Zorg.Ssh.SshAuthDecision
 Zorg.Ssh.SshAuthDecision.Reject = 0 -> Zorg.Ssh.SshAuthDecision
 Zorg.Ssh.SshAuthenticationException
 Zorg.Ssh.SshAuthenticationException.AllowedMethods.get -> System.Collections.Generic.IReadOnlyList<string!>!
@@ -330,8 +329,12 @@ Zorg.Ssh.SshServerOptions.Port.get -> int
 Zorg.Ssh.SshServerOptions.Port.init -> void
 Zorg.Ssh.SshServerOptions.PublicKeyHandler.get -> System.Func<Zorg.Ssh.SshPublicKeyRequest!, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask<Zorg.Ssh.SshAuthDecision>>?
 Zorg.Ssh.SshServerOptions.PublicKeyHandler.init -> void
+Zorg.Ssh.SshServerOptions.RequiredAuthMethods.get -> System.Collections.Generic.IReadOnlyList<string!>?
+Zorg.Ssh.SshServerOptions.RequiredAuthMethods.init -> void
 Zorg.Ssh.SshServerOptions.SessionHandler.get -> System.Func<Zorg.Ssh.SshServerSession!, System.Threading.CancellationToken, System.Threading.Tasks.Task<int>!>!
 Zorg.Ssh.SshServerOptions.SessionHandler.init -> void
+Zorg.Ssh.SshServerOptions.ShutdownTimeout.get -> System.TimeSpan
+Zorg.Ssh.SshServerOptions.ShutdownTimeout.init -> void
 Zorg.Ssh.SshServerOptions.SshServerOptions() -> void
 Zorg.Ssh.SshServerSession
 Zorg.Ssh.SshServerSession.Command.get -> string?

@@ -1,7 +1,6 @@
 using System;
 using System.Buffers.Binary;
 using System.Collections.Generic;
-using System.Globalization;
 using System.IO;
 using System.Security.Cryptography;
 using System.Text;
@@ -277,27 +276,6 @@ internal sealed partial class SshTransport : IAsyncDisposable
         }
     }
 
-    /// <summary>Removes control and invisible formatting characters and caps the length, so peer text can't forge log lines or hide what it says.</summary>
-    private static string Sanitise(string text)
-    {
-        StringBuilder clean = new(Math.Min(text.Length, MaxDisconnectText));
-        foreach (char c in text)
-        {
-            if (clean.Length == MaxDisconnectText)
-            {
-                break;
-            }
-
-            if (char.GetUnicodeCategory(c) is not (UnicodeCategory.Control or UnicodeCategory.Format
-                or UnicodeCategory.LineSeparator or UnicodeCategory.ParagraphSeparator or UnicodeCategory.Surrogate))
-            {
-                clean.Append(c);
-            }
-        }
-
-        return clean.ToString();
-    }
-
     /// <summary>Gives each waiter its own exception object, with the first failure as the cause, so stack traces stay meaningful.</summary>
     private static SshException Wrap(Exception failure) => failure switch
     {
@@ -321,7 +299,7 @@ internal sealed partial class SshTransport : IAsyncDisposable
         string description;
         try
         {
-            description = Sanitise(reader.ReadUtf8String());
+            description = PeerText.Clean(reader.ReadUtf8String(), MaxDisconnectText);
         }
         catch (SshProtocolException)
         {

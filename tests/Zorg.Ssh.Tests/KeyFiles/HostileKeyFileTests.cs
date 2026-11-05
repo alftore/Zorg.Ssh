@@ -888,14 +888,14 @@ public class HostileKeyFileTests
         using (writer.PushSequence())
         {
             writer.WriteInteger(0);
-            writer.WriteIntegerUnsigned(key.Modulus);
-            writer.WriteIntegerUnsigned(key.Exponent);
-            writer.WriteIntegerUnsigned(key.D);
-            writer.WriteIntegerUnsigned(key.P);
-            writer.WriteIntegerUnsigned(key.Q);
-            writer.WriteIntegerUnsigned(key.DP);
-            writer.WriteIntegerUnsigned(key.DQ);
-            writer.WriteIntegerUnsigned(key.InverseQ);
+            writer.WriteIntegerUnsigned(TrimZeros(key.Modulus));
+            writer.WriteIntegerUnsigned(TrimZeros(key.Exponent));
+            writer.WriteIntegerUnsigned(TrimZeros(key.D));
+            writer.WriteIntegerUnsigned(TrimZeros(key.P));
+            writer.WriteIntegerUnsigned(TrimZeros(key.Q));
+            writer.WriteIntegerUnsigned(TrimZeros(key.DP));
+            writer.WriteIntegerUnsigned(TrimZeros(key.DQ));
+            writer.WriteIntegerUnsigned(TrimZeros(key.InverseQ));
         }
 
         return writer.Encode();
@@ -905,6 +905,18 @@ public class HostileKeyFileTests
     {
         magnitude[0] = 0x7F;
         magnitude[^1] |= 1;
-        writer.WriteIntegerUnsigned(magnitude);
+        writer.WriteIntegerUnsigned(TrimZeros(magnitude));
+    }
+
+    // Exported RSA values are fixed length, so about 1 in 256 starts with a zero, which ASN.1 doesn't allow.
+    private static byte[] TrimZeros(ReadOnlySpan<byte> value)
+    {
+        int start = 0;
+        while (start < value.Length - 1 && value[start] == 0)
+        {
+            start++;
+        }
+
+        return value[start..].ToArray();
     }
 }

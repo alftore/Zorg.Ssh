@@ -35,15 +35,21 @@ namespace Zorg.Ssh;
 public sealed partial class SshServer : IAsyncDisposable
 {
     private const int MaxEnvironmentEntries = 64;
+    private const int MaxEnvironmentName = 256;
+    private const int MaxEnvironmentValue = 8 * 1024;
 
     private readonly SshServerOptions _options;
     private readonly ILogger _logger;
     private readonly TcpListener _listener;
+    // Never disposed: a handler that ignored cancellation can outlive the server, and still hold a token from it.
+#pragma warning disable CA2213
     private readonly CancellationTokenSource _stop = new();
+#pragma warning restore CA2213
     private readonly ConcurrentDictionary<Task, bool> _connections = new();
     private readonly TransportOptions _transportOptions;
     private int _connectionCount;
     private int _unauthenticatedCount;
+    private int _disposed;
     private Task? _acceptLoop;
 
     private SshServer(SshServerOptions options, TcpListener listener)
@@ -110,7 +116,7 @@ public sealed partial class SshServer : IAsyncDisposable
     public async Task ServeStreamAsync(Stream stream, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(stream);
-        if (!TryReserve())
+        if (Volatile.Read(ref _disposed) != 0 || !TryReserve())
         {
             await stream.DisposeAsync().ConfigureAwait(false);
             LogLimitReached(_logger);
@@ -125,6 +131,11 @@ public sealed partial class SshServer : IAsyncDisposable
     /// <returns>A task that completes when everything has stopped.</returns>
     public async ValueTask DisposeAsync()
     {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+        {
+            return;
+        }
+
         await _stop.CancelAsync().ConfigureAwait(false);
         _listener.Stop();
         if (_acceptLoop is not null)
@@ -132,13 +143,24 @@ public sealed partial class SshServer : IAsyncDisposable
             await _acceptLoop.ConfigureAwait(false);
         }
 
-        await Task.WhenAll(_connections.Keys).ConfigureAwait(false);
+        try
+        {
+            await Task.WhenAll(_connections.Keys).WaitAsync(_options.ShutdownTimeout).ConfigureAwait(false);
+        }
+        catch (TimeoutException)
+        {
+            // A handler is ignoring its token. It keeps running, but it can't hold the caller for ever.
+            LogShutdownTimedOut(_logger);
+        }
+
         _listener.Dispose();
-        _stop.Dispose();
     }
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Refused a connection: limit reached")]
     private static partial void LogLimitReached(ILogger logger);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "A session handler ignored cancellation during shutdown")]
+    private static partial void LogShutdownTimedOut(ILogger logger);
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Connection ended")]
     private static partial void LogConnectionEnded(ILogger logger, Exception exception);
@@ -174,13 +196,18 @@ public sealed partial class SshServer : IAsyncDisposable
             {
                 socket = await _listener.AcceptSocketAsync(_stop.Token).ConfigureAwait(false);
             }
-            catch (Exception ex) when (ex is OperationCanceledException or ObjectDisposedException or SocketException)
+            catch (Exception ex) when (ex is OperationCanceledException or ObjectDisposedException or SocketException or InvalidOperationException)
             {
                 if (_stop.IsCancellationRequested)
                 {
                     return;
                 }
 
+                continue;
+            }
+
+            if (!TryConfigure(socket))
+            {
                 continue;
             }
 
@@ -192,10 +219,26 @@ public sealed partial class SshServer : IAsyncDisposable
                 continue;
             }
 
-            socket.NoDelay = true;
 #pragma warning disable CA2000 // The connection owns the stream, and closes it on every path.
             _ = Track(new NetworkStream(socket, ownsSocket: true));
 #pragma warning restore CA2000
+        }
+    }
+
+    private static bool TryConfigure(Socket socket)
+    {
+        try
+        {
+            socket.NoDelay = true;
+
+            // So a client that vanishes without a word is noticed eventually.
+            socket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.KeepAlive, true);
+            return true;
+        }
+        catch (SocketException)
+        {
+            socket.Dispose();
+            return false;
         }
     }
 
@@ -291,15 +334,36 @@ public sealed partial class SshServer : IAsyncDisposable
         {
             Banner = options.Banner,
             MaxAttempts = options.MaxAuthAttempts,
+            RequiredMethods = options.RequiredAuthMethods,
             Password = options.PasswordHandler is { } password
-                ? async (user, secret, ct) => (AuthDecision)await password(new SshPasswordRequest(user, secret), ct).ConfigureAwait(false)
+                ? (user, secret, ct) => CheckAsync(() => password(new SshPasswordRequest(user, secret), ct))
                 : null,
             PublicKey = options.PublicKeyHandler is { } key
-                ? async (user, publicKey, ct) => (AuthDecision)await key(
+                ? (user, publicKey, ct) => CheckAsync(() => key(
                     new SshPublicKeyRequest(user, publicKey.KeyType, HostKeyPolicy.ComputeFingerprint(publicKey.Blob.Span)),
-                    ct).ConfigureAwait(false)
+                    ct))
                 : null,
         };
+    }
+
+    /// <summary>Runs an auth handler. One that throws has said no, and the client learns nothing more.</summary>
+    private async ValueTask<AuthDecision> CheckAsync(Func<ValueTask<SshAuthDecision>> handler)
+    {
+        try
+        {
+            return (AuthDecision)await handler().ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+#pragma warning disable CA1031 // Application code can throw anything, and it must not end the server's loop.
+        catch (Exception ex)
+#pragma warning restore CA1031
+        {
+            LogHandlerFailed(_logger, ex);
+            return AuthDecision.Reject;
+        }
     }
 
     private async Task ServeChannelsAsync(SshConnection connection, SshPrincipal principal)
@@ -309,7 +373,7 @@ public sealed partial class SshServer : IAsyncDisposable
         {
             await foreach (IncomingChannelOpen open in connection.IncomingChannels.ReadAllAsync(_stop.Token).ConfigureAwait(false))
             {
-                sessions.Add(Task.Run(() => ServeSessionAsync(open.Channel, principal), CancellationToken.None));
+                sessions.Add(Task.Run(() => ServeSessionAsync(connection, open.Channel, principal), CancellationToken.None));
                 sessions.RemoveAll(static s => s.IsCompleted);
             }
         }
@@ -321,34 +385,67 @@ public sealed partial class SshServer : IAsyncDisposable
         await Task.WhenAll(sessions).ConfigureAwait(false);
     }
 
-    private async Task ServeSessionAsync(SshChannel channel, SshPrincipal principal)
+    /// <summary>
+    /// Owns one session from start to end. The channel, the handler and the session slot all live and die here,
+    /// so none of them can outlast the others: the slot is only freed once the handler has really ended.
+    /// </summary>
+    private async Task ServeSessionAsync(SshConnection connection, SshChannel channel, SshPrincipal principal)
     {
-        await using (channel.ConfigureAwait(false))
+        using CancellationTokenSource session = CancellationTokenSource.CreateLinkedTokenSource(_stop.Token);
+        Task? running = null;
+        try
         {
-            try
+            running = await ServeRequestsAsync(channel, principal, session).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is SshException or OperationCanceledException)
+        {
+            LogConnectionEnded(_logger, ex);
+        }
+        finally
+        {
+            // The request stream only ends when the client has closed or gone, so this tells the handler to stop.
+            await session.CancelAsync().ConfigureAwait(false);
+            if (running is not null)
             {
-                Dictionary<string, string> environment = new(StringComparer.Ordinal);
-                SshPtyRequest? pty = null;
-                Task<int>? running = null;
-                CancellationToken token = _stop.Token;
+                await running.ConfigureAwait(false);
+            }
 
-                await foreach (IncomingChannelRequest request in channel.Requests.ReadAllAsync(token).ConfigureAwait(false))
+            await channel.DisposeAsync().ConfigureAwait(false);
+            connection.ReleaseIncomingSession();
+        }
+    }
+
+    /// <summary>Handles requests until the channel closes. Returns the running handler, if one was started.</summary>
+    private async Task<Task?> ServeRequestsAsync(SshChannel channel, SshPrincipal principal, CancellationTokenSource session)
+    {
+        Dictionary<string, string> environment = new(StringComparer.Ordinal);
+        SshPtyRequest? pty = null;
+        Task? running = null;
+        CancellationToken token = session.Token;
+        try
+        {
+            await foreach (IncomingChannelRequest request in channel.Requests.ReadAllAsync(token).ConfigureAwait(false))
+            {
+                bool ok;
+                SshServerSession? start = null;
+                try
                 {
-                    bool ok;
                     switch (request.Type)
                     {
-                        case "env":
+                        case "env" when running is null:
                             (string name, string value) = ParseEnvironment(request.Data);
-                            ok = environment.Count < MaxEnvironmentEntries;
+                            ok = environment.Count < MaxEnvironmentEntries
+                                && name.Length <= MaxEnvironmentName
+                                && value.Length <= MaxEnvironmentValue;
                             if (ok)
                             {
                                 environment[name] = value;
                             }
 
                             break;
-                        case "pty-req":
+                        case "pty-req" when running is null:
                             pty = ParsePty(request.Data);
-                            ok = running is null;
+                            ok = true;
                             break;
                         case "window-change":
                             ok = true;
@@ -361,41 +458,53 @@ public sealed partial class SshServer : IAsyncDisposable
                                 _ => SshSessionKind.Subsystem,
                             };
                             string? command = kind == SshSessionKind.Shell ? null : ParseString(request.Data);
-                            SshServerSession session = new(principal, kind, command, pty, environment, channel.Output, channel.Input, channel.ErrorInput);
-                            running = RunHandlerAsync(channel, session, token);
+                            start = new(principal, kind, command, pty, environment, channel.Output, channel.Input, channel.ErrorInput);
                             ok = true;
                             break;
                         default:
                             ok = false;
                             break;
                     }
-
-                    if (request.WantReply)
-                    {
-                        await channel.ReplyAsync(ok, token).ConfigureAwait(false);
-                    }
                 }
-
-                if (running is not null)
+                catch (SshProtocolException)
                 {
-                    await running.ConfigureAwait(false);
+                    // A malformed request fails that request. It's a client bug, not a reason to abandon a handler.
+                    ok = false;
                 }
-            }
-            catch (Exception ex) when (ex is SshException or OperationCanceledException)
-            {
-                LogConnectionEnded(_logger, ex);
+
+                if (request.WantReply)
+                {
+                    await channel.ReplyAsync(ok, token).ConfigureAwait(false);
+                }
+
+                // Only after the reply: the handler's output must not reach the client ahead of it.
+                if (start is not null)
+                {
+                    running = RunHandlerAsync(channel, start, session);
+                }
             }
         }
+        catch (Exception ex) when (running is not null && ex is SshException or OperationCanceledException)
+        {
+            LogConnectionEnded(_logger, ex);
+        }
+
+        return running;
     }
 
-    private async Task<int> RunHandlerAsync(SshChannel channel, SshServerSession session, CancellationToken cancellationToken)
+    private async Task RunHandlerAsync(SshChannel channel, SshServerSession session, CancellationTokenSource lifetime)
     {
-        // Yield first: the handler must not run before the reply to the request that started it.
+        // The handler runs on its own, so a slow start can't hold up the request loop.
         await Task.Yield();
+        CancellationToken token = lifetime.Token;
         int exitCode;
         try
         {
-            exitCode = await _options.SessionHandler(session, cancellationToken).ConfigureAwait(false);
+            exitCode = await _options.SessionHandler(session, token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+            return;
         }
 #pragma warning disable CA1031 // S4: handler failures end the session, and the peer learns nothing from them.
         catch (Exception ex)
@@ -409,15 +518,16 @@ public sealed partial class SshServer : IAsyncDisposable
         {
             SshRequestWriter status = new();
             status.UInt32(unchecked((uint)exitCode));
-            await channel.SendEofAsync(cancellationToken).ConfigureAwait(false);
-            await channel.SendRequestNoReplyAsync("exit-status", status.ToArray(), cancellationToken).ConfigureAwait(false);
-            await channel.CloseAsync(cancellationToken).ConfigureAwait(false);
+            await channel.SendEofAsync(token).ConfigureAwait(false);
+            await channel.SendRequestNoReplyAsync("exit-status", status.ToArray(), token).ConfigureAwait(false);
+            await channel.CloseAsync(token).ConfigureAwait(false);
+
+            // A client that never answers our CLOSE can't keep this session's slot.
+            lifetime.CancelAfter(_options.LoginGraceTime);
         }
-        catch (Exception ex) when (ex is SshException or OperationCanceledException)
+        catch (Exception ex) when (ex is SshException or OperationCanceledException or ObjectDisposedException)
         {
             LogConnectionEnded(_logger, ex);
         }
-
-        return exitCode;
     }
 }

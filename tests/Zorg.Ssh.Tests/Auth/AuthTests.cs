@@ -82,30 +82,6 @@ public class AuthTests
         Assert.True(user.Key!.Blob.Span.SequenceEqual(UserKey.PublicKey.Blob.Span));
     }
 
-    // Go CVE-2026-39828: restrictions from a partial step must reach the final session.
-    [Fact]
-    public async Task Partial_success_keeps_every_method_on_the_record()
-    {
-        bool keyDone = false;
-        ServerAuthOptions options = new()
-        {
-            PublicKey = (_, _, _) => ValueTask.FromResult(AuthDecision.Partial),
-            Password = (_, password, _) =>
-            {
-                keyDone = true;
-                return ValueTask.FromResult(password == "secret" ? AuthDecision.Accept : AuthDecision.Reject);
-            },
-        };
-        (AuthenticatedUser? user, Exception? failure) = await RunAsync(
-            options,
-            new PrivateKeyCredential(() => UserKey, ownsKey: false),
-            SshCredential.FromPassword("secret"));
-        Assert.Null(failure);
-        Assert.True(keyDone);
-        Assert.Equal(["publickey", "password"], user!.Methods);
-        Assert.NotNull(user.Key);
-    }
-
     private static byte[] Request(string user, string service, string method, Action<SshRequestWriter>? body = null)
     {
         SshRequestWriter w = new();

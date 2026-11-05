@@ -1169,13 +1169,18 @@ public sealed class SftpClient : IAsyncDisposable
     /// <summary>What's left of a recursive download's limits.</summary>
     private sealed class DownloadBudget(long entries, long bytes)
     {
+        // A cap on names as well as entries: a hostile server can make each one long, and the tree is held in memory.
+        private const long MaxPathCharacters = 32 * 1024 * 1024;
+
         private long _taken;
+        private long _pathCharacters;
 
         public long RemainingBytes { get; private set; } = bytes;
 
         public void TakeEntry(string path)
         {
-            if (++_taken > entries)
+            _pathCharacters += path.Length;
+            if (++_taken > entries || _pathCharacters > MaxPathCharacters)
             {
                 throw new SftpException($"The tree has more than {entries} entries, reached at '{SftpParser.Sanitise(path)}'. Raise MaxDirectoryEntries if that's expected.", SftpStatusCode.Failure, path);
             }

@@ -17,6 +17,11 @@ internal sealed record IncomingChannelRequest(string Type, bool WantReply, byte[
 /// One SSH channel (RFC 4254 section 5), for either role. The On* methods run in the connection's receive
 /// loop, so they copy data and return: they never wait on application code. Received data is bounded by the
 /// window we granted, and a peer that exceeds it is disconnected.
+/// <para>
+/// Everything this channel sends goes through <see cref="_sendLock"/>, and nothing is sent after CLOSE.
+/// OpenSSH ends the whole connection over a message for a channel it has closed, so one stray packet here
+/// would take every other session with it.
+/// </para>
 /// </summary>
 internal sealed class SshChannel : IAsyncDisposable
 {
@@ -27,12 +32,18 @@ internal sealed class SshChannel : IAsyncDisposable
     public const uint MaxPacket = 32 * 1024;
 
     private const int MaxQueuedRequests = 16;
+    private const int MaxExitSignalLength = 64;
 
     private readonly SshConnection _connection;
     private readonly Lock _gate = new();
     private readonly Pipe _output = NewPipe();
     private readonly Pipe _errorOutput = NewPipe();
+
+    // Neither is disposed: without AvailableWaitHandle they hold nothing, and a late writer must get a clean error.
+#pragma warning disable CA2213
     private readonly SemaphoreSlim _requestLock = new(1, 1);
+    private readonly SemaphoreSlim _sendLock = new(1, 1);
+#pragma warning restore CA2213
     private readonly TaskCompletionSource _closed = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly Channel<IncomingChannelRequest> _requests = System.Threading.Channels.Channel.CreateBounded<IncomingChannelRequest>(MaxQueuedRequests);
 
@@ -84,6 +95,9 @@ internal sealed class SshChannel : IAsyncDisposable
     /// <summary>Gets a task that completes when both sides have closed. It never faults.</summary>
     public Task Closed => _closed.Task;
 
+    /// <summary>Gets the failure, if the connection was lost rather than the channel closing normally.</summary>
+    public Exception? ConnectionFailure { get; private set; }
+
     /// <summary>Gets requests the peer sent, for a server. Clients handle theirs inside the channel.</summary>
     public ChannelReader<IncomingChannelRequest> Requests => _requests.Reader;
 
@@ -119,7 +133,7 @@ internal sealed class SshChannel : IAsyncDisposable
     {
         lock (_gate)
         {
-            if (_eofSent || _closeSent)
+            if (_eofSent)
             {
                 return;
             }
@@ -127,41 +141,61 @@ internal sealed class SshChannel : IAsyncDisposable
             _eofSent = true;
         }
 
-        await SendSimpleAsync(MessageNumber.ChannelEof, cancellationToken).ConfigureAwait(false);
+        await SendOrderedAsync(SimpleMessage(MessageNumber.ChannelEof), cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>Sends CLOSE. Safe to call more than once. The channel ends when the peer's CLOSE arrives.</summary>
+    /// <summary>Sends CLOSE, after anything already queued for this channel. Safe to call more than once.</summary>
     public async ValueTask CloseAsync(CancellationToken cancellationToken)
     {
-        lock (_gate)
+        await _sendLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
         {
-            if (_closeSent)
+            lock (_gate)
             {
-                return;
+                if (_closeSent)
+                {
+                    return;
+                }
+
+                _closeSent = true;
             }
 
-            _closeSent = true;
+            await _connection.SendAsync(SimpleMessage(MessageNumber.ChannelClose), cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _sendLock.Release();
         }
 
-        await SendSimpleAsync(MessageNumber.ChannelClose, cancellationToken).ConfigureAwait(false);
         FinishIfClosed();
     }
 
-    /// <summary>Sends a request and waits for the reply. <paramref name="data"/> is what follows <c>want reply</c>.</summary>
+    /// <summary>
+    /// Sends a request and waits for the reply. <paramref name="data"/> is what follows <c>want reply</c>.
+    /// If the wait is cancelled after sending, the channel closes: a late reply could otherwise be taken
+    /// for the answer to the next request.
+    /// </summary>
     public async ValueTask<bool> SendRequestAsync(string type, byte[] data, CancellationToken cancellationToken)
     {
         await _requestLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        bool sent = false;
         try
         {
             TaskCompletionSource<bool> reply = new(TaskCreationOptions.RunContinuationsAsynchronously);
             lock (_gate)
             {
-                ThrowIfFailed();
+                ThrowIfUnusable();
                 _requestReply = reply;
             }
 
             await SendRequestMessageAsync(type, wantReply: true, data, cancellationToken).ConfigureAwait(false);
+            sent = true;
             return await reply.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (sent)
+        {
+            _connection.QueueClose(this);
+            throw;
         }
         finally
         {
@@ -180,7 +214,7 @@ internal sealed class SshChannel : IAsyncDisposable
 
     /// <summary>Answers a request taken from <see cref="Requests"/>.</summary>
     public ValueTask ReplyAsync(bool success, CancellationToken cancellationToken) =>
-        SendSimpleAsync(success ? MessageNumber.ChannelSuccess : MessageNumber.ChannelFailure, cancellationToken);
+        SendOrderedAsync(SimpleMessage(success ? MessageNumber.ChannelSuccess : MessageNumber.ChannelFailure), cancellationToken);
 
     public void OnWindowAdjust(uint bytes)
     {
@@ -243,10 +277,11 @@ internal sealed class SshChannel : IAsyncDisposable
         _errorOutput.Writer.Complete();
     }
 
-    /// <summary>Returns true if we must answer with our own CLOSE.</summary>
+    /// <summary>Returns true if we must answer with our own CLOSE, which has to go behind queued data.</summary>
     public bool OnClose()
     {
         bool reply;
+        TaskCompletionSource? window;
         lock (_gate)
         {
             if (_closeReceived)
@@ -256,9 +291,11 @@ internal sealed class SshChannel : IAsyncDisposable
 
             _closeReceived = true;
             reply = !_closeSent;
-            _closeSent = true;
+            window = _windowWaiter;
+            _windowWaiter = null;
         }
 
+        window?.TrySetResult();
         _output.Writer.Complete();
         _errorOutput.Writer.Complete();
         _requests.Writer.TryComplete();
@@ -268,24 +305,6 @@ internal sealed class SshChannel : IAsyncDisposable
         }
 
         return reply;
-    }
-
-    /// <summary>Marks the end of the exchange of CLOSE messages when we've answered in the receive loop.</summary>
-    public void FinishIfClosed()
-    {
-        bool done;
-        lock (_gate)
-        {
-            done = _closeSent && _closeReceived;
-            _failure ??= done ? new SshConnectionException("The channel is closed.") : null;
-        }
-
-        if (done)
-        {
-            ReleaseWaiters(_failure!);
-            _connection.Forget(this);
-            _closed.TrySetResult();
-        }
     }
 
     public void OnRequestReply(bool success)
@@ -315,7 +334,7 @@ internal sealed class SshChannel : IAsyncDisposable
         if (type == "exit-signal")
         {
             SshReader reader = new(data);
-            ExitSignal = reader.ReadUtf8String();
+            ExitSignal = PeerText.Clean(reader.ReadUtf8String(), MaxExitSignalLength);
             return false;
         }
 
@@ -338,6 +357,7 @@ internal sealed class SshChannel : IAsyncDisposable
         lock (_gate)
         {
             _failure ??= failure;
+            ConnectionFailure = _closeReceived && _closeSent ? null : failure;
             _closeSent = true;
             _closeReceived = true;
         }
@@ -369,21 +389,30 @@ internal sealed class SshChannel : IAsyncDisposable
         }
     }
 
-    /// <summary>Takes the credit to grant, which is everything read so far. Each channel is queued once at most.</summary>
-    public uint TakeCredit()
+    /// <summary>Grants everything read so far back to the peer. Each channel is queued for this once at most.</summary>
+    public async ValueTask GrantCreditAsync(CancellationToken cancellationToken)
     {
+        uint credit;
         lock (_gate)
         {
             _creditQueued = false;
             if (_closeSent)
             {
-                return 0;
+                return;
             }
 
-            uint credit = _consumed;
+            credit = _consumed;
             _consumed = 0;
             _receiveWindow += credit;
-            return credit;
+        }
+
+        if (credit != 0)
+        {
+            byte[] payload = new byte[9];
+            payload[0] = MessageNumber.ChannelWindowAdjust;
+            BinaryPrimitives.WriteUInt32BigEndian(payload.AsSpan(1), RemoteId);
+            BinaryPrimitives.WriteUInt32BigEndian(payload.AsSpan(5), credit);
+            await SendOrderedAsync(payload, cancellationToken).ConfigureAwait(false);
         }
     }
 
@@ -403,10 +432,26 @@ internal sealed class SshChannel : IAsyncDisposable
         await ErrorOutput.DisposeAsync().ConfigureAwait(false);
         await Input.DisposeAsync().ConfigureAwait(false);
         await ErrorInput.DisposeAsync().ConfigureAwait(false);
-        _requestLock.Dispose();
     }
 
     private static Pipe NewPipe() => new(new PipeOptions(pauseWriterThreshold: 0, useSynchronizationContext: false));
+
+    private void FinishIfClosed()
+    {
+        bool done;
+        lock (_gate)
+        {
+            done = _closeSent && _closeReceived;
+            _failure ??= done ? new SshConnectionException("The channel is closed.") : null;
+        }
+
+        if (done)
+        {
+            ReleaseWaiters(_failure!);
+            _connection.Forget(this);
+            _closed.TrySetResult();
+        }
+    }
 
     private void ReleaseWaiters(Exception failure)
     {
@@ -424,11 +469,16 @@ internal sealed class SshChannel : IAsyncDisposable
         reply?.TrySetException(failure);
     }
 
-    private void ThrowIfFailed()
+    private void ThrowIfUnusable()
     {
         if (_failure is { } failure)
         {
             throw new SshConnectionException("The channel is closed.", failure);
+        }
+
+        if (_closeSent || _closeReceived)
+        {
+            throw new SshConnectionException("The channel is closed.");
         }
     }
 
@@ -439,8 +489,8 @@ internal sealed class SshChannel : IAsyncDisposable
             Task wait;
             lock (_gate)
             {
-                ThrowIfFailed();
-                if (_eofSent || _closeSent)
+                ThrowIfUnusable();
+                if (_eofSent)
                 {
                     throw new SshConnectionException("The channel's input is closed.");
                 }
@@ -462,39 +512,74 @@ internal sealed class SshChannel : IAsyncDisposable
 
     private async ValueTask SendDataAsync(ReadOnlyMemory<byte> data, uint? extendedType, CancellationToken cancellationToken)
     {
-        ValueTask send;
-        SshWriter writer = new(data.Length + 16);
+        await _sendLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            writer.WriteByte(extendedType is null ? MessageNumber.ChannelData : MessageNumber.ChannelExtendedData);
-            writer.WriteUInt32(RemoteId);
-            if (extendedType is { } type)
+            lock (_gate)
             {
-                writer.WriteUInt32(type);
+                ThrowIfUnusable();
             }
 
-            writer.WriteBinary(data.Span);
-            send = _connection.SendAsync(writer.Written, cancellationToken);
+            ValueTask send;
+            SshWriter writer = new(data.Length + 16);
+            try
+            {
+                writer.WriteByte(extendedType is null ? MessageNumber.ChannelData : MessageNumber.ChannelExtendedData);
+                writer.WriteUInt32(RemoteId);
+                if (extendedType is { } type)
+                {
+                    writer.WriteUInt32(type);
+                }
+
+                writer.WriteBinary(data.Span);
+                send = _connection.SendAsync(writer.Written, cancellationToken);
+            }
+            finally
+            {
+                writer.Dispose();
+            }
+
+            await send.ConfigureAwait(false);
         }
         finally
         {
-            writer.Dispose();
+            _sendLock.Release();
         }
-
-        await send.ConfigureAwait(false);
     }
 
-    private ValueTask SendSimpleAsync(byte message, CancellationToken cancellationToken)
+    private byte[] SimpleMessage(byte message)
     {
-        Span<byte> payload = stackalloc byte[5];
+        byte[] payload = new byte[5];
         payload[0] = message;
-        BinaryPrimitives.WriteUInt32BigEndian(payload[1..], RemoteId);
-        return _connection.SendAsync(payload, cancellationToken);
+        BinaryPrimitives.WriteUInt32BigEndian(payload.AsSpan(1), RemoteId);
+        return payload;
+    }
+
+    /// <summary>Sends a small message unless this side has closed. After CLOSE it has nowhere to go, so it's dropped.</summary>
+    private async ValueTask SendOrderedAsync(byte[] payload, CancellationToken cancellationToken)
+    {
+        await _sendLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            lock (_gate)
+            {
+                if (_closeSent)
+                {
+                    return;
+                }
+            }
+
+            await _connection.SendAsync(payload, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _sendLock.Release();
+        }
     }
 
     private async ValueTask SendRequestMessageAsync(string type, bool wantReply, byte[] data, CancellationToken cancellationToken)
     {
-        ValueTask send;
+        byte[] payload;
         SshWriter writer = new(data.Length + type.Length + 16);
         try
         {
@@ -503,13 +588,13 @@ internal sealed class SshChannel : IAsyncDisposable
             writer.WriteUtf8String(type);
             writer.WriteBoolean(wantReply);
             writer.WriteRaw(data);
-            send = _connection.SendAsync(writer.Written, cancellationToken);
+            payload = writer.ToArray();
         }
         finally
         {
             writer.Dispose();
         }
 
-        await send.ConfigureAwait(false);
+        await SendOrderedAsync(payload, cancellationToken).ConfigureAwait(false);
     }
 }

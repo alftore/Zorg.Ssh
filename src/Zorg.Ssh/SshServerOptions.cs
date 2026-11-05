@@ -55,9 +55,6 @@ public enum SshAuthDecision
     /// <summary>This attempt failed.</summary>
     Reject,
 
-    /// <summary>This step passed, and another method must pass too.</summary>
-    Partial,
-
     /// <summary>The user is logged in.</summary>
     Accept,
 }
@@ -218,6 +215,15 @@ public sealed class SshServerOptions
 
     /// <summary>Gets the code that serves a session, which returns the exit code. It runs once per exec, shell or subsystem request.</summary>
     public required Func<SshServerSession, CancellationToken, Task<int>> SessionHandler { get; init; }
+
+    /// <summary>
+    /// Gets the methods that must all pass, for example <c>["publickey", "password"]</c> for two-factor login.
+    /// Null, the default, means any one offered method is enough. The server enforces this, whatever handlers return.
+    /// </summary>
+    public IReadOnlyList<string>? RequiredAuthMethods { get; init; }
+
+    /// <summary>Gets how long <see cref="SshServer.DisposeAsync"/> waits for handlers that ignore cancellation. The default is 10 seconds.</summary>
+    public TimeSpan ShutdownTimeout { get; init; } = TimeSpan.FromSeconds(10);
 
     /// <summary>Gets a text sent to clients before login.</summary>
     public string? Banner { get; init; }
