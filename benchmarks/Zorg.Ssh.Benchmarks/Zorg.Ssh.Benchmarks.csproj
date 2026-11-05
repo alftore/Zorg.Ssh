@@ -2,14 +2,27 @@
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
+    <!-- Tmds.Ssh depends on the public API analyzers, and central pinning switches them on here. This project has no API to track. -->
+    <NoWarn>$(NoWarn);RS0016;RS0017;RS0037</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="BenchmarkDotNet" />
+    <PackageReference Include="SSH.NET" />
+    <PackageReference Include="Tmds.Ssh" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Zorg.Ssh\Zorg.Ssh.csproj" />
+  </ItemGroup>
+
+  <!-- The interop harness is shared by link, so there's one copy of it. -->
+  <ItemGroup>
+    <Compile Include="..\..\tests\Zorg.Ssh.InteropTests\SshPeerContainer.cs" Link="SshPeerContainer.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <AssemblyMetadata Include="PeersPath" Value="$(MSBuildProjectDirectory)\..\..\tests\Zorg.Ssh.InteropTests\Peers" />
   </ItemGroup>
 
 </Project>
