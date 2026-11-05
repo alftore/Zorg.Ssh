@@ -29,3 +29,6 @@ id_*
 
 # Snapshot candidates
 *.received.*
+
+# A Windows redirect run from a POSIX shell creates a real file with this name
+NUL

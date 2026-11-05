@@ -132,8 +132,11 @@ internal sealed partial class SshTransport
         {
             // Markers count only in the first KEXINIT, so they're only sent there.
             kex.Add(client ? KexMarkers.ExtInfoClient : KexMarkers.ExtInfoServer);
-            kex.Add(client ? KexMarkers.StrictClientV00 : KexMarkers.StrictServerV00);
+
+            // The v00 name goes last. Paramiko loops over these and keeps its verdict on the final one, so with the
+            // standard name last it turns strict mode off while we keep it on, and the first MAC after NEWKEYS fails.
             kex.Add(client ? KexMarkers.StrictClient : KexMarkers.StrictServer);
+            kex.Add(client ? KexMarkers.StrictClientV00 : KexMarkers.StrictServerV00);
         }
 
         IReadOnlyList<string> hostKeys = client

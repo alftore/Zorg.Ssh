@@ -94,6 +94,33 @@ public sealed partial class SshServer : IAsyncDisposable
         return Task.FromResult(server);
     }
 
+    /// <summary>
+    /// Serves a connection you've accepted yourself, such as one arriving through a tunnel. It counts towards
+    /// the same limits as a listened-for connection. The server owns the stream from here on.
+    /// </summary>
+    /// <param name="stream">The connected stream.</param>
+    /// <param name="cancellationToken">Closes the connection.</param>
+    /// <returns>A task that completes when the connection ends. It doesn't fail because of the client.</returns>
+    /// <exception cref="SshConnectionException">The server is at a connection limit.</exception>
+    /// <example>
+    /// <code>
+    /// await server.ServeStreamAsync(tunnelStream, cancellationToken);
+    /// </code>
+    /// </example>
+    public async Task ServeStreamAsync(Stream stream, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(stream);
+        if (!TryReserve())
+        {
+            await stream.DisposeAsync().ConfigureAwait(false);
+            LogLimitReached(_logger);
+            throw new SshConnectionException("The server is at its connection limit. Raise MaxConnections or MaxUnauthenticatedConnections, or try later.");
+        }
+
+        using CancellationTokenRegistration closeOnCancel = cancellationToken.Register(static s => ((Stream)s!).Dispose(), stream);
+        await Track(stream).ConfigureAwait(false);
+    }
+
     /// <summary>Stops listening, closes every connection, and waits for handlers to end.</summary>
     /// <returns>A task that completes when everything has stopped.</returns>
     public async ValueTask DisposeAsync()
@@ -158,8 +185,7 @@ public sealed partial class SshServer : IAsyncDisposable
             }
 
             // S6: refused before a single byte is read, so a flood costs almost nothing.
-            if (Volatile.Read(ref _connectionCount) >= _options.MaxConnections
-                || Volatile.Read(ref _unauthenticatedCount) >= _options.MaxUnauthenticatedConnections)
+            if (!TryReserve())
             {
                 LogLimitReached(_logger);
                 socket.Dispose();
@@ -167,21 +193,43 @@ public sealed partial class SshServer : IAsyncDisposable
             }
 
             socket.NoDelay = true;
-            Interlocked.Increment(ref _connectionCount);
-            Interlocked.Increment(ref _unauthenticatedCount);
-#pragma warning disable CA2025 // ServeAsync owns the socket and disposes it; nothing here does.
-            Task connection = Task.Run(() => ServeAsync(socket), CancellationToken.None);
-#pragma warning restore CA2025
-            _connections.TryAdd(connection, true);
-            _ = connection.ContinueWith(
-                finished => _connections.TryRemove(finished, out _),
-                CancellationToken.None,
-                TaskContinuationOptions.ExecuteSynchronously,
-                TaskScheduler.Default);
+#pragma warning disable CA2000 // The connection owns the stream, and closes it on every path.
+            _ = Track(new NetworkStream(socket, ownsSocket: true));
+#pragma warning restore CA2000
         }
     }
 
-    private async Task ServeAsync(Socket socket)
+    private bool TryReserve()
+    {
+        if (Interlocked.Increment(ref _connectionCount) > _options.MaxConnections)
+        {
+            Interlocked.Decrement(ref _connectionCount);
+            return false;
+        }
+
+        if (Interlocked.Increment(ref _unauthenticatedCount) > _options.MaxUnauthenticatedConnections)
+        {
+            Interlocked.Decrement(ref _unauthenticatedCount);
+            Interlocked.Decrement(ref _connectionCount);
+            return false;
+        }
+
+        return true;
+    }
+
+    private Task Track(Stream stream)
+    {
+        Task connection = Task.Run(() => ServeAsync(stream), CancellationToken.None);
+        _connections.TryAdd(connection, true);
+        _ = connection.ContinueWith(
+            finished => _connections.TryRemove(finished, out _),
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+        return connection;
+    }
+
+    private async Task ServeAsync(Stream stream)
     {
         bool authenticated = false;
         SshTransport? transport = null;
@@ -190,11 +238,10 @@ public sealed partial class SshServer : IAsyncDisposable
             using CancellationTokenSource grace = CancellationTokenSource.CreateLinkedTokenSource(_stop.Token);
             grace.CancelAfter(_options.LoginGraceTime);
 
-#pragma warning disable CA2000 // The transport owns the stream, and the finally block or the connection owns the transport.
-            NetworkStream stream = new(socket, ownsSocket: true);
+#pragma warning disable CA2000 // The finally block or the connection owns the transport.
             transport = await SshTransport.StartAsync(stream, _transportOptions, grace.Token).ConfigureAwait(false);
-
 #pragma warning restore CA2000
+
             ServerAuthenticator authenticator = new(transport, BuildAuthOptions());
             AuthenticatedUser user = await authenticator.AuthenticateAsync(grace.Token).ConfigureAwait(false);
             authenticated = true;
@@ -225,7 +272,7 @@ public sealed partial class SshServer : IAsyncDisposable
             }
             else if (!authenticated)
             {
-                socket.Dispose();
+                await stream.DisposeAsync().ConfigureAwait(false);
             }
 
             if (!authenticated)

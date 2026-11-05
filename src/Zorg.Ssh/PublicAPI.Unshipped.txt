@@ -304,6 +304,7 @@ Zorg.Ssh.SshPublicKeyRequest.UserName.init -> void
 Zorg.Ssh.SshServer
 Zorg.Ssh.SshServer.DisposeAsync() -> System.Threading.Tasks.ValueTask
 Zorg.Ssh.SshServer.LocalEndPoint.get -> System.Net.IPEndPoint!
+Zorg.Ssh.SshServer.ServeStreamAsync(System.IO.Stream! stream, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
 Zorg.Ssh.SshServerOptions
 Zorg.Ssh.SshServerOptions.Address.get -> System.Net.IPAddress!
 Zorg.Ssh.SshServerOptions.Address.init -> void

@@ -483,7 +483,9 @@ public class PacketCipherTests
         }
 
         long perOperation = (GC.GetAllocatedBytesForCurrentThread() - before) / (Rounds * 2);
-        Assert.InRange(perOperation, 0, allowedPerOperation);
+
+        // A little slack: the runtime itself occasionally allocates on this thread. A real allocation is 24 bytes or more.
+        Assert.InRange(perOperation, 0, allowedPerOperation + 8);
     }
 
     private static void AssertSealsWithNonce(PacketCipher cipher, byte[] key, string nonceHex)
