@@ -225,6 +225,9 @@ public sealed class SshServerOptions
     /// <summary>Gets how long <see cref="SshServer.DisposeAsync"/> waits for handlers that ignore cancellation. The default is 10 seconds.</summary>
     public TimeSpan ShutdownTimeout { get; init; } = TimeSpan.FromSeconds(10);
 
+    /// <summary>Gets the algorithms to offer. The defaults are current and need no tuning.</summary>
+    public SshAlgorithms Algorithms { get; init; } = SshAlgorithms.Default;
+
     /// <summary>Gets a text sent to clients before login.</summary>
     public string? Banner { get; init; }
 

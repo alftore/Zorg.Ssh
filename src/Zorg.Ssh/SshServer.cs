@@ -62,6 +62,10 @@ public sealed partial class SshServer : IAsyncDisposable
             Role = SshRole.Server,
             HostKeys = [.. options.HostKeys.Select(k => k.Key)],
             HandshakeTimeout = options.LoginGraceTime,
+            KexAlgorithms = options.Algorithms.KeyExchange,
+            HostKeyAlgorithms = options.Algorithms.HostKeys,
+            Ciphers = options.Algorithms.Ciphers,
+            Macs = options.Algorithms.Macs,
             Logger = _logger,
         };
     }
@@ -88,6 +92,7 @@ public sealed partial class SshServer : IAsyncDisposable
             throw new ArgumentException("A server needs at least one host key.", nameof(options));
         }
 
+        options.Algorithms.Validate();
         if (options.PasswordHandler is null && options.PublicKeyHandler is null)
         {
             throw new ArgumentException("Set PasswordHandler or PublicKeyHandler, or nobody can log in.", nameof(options));

@@ -33,6 +33,9 @@ public sealed class SshClientOptions
     /// <summary>Gets the check on the server's identity.</summary>
     public required HostKeyPolicy HostKeyPolicy { get; init; }
 
+    /// <summary>Gets the algorithms to offer. The defaults are current and need no tuning.</summary>
+    public SshAlgorithms Algorithms { get; init; } = SshAlgorithms.Default;
+
     /// <summary>Gets the time allowed to connect, exchange keys and log in. The default is 30 seconds.</summary>
     public TimeSpan ConnectTimeout { get; init; } = TimeSpan.FromSeconds(30);
 

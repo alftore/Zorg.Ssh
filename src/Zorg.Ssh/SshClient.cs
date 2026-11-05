@@ -104,6 +104,7 @@ public sealed class SshClient : IAsyncDisposable
     public static async Task<SshClient> ConnectAsync(SshClientOptions options, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(options);
+        options.Algorithms.Validate();
         using CancellationTokenSource timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(options.ConnectTimeout);
 
@@ -150,6 +151,7 @@ public sealed class SshClient : IAsyncDisposable
     {
         ArgumentNullException.ThrowIfNull(stream);
         ArgumentNullException.ThrowIfNull(options);
+        options.Algorithms.Validate();
         using CancellationTokenSource timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(options.ConnectTimeout);
         return await ConnectCoreAsync(stream, options, timeout.Token, cancellationToken).ConfigureAwait(false);
@@ -276,6 +278,10 @@ public sealed class SshClient : IAsyncDisposable
             Role = SshRole.Client,
             Logger = logger,
             HandshakeTimeout = options.ConnectTimeout,
+            KexAlgorithms = options.Algorithms.KeyExchange,
+            HostKeyAlgorithms = options.Algorithms.HostKeys,
+            Ciphers = options.Algorithms.Ciphers,
+            Macs = options.Algorithms.Macs,
             HostKeyValidator = (key, ct) => options.HostKeyPolicy.CheckAsync(options.Host, options.Port, key, ct),
         };
 

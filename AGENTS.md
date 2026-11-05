@@ -15,7 +15,7 @@
 - Nothing times out except `ConnectTimeout`, so pass a `CancellationToken`.
 - For SFTP on a server, call `SftpServer.ServeAsync` from the `SessionHandler`, with `SftpServerOptions.RootDirectory`.
 - `SshServer.StartAsync` needs a host key, a `PasswordHandler` or `PublicKeyHandler`, and a `SessionHandler`. Load the key with `SshHostKey.Load`, because a generated one can't be saved.
-- These don't exist, so don't call them: algorithm options, SCP, compression, port forwarding, an agent, certificates, `~/.ssh/config`. `src/Zorg.Ssh/PublicAPI.Unshipped.txt` is the full API.
+- These don't exist, so don't call them: SCP, compression, port forwarding, an agent, certificates, `~/.ssh/config`. `src/Zorg.Ssh/PublicAPI.Unshipped.txt` is the full API.
 - It's pre-release and unreviewed. `docs/` has the details, and `docs/troubleshooting.md` covers each exception.
 
 ## Working on the repo
