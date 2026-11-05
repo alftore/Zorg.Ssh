@@ -1,4 +1,5 @@
 using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.IO;
 using System.Net.Sockets;
@@ -322,22 +323,29 @@ public sealed class SshClient : IAsyncDisposable
     {
         CancellationToken cancellationToken = reading.Token;
         using MemoryStream all = new();
-        byte[] buffer = new byte[32 * 1024];
-        while (true)
+        byte[] buffer = ArrayPool<byte>.Shared.Rent(32 * 1024);
+        try
         {
-            int read = await stream.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
-            if (read == 0)
+            while (true)
             {
-                return Encoding.UTF8.GetString(all.GetBuffer(), 0, (int)all.Length);
-            }
+                int read = await stream.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
+                if (read == 0)
+                {
+                    return Encoding.UTF8.GetString(all.GetBuffer(), 0, (int)all.Length);
+                }
 
-            if (all.Length + read > _options.MaxCommandOutputBytes)
-            {
-                await reading.CancelAsync().ConfigureAwait(false);
-                throw new SshException($"The command wrote more than {_options.MaxCommandOutputBytes} bytes. Use StartProcessAsync to stream it, or raise MaxCommandOutputBytes.");
-            }
+                if (all.Length + read > _options.MaxCommandOutputBytes)
+                {
+                    await reading.CancelAsync().ConfigureAwait(false);
+                    throw new SshException($"The command wrote more than {_options.MaxCommandOutputBytes} bytes. Use StartProcessAsync to stream it, or raise MaxCommandOutputBytes.");
+                }
 
-            await all.WriteAsync(buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
+                await all.WriteAsync(buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
+            }
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer, clearArray: true);
         }
     }
 

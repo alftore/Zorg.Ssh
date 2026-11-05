@@ -25,7 +25,7 @@ public sealed class SshHostKey : IDisposable
 
     internal SshPrivateKey Key { get; }
 
-    /// <summary>Creates a new random Ed25519 key. Save it if clients should recognise the server next time.</summary>
+    /// <summary>Creates a new random Ed25519 key, for tests. It can't be saved, so for a lasting identity make one with ssh-keygen and use <see cref="Load"/>.</summary>
     /// <returns>The key.</returns>
     /// <example>
     /// <code>

@@ -363,7 +363,18 @@ internal sealed partial class SshTransport
             return;
         }
 
-        if (!await _options.HostKeyValidator!(hostKey, cancellationToken).ConfigureAwait(false))
+        bool trusted;
+        try
+        {
+            trusted = await _options.HostKeyValidator!(hostKey, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not SshException and not OperationCanceledException)
+        {
+            // Application code failed. The key isn't trusted, and that's no bug of ours.
+            throw new SshHostKeyException("The host key check failed, so the key isn't trusted. See the inner exception.", ex);
+        }
+
+        if (!trusted)
         {
             throw new SshHostKeyException($"The server's {hostKey.KeyType} host key isn't trusted. Check the key with the server's administrator before trusting it.");
         }

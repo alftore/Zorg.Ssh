@@ -5,7 +5,7 @@ Zorg.Ssh measured against SSH.NET 2026.0.0 and Tmds.Ssh 0.26.0, talking to a rea
 ## Summary
 
 - **Zorg.Ssh isn't faster than the other two overall.** It beat SSH.NET by a margin that repeated in both runs in no test at all. It beat Tmds.Ssh in AES-GCM upload and ChaCha20 download.
-- **Login: Zorg.Ssh loses to SSH.NET.** 110 ms against 69 ms, the same as Tmds.Ssh. The cause isn't known.
+- **Login: the 110 ms in the tables below is out of date.** A later change cut it to 64 ms, against 68 ms for SSH.NET and 108 ms for Tmds.Ssh, by the `--phases` measure. The other numbers here predate that change too.
 - **Exec: a tie.** All three take about 45 ms, and most of that is the server. Tmds.Ssh was about 5% ahead in both runs.
 - **AES-GCM transfers: no result.** All three ran at about the speed of this machine's network path, so the test can't separate them on download. On upload, Zorg.Ssh and SSH.NET were level, and Tmds.Ssh took 33% to 62% longer than Zorg.Ssh.
 - **ChaCha20 transfers: mixed.** SSH.NET's download took 7% to 21% less time than Zorg.Ssh's. Tmds.Ssh's was about 2.5 times slower. Uploads were close to level, with a lot of noise.
@@ -91,7 +91,7 @@ The hybrid post-quantum key exchange costs almost nothing here.
 
 Timing the two halves separately (`--phases`, medians of 30) puts the whole gap in login: 108.1 ms for Zorg.Ssh, 67.8 ms for SSH.NET and 107.7 ms for Tmds.Ssh. Closing takes under 0.5 ms for all three.
 
-**The 40 ms gap isn't explained.** It's the same size for Zorg.Ssh and Tmds.Ssh, and it's about the length of a TCP delayed acknowledgement, so it may be a stall in the protocol exchange rather than computing time. That's a guess. It could also be specific to this port-forwarded path. Nobody has looked into it yet.
+**The 40 ms gap was a stall, and it's gone.** Zorg.Ssh used to wait for the server's identification line before sending KEXINIT. It now sends KEXINIT straight after its own identification, as RFC 4253 allows, and login fell to 64.4 ms (medians of 30), with SSH.NET at 68.0 ms and Tmds.Ssh at 107.7 ms in the same run. The cause was probably a TCP delayed acknowledgement, which would fit the size of the gap, but only the result was measured. It may not show up the same way off this port-forwarded path.
 
 ### SFTP: 128 MiB file
 

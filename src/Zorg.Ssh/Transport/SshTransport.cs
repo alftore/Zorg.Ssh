@@ -352,6 +352,14 @@ internal sealed partial class SshTransport : IAsyncDisposable
             using CancellationTokenSource linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _closing.Token);
             await _stream.WriteAsync(line, linked.Token).ConfigureAwait(false);
             await _stream.FlushAsync(linked.Token).ConfigureAwait(false);
+
+            // KEXINIT goes out now rather than after the peer's identification, as RFC 4253 allows. That saves a round
+            // trip, and the packet also carries the ACK for the peer's line, which otherwise costs a delayed-ACK stall.
+            ThrowIfFailed();
+            _sendLoopStarted = 1;
+            _ = Task.Run(SendLoopAsync, CancellationToken.None);
+            StartKex();
+
             byte[] peerIdentification = await _reader
                 .ReadIdentificationAsync(allowPreamble: _options.Role == SshRole.Client, linked.Token)
                 .ConfigureAwait(false);
@@ -367,11 +375,6 @@ internal sealed partial class SshTransport : IAsyncDisposable
         {
             throw Fail(Translate(ex), null);
         }
-
-        ThrowIfFailed();
-        _sendLoopStarted = 1;
-        _ = Task.Run(SendLoopAsync, CancellationToken.None);
-        StartKex();
 
         while (!_firstKexComplete)
         {
