@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <!-- Console.WriteLine in async code is what a reader expects to see in a sample. -->
+    <NoWarn>$(NoWarn);CA1849</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Zorg.Ssh\Zorg.Ssh.csproj" />
+  </ItemGroup>
+
+  <!-- Every C# block in the docs must be a marked region of this project, so a sample that doesn't compile, or that
+       has drifted from the code, fails the build. -->
+  <Target Name="CheckDocs" AfterTargets="Build">
+    <Exec Command="dotnet &quot;$(TargetPath)&quot; --check-docs &quot;$(MSBuildThisFileDirectory)..\..&quot;" />
+  </Target>
+
+</Project>
