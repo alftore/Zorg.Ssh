@@ -21,6 +21,10 @@ namespace Zorg.Ssh.Sftp;
 /// </example>
 public sealed record SftpAttributes
 {
+    internal const uint TypeDirectory = 0x4000;
+    internal const uint TypeRegular = 0x8000;
+    internal const uint TypeSymbolicLink = 0xA000;
+
     private const uint FlagSize = 0x00000001;
     private const uint FlagUidGid = 0x00000002;
     private const uint FlagPermissions = 0x00000004;
@@ -28,9 +32,6 @@ public sealed record SftpAttributes
     private const uint FlagExtended = 0x80000000;
 
     private const uint TypeMask = 0xF000;
-    private const uint TypeDirectory = 0x4000;
-    private const uint TypeRegular = 0x8000;
-    private const uint TypeSymbolicLink = 0xA000;
     private const uint PermissionMask = 0xFFF;
 
     private readonly uint? _fileType;
@@ -212,8 +213,25 @@ public sealed record SftpAttributes
         }
     }
 
+    /// <summary>Builds what a server reports. Times outside what version 3 can send are clamped.</summary>
+    internal static SftpAttributes ForServer(long size, UnixFileMode permissions, uint fileType, DateTimeOffset accessTime, DateTimeOffset modifiedTime) => new()
+    {
+        Size = size,
+        Permissions = permissions,
+        FileType = fileType,
+        AccessTime = Clamp(accessTime),
+        ModifiedTime = Clamp(modifiedTime),
+    };
+
     /// <summary>Writes an attribute block with what's set.</summary>
-    internal void Write(ref SshWriter writer)
+    internal void Write(ref SshWriter writer) => Write(ref writer, 0);
+
+    /// <summary>Writes a block for a client to read, which needs the file type beside the permission bits.</summary>
+    internal void WriteWithFileType(ref SshWriter writer) => Write(ref writer, _fileType ?? 0);
+
+    private static DateTimeOffset Clamp(DateTimeOffset time) => DateTimeOffset.FromUnixTimeSeconds(Math.Clamp(time.ToUnixTimeSeconds(), 0, uint.MaxValue));
+
+    private void Write(ref SshWriter writer, uint fileType)
     {
         uint flags = (Size.HasValue ? FlagSize : 0)
             | (Uid.HasValue ? FlagUidGid : 0)
@@ -233,7 +251,7 @@ public sealed record SftpAttributes
 
         if (Permissions is { } permissions)
         {
-            writer.WriteUInt32((uint)permissions & PermissionMask);
+            writer.WriteUInt32(((uint)permissions & PermissionMask) | fileType);
         }
 
         if (AccessTime is { } access && ModifiedTime is { } modified)
