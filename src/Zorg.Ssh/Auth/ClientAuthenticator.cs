@@ -4,7 +4,9 @@ using System.Linq;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using Zorg.Ssh.Agent;
 using Zorg.Ssh.Crypto;
+using Zorg.Ssh.Crypto.Keys;
 using Zorg.Ssh.Protocol;
 using Zorg.Ssh.Transport;
 
@@ -24,6 +26,10 @@ internal sealed class ClientAuthenticator(SshTransport transport, string userNam
     private const int MaxPrompts = 32;
     private const int MaxInfoRounds = 16;
     private const int MaxBannerLength = 16 * 1024;
+
+    /// <summary>What went wrong along the way that a failed login should mention. It's kept out of the way of a login that succeeds.</summary>
+    private readonly List<string> _notes = [];
+    private int _refusedKeys;
 
     private enum Outcome
     {
@@ -54,7 +60,9 @@ internal sealed class ClientAuthenticator(SshTransport transport, string userNam
                 KeyboardInteractiveCredential interactive when allowed.Contains("keyboard-interactive") =>
                     await TryKeyboardInteractiveAsync(interactive, tried, cancellationToken).ConfigureAwait(false),
                 PrivateKeyCredential key when allowed.Contains("publickey") =>
-                    await TryPublicKeyAsync(key, tried, cancellationToken).ConfigureAwait(false),
+                    await TryPublicKeyAsync(key, allowed, tried, cancellationToken).ConfigureAwait(false),
+                AgentCredential agent when allowed.Contains("publickey") =>
+                    await TryAgentAsync(agent, allowed, tried, cancellationToken).ConfigureAwait(false),
                 _ => new SendResult(Outcome.Failure, allowed),
             };
 
@@ -66,21 +74,24 @@ internal sealed class ClientAuthenticator(SshTransport transport, string userNam
             allowed = result.Methods;
         }
 
+        string notes = _notes.Count == 0 ? string.Empty : " " + string.Join(" ", _notes);
         throw new SshAuthenticationException(
-            $"Authentication failed for {userName}. Tried [{string.Join(", ", tried)}]; the server accepts [{string.Join(", ", allowed)}]. Check the user name and credentials.",
+            $"Authentication failed for {userName}. Tried [{string.Join(", ", tried)}]; the server accepts [{string.Join(", ", allowed)}]. Check the user name and credentials.{notes}",
             tried,
             allowed);
     }
 
-    private static string SignatureAlgorithmFor(SshPrivateKey key, IReadOnlyDictionary<string, byte[]> extensions)
+    private static string SignatureAlgorithmFor(IReadOnlyList<string> algorithms, IReadOnlyDictionary<string, byte[]> extensions)
     {
-        if (key.SignatureAlgorithms.Count == 1 || !extensions.TryGetValue("server-sig-algs", out byte[]? value))
+        if (algorithms.Count == 1 || !extensions.TryGetValue("server-sig-algs", out byte[]? value))
         {
-            return key.SignatureAlgorithms[0];
+            return algorithms[0];
         }
 
+        // OpenSSH lists plain algorithms only, so a certificate's algorithm is looked up by what's behind it.
         string[] supported = Encoding.ASCII.GetString(value).Split(',');
-        return key.SignatureAlgorithms.FirstOrDefault(supported.Contains) ?? key.SignatureAlgorithms[0];
+        return algorithms.FirstOrDefault(a => supported.Contains(a) || supported.Contains(SshCertificate.PlainSignatureAlgorithm(a)))
+            ?? algorithms[0];
     }
 
     private async ValueTask SendAsync(Action<SshRequestWriter> build, CancellationToken cancellationToken)
@@ -289,51 +300,34 @@ internal sealed class ClientAuthenticator(SshTransport transport, string userNam
         return prompts;
     }
 
-    private async ValueTask<SendResult> TryPublicKeyAsync(PrivateKeyCredential credential, List<string> tried, CancellationToken cancellationToken)
+    private async ValueTask<SendResult> TryPublicKeyAsync(
+        PrivateKeyCredential credential,
+        IReadOnlyList<string> allowed,
+        List<string> tried,
+        CancellationToken cancellationToken)
     {
-        SshPrivateKey key = credential.Load();
+        SshPrivateKey key;
         try
         {
-            string algorithm = SignatureAlgorithmFor(key, transport.PeerExtensions);
+            key = credential.Load();
+        }
+        catch (SshKeyFileException ex) when (credential.OptionalName is { } name)
+        {
+            _notes.Add($"Skipped the identity file {name}: {ex.Message}");
+            return new SendResult(Outcome.Failure, allowed);
+        }
+
+        try
+        {
+            string algorithm = SignatureAlgorithmFor(key.SignatureAlgorithms, transport.PeerExtensions);
             byte[] blob = key.PublicKey.Blob.ToArray();
             tried.Add($"publickey ({algorithm})");
-
-            // Ask first: signing only for keys the server will take keeps failed attempts down.
-            await SendAsync(
-                w =>
-                {
-                    w.Byte(MessageNumber.UserAuthRequest);
-                    w.String(userName);
-                    w.String(ConnectionService);
-                    w.String("publickey");
-                    w.Bool(false);
-                    w.String(algorithm);
-                    w.Bytes(blob);
-                },
+            return await OfferKeyAsync(
+                algorithm,
+                blob,
+                allowed,
+                (data, _) => ValueTask.FromResult<byte[]?>(key.Sign(algorithm, data)),
                 cancellationToken).ConfigureAwait(false);
-
-            bool accepted = false;
-            SendResult? query = await ReadQueryAsync(() => accepted = true, cancellationToken).ConfigureAwait(false);
-            if (!accepted)
-            {
-                return query!;
-            }
-
-            byte[] signature = Sign(key, algorithm, blob);
-            await SendAsync(
-                w =>
-                {
-                    w.Byte(MessageNumber.UserAuthRequest);
-                    w.String(userName);
-                    w.String(ConnectionService);
-                    w.String("publickey");
-                    w.Bool(true);
-                    w.String(algorithm);
-                    w.Bytes(blob);
-                    w.Bytes(signature);
-                },
-                cancellationToken).ConfigureAwait(false);
-            return await ReadResultAsync(null, cancellationToken).ConfigureAwait(false);
         }
         finally
         {
@@ -342,6 +336,135 @@ internal sealed class ClientAuthenticator(SshTransport transport, string userNam
                 key.Dispose();
             }
         }
+    }
+
+    private async ValueTask<SendResult> TryAgentAsync(
+        AgentCredential credential,
+        IReadOnlyList<string> allowed,
+        List<string> tried,
+        CancellationToken cancellationToken)
+    {
+        SendResult result = new(Outcome.Failure, allowed);
+        try
+        {
+            SshAgentConnection agent = await credential.ConnectAsync(cancellationToken).ConfigureAwait(false);
+            await using (agent.ConfigureAwait(false))
+            {
+                IReadOnlyList<SshAgentIdentity> identities = await agent.ListIdentitiesAsync(cancellationToken).ConfigureAwait(false);
+                if (identities.Count == 0 && !credential.IsOptional)
+                {
+                    _notes.Add("The ssh-agent holds no keys this library can use. Add one with ssh-add.");
+                }
+
+                int limit = Math.Max(0, credential.MaxKeysOffered - _refusedKeys);
+                int offered = 0;
+                foreach (SshAgentIdentity identity in identities)
+                {
+                    if (offered == limit)
+                    {
+                        _notes.Add($"The ssh-agent holds {identities.Count} usable keys, but only {offered} were offered, because each refused key counts against the server's MaxAuthTries and too many end the connection. Choose a key with SshCredential.FromPrivateKeyFile, remove keys with ssh-add -d, or raise the limit with SshCredential.FromAgent(maxKeysOffered: ...).");
+                        break;
+                    }
+
+                    offered++;
+                    string algorithm = SignatureAlgorithmFor(identity.SignatureAlgorithms, transport.PeerExtensions);
+                    tried.Add($"publickey ({algorithm}, agent)");
+                    result = await OfferKeyAsync(
+                        algorithm,
+                        identity.Blob,
+                        result.Methods,
+                        (data, token) => SignWithAgentAsync(agent, identity, algorithm, data, token),
+                        cancellationToken).ConfigureAwait(false);
+                    if (result.Outcome != Outcome.Failure || !result.Methods.Contains("publickey"))
+                    {
+                        break;
+                    }
+                }
+            }
+        }
+        catch (SshAgentException ex)
+        {
+            // The agent is only one credential. What comes after it may still work, and the failure says what happened.
+            if (!credential.IsOptional)
+            {
+                _notes.Add(ex.Message);
+            }
+        }
+
+        return result;
+    }
+
+    /// <summary>Returns null if the agent refuses this key. A signature that doesn't verify is a faulty or hostile agent, and it goes no further.</summary>
+    private async ValueTask<byte[]?> SignWithAgentAsync(SshAgentConnection agent, SshAgentIdentity identity, string algorithm, byte[] data, CancellationToken cancellationToken)
+    {
+        byte[]? signature = await agent.SignAsync(identity.Blob, data, SshAgentConnection.FlagsFor(algorithm), cancellationToken).ConfigureAwait(false);
+        if (signature is null)
+        {
+            _notes.Add($"The ssh-agent refused to sign with a {identity.Key.KeyType} key. It may be locked, or waiting for a confirmation that was declined.");
+            return null;
+        }
+
+        return identity.Key.Verify(algorithm, data, signature)
+            ? signature
+            : throw new SshAgentException($"The ssh-agent returned a signature that doesn't verify against the {identity.Key.KeyType} key it listed, or that isn't {algorithm}, so it wasn't sent and the agent wasn't used further. The agent may be faulty, or too old for this algorithm.");
+    }
+
+    /// <summary>Offers a key, then proves it if the server would take it. <paramref name="sign"/> gets the data to sign, and null from it abandons the key.</summary>
+    private async ValueTask<SendResult> OfferKeyAsync(
+        string algorithm,
+        byte[] blob,
+        IReadOnlyList<string> allowed,
+        Func<byte[], CancellationToken, ValueTask<byte[]?>> sign,
+        CancellationToken cancellationToken)
+    {
+        // Ask first: signing only for keys the server will take keeps failed attempts down.
+        await SendAsync(
+            w =>
+            {
+                w.Byte(MessageNumber.UserAuthRequest);
+                w.String(userName);
+                w.String(ConnectionService);
+                w.String("publickey");
+                w.Bool(false);
+                w.String(algorithm);
+                w.Bytes(blob);
+            },
+            cancellationToken).ConfigureAwait(false);
+
+        bool accepted = false;
+        SendResult? query = await ReadQueryAsync(() => accepted = true, cancellationToken).ConfigureAwait(false);
+        if (!accepted)
+        {
+            _refusedKeys++;
+            return query!;
+        }
+
+        byte[]? signature = await sign(SignedData(algorithm, blob), cancellationToken).ConfigureAwait(false);
+        if (signature is null)
+        {
+            return new SendResult(Outcome.Failure, allowed);
+        }
+
+        await SendAsync(
+            w =>
+            {
+                w.Byte(MessageNumber.UserAuthRequest);
+                w.String(userName);
+                w.String(ConnectionService);
+                w.String("publickey");
+                w.Bool(true);
+                w.String(algorithm);
+                w.Bytes(blob);
+                w.Bytes(signature);
+            },
+            cancellationToken).ConfigureAwait(false);
+        SendResult result = await ReadResultAsync(null, cancellationToken).ConfigureAwait(false);
+        if (result.Outcome == Outcome.Failure)
+        {
+            _refusedKeys++;
+        }
+
+        return result;
     }
 
     private async ValueTask<SendResult?> ReadQueryAsync(Action onAccepted, CancellationToken cancellationToken)
@@ -361,7 +484,7 @@ internal sealed class ClientAuthenticator(SshTransport transport, string userNam
         return final;
     }
 
-    private byte[] Sign(SshPrivateKey key, string algorithm, byte[] blob)
+    private byte[] SignedData(string algorithm, byte[] blob)
     {
         SshWriter writer = new(512);
         try
@@ -374,7 +497,7 @@ internal sealed class ClientAuthenticator(SshTransport transport, string userNam
             writer.WriteBoolean(true);
             writer.WriteUtf8String(algorithm);
             writer.WriteBinary(blob);
-            return key.Sign(algorithm, writer.Written);
+            return writer.ToArray();
         }
         finally
         {

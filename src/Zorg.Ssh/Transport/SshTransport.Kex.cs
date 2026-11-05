@@ -5,6 +5,7 @@ using System.Security.Cryptography;
 using System.Threading;
 using System.Threading.Tasks;
 using Zorg.Ssh.Crypto;
+using Zorg.Ssh.Crypto.Keys;
 using Zorg.Ssh.Protocol;
 
 namespace Zorg.Ssh.Transport;
@@ -321,7 +322,7 @@ internal sealed partial class SshTransport
         }
 
         NegotiatedAlgorithms negotiated = _negotiated!;
-        SshPublicKey hostKey = SshPublicKey.Parse(hostKeyBlob);
+        SshPublicKey hostKey = SshCertificate.ParseAny(hostKeyBlob);
         if (!hostKey.SupportsSignatureAlgorithm(negotiated.HostKey))
         {
             throw new SshHostKeyException($"The server sent a {hostKey.KeyType} key, which doesn't match the negotiated {negotiated.HostKey}. This can mean an attack.");

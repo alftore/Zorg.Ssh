@@ -279,7 +279,11 @@ public sealed class SshClient : IAsyncDisposable
             Logger = logger,
             HandshakeTimeout = options.ConnectTimeout,
             KexAlgorithms = options.Algorithms.KeyExchange,
-            HostKeyAlgorithms = options.Algorithms.HostKeys,
+
+            // An explicit list is the caller's. Otherwise the policy can put certificate algorithms first.
+            HostKeyAlgorithms = ReferenceEquals(options.Algorithms.HostKeys, SshAlgorithms.Default.HostKeys)
+                ? options.HostKeyPolicy.HostKeyAlgorithmsFor(options.Host, options.Port)
+                : options.Algorithms.HostKeys,
             Ciphers = options.Algorithms.Ciphers,
             Macs = options.Algorithms.Macs,
             HostKeyValidator = (key, ct) => options.HostKeyPolicy.CheckAsync(options.Host, options.Port, key, ct),

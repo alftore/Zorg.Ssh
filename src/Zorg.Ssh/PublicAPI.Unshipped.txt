@@ -139,6 +139,10 @@ Zorg.Ssh.Sftp.SftpUnsafeNameException.SftpUnsafeNameException() -> void
 Zorg.Ssh.Sftp.SftpUnsafeNameException.SftpUnsafeNameException(string! message) -> void
 Zorg.Ssh.Sftp.SftpUnsafeNameException.SftpUnsafeNameException(string! message, System.Exception! innerException) -> void
 Zorg.Ssh.Sftp.SftpUnsafeNameException.SftpUnsafeNameException(string! message, string! entryName, string? path) -> void
+Zorg.Ssh.SshAgentException
+Zorg.Ssh.SshAgentException.SshAgentException() -> void
+Zorg.Ssh.SshAgentException.SshAgentException(string! message) -> void
+Zorg.Ssh.SshAgentException.SshAgentException(string! message, System.Exception! innerException) -> void
 Zorg.Ssh.SshAlgorithms
 Zorg.Ssh.SshAlgorithms.Ciphers.get -> System.Collections.Generic.IReadOnlyList<string!>!
 Zorg.Ssh.SshAlgorithms.Ciphers.init -> void
@@ -201,6 +205,12 @@ Zorg.Ssh.SshCommandResult.StandardError.get -> string!
 Zorg.Ssh.SshCommandResult.StandardError.init -> void
 Zorg.Ssh.SshCommandResult.StandardOutput.get -> string!
 Zorg.Ssh.SshCommandResult.StandardOutput.init -> void
+Zorg.Ssh.SshConfig
+Zorg.Ssh.SshConfig.Resolve(string! hostAlias) -> Zorg.Ssh.SshHostConfig!
+Zorg.Ssh.SshConfigException
+Zorg.Ssh.SshConfigException.SshConfigException() -> void
+Zorg.Ssh.SshConfigException.SshConfigException(string! message) -> void
+Zorg.Ssh.SshConfigException.SshConfigException(string! message, System.Exception! innerException) -> void
 Zorg.Ssh.SshConnectionException
 Zorg.Ssh.SshConnectionException.SshConnectionException() -> void
 Zorg.Ssh.SshConnectionException.SshConnectionException(string! message) -> void
@@ -217,6 +227,27 @@ Zorg.Ssh.SshException
 Zorg.Ssh.SshException.SshException() -> void
 Zorg.Ssh.SshException.SshException(string! message) -> void
 Zorg.Ssh.SshException.SshException(string! message, System.Exception! innerException) -> void
+Zorg.Ssh.SshHostConfig
+Zorg.Ssh.SshHostConfig.<Clone>$() -> Zorg.Ssh.SshHostConfig!
+Zorg.Ssh.SshHostConfig.Deconstruct(out string! HostName, out int Port, out string! User, out System.Collections.Generic.IReadOnlyList<string!>! IdentityFiles, out bool IdentitiesOnly, out System.Collections.Generic.IReadOnlyList<string!>! UserKnownHostsFiles, out Zorg.Ssh.SshStrictHostKeyChecking StrictHostKeyChecking, out string? ProxyJump) -> void
+Zorg.Ssh.SshHostConfig.Equals(Zorg.Ssh.SshHostConfig? other) -> bool
+Zorg.Ssh.SshHostConfig.HostName.get -> string!
+Zorg.Ssh.SshHostConfig.HostName.init -> void
+Zorg.Ssh.SshHostConfig.IdentitiesOnly.get -> bool
+Zorg.Ssh.SshHostConfig.IdentitiesOnly.init -> void
+Zorg.Ssh.SshHostConfig.IdentityFiles.get -> System.Collections.Generic.IReadOnlyList<string!>!
+Zorg.Ssh.SshHostConfig.IdentityFiles.init -> void
+Zorg.Ssh.SshHostConfig.Port.get -> int
+Zorg.Ssh.SshHostConfig.Port.init -> void
+Zorg.Ssh.SshHostConfig.ProxyJump.get -> string?
+Zorg.Ssh.SshHostConfig.ProxyJump.init -> void
+Zorg.Ssh.SshHostConfig.SshHostConfig(string! HostName, int Port, string! User, System.Collections.Generic.IReadOnlyList<string!>! IdentityFiles, bool IdentitiesOnly, System.Collections.Generic.IReadOnlyList<string!>! UserKnownHostsFiles, Zorg.Ssh.SshStrictHostKeyChecking StrictHostKeyChecking, string? ProxyJump) -> void
+Zorg.Ssh.SshHostConfig.StrictHostKeyChecking.get -> Zorg.Ssh.SshStrictHostKeyChecking
+Zorg.Ssh.SshHostConfig.StrictHostKeyChecking.init -> void
+Zorg.Ssh.SshHostConfig.User.get -> string!
+Zorg.Ssh.SshHostConfig.User.init -> void
+Zorg.Ssh.SshHostConfig.UserKnownHostsFiles.get -> System.Collections.Generic.IReadOnlyList<string!>!
+Zorg.Ssh.SshHostConfig.UserKnownHostsFiles.init -> void
 Zorg.Ssh.SshHostKey
 Zorg.Ssh.SshHostKey.Dispose() -> void
 Zorg.Ssh.SshHostKey.Sha256Fingerprint.get -> string!
@@ -378,6 +409,11 @@ Zorg.Ssh.SshSessionKind
 Zorg.Ssh.SshSessionKind.Exec = 0 -> Zorg.Ssh.SshSessionKind
 Zorg.Ssh.SshSessionKind.Shell = 1 -> Zorg.Ssh.SshSessionKind
 Zorg.Ssh.SshSessionKind.Subsystem = 2 -> Zorg.Ssh.SshSessionKind
+Zorg.Ssh.SshStrictHostKeyChecking
+Zorg.Ssh.SshStrictHostKeyChecking.AcceptNew = 1 -> Zorg.Ssh.SshStrictHostKeyChecking
+Zorg.Ssh.SshStrictHostKeyChecking.No = 2 -> Zorg.Ssh.SshStrictHostKeyChecking
+Zorg.Ssh.SshStrictHostKeyChecking.Yes = 0 -> Zorg.Ssh.SshStrictHostKeyChecking
+const Zorg.Ssh.SshConfig.MaxFileLength = 1048576 -> int
 override Zorg.Ssh.Sftp.SftpAttributes.Equals(object? obj) -> bool
 override Zorg.Ssh.Sftp.SftpAttributes.GetHashCode() -> int
 override Zorg.Ssh.Sftp.SftpAttributes.ToString() -> string!
@@ -408,6 +444,9 @@ override Zorg.Ssh.Sftp.SftpFileSystemInfo.ToString() -> string!
 override Zorg.Ssh.SshCommandResult.Equals(object? obj) -> bool
 override Zorg.Ssh.SshCommandResult.GetHashCode() -> int
 override Zorg.Ssh.SshCommandResult.ToString() -> string!
+override Zorg.Ssh.SshHostConfig.Equals(object? obj) -> bool
+override Zorg.Ssh.SshHostConfig.GetHashCode() -> int
+override Zorg.Ssh.SshHostConfig.ToString() -> string!
 override Zorg.Ssh.SshHostKeyInfo.Equals(object? obj) -> bool
 override Zorg.Ssh.SshHostKeyInfo.GetHashCode() -> int
 override Zorg.Ssh.SshHostKeyInfo.ToString() -> string!
@@ -429,7 +468,7 @@ override Zorg.Ssh.SshPublicKeyRequest.ToString() -> string!
 static Zorg.Ssh.HostKeyPolicy.AcceptAnyUnsafe() -> Zorg.Ssh.HostKeyPolicy!
 static Zorg.Ssh.HostKeyPolicy.Custom(System.Func<Zorg.Ssh.SshHostKeyInfo!, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask<bool>>! check) -> Zorg.Ssh.HostKeyPolicy!
 static Zorg.Ssh.HostKeyPolicy.Fingerprint(string! sha256Fingerprint) -> Zorg.Ssh.HostKeyPolicy!
-static Zorg.Ssh.HostKeyPolicy.KnownHostsFile(string! path = "~/.ssh/known_hosts", bool addUnknownHostsUnsafe = false) -> Zorg.Ssh.HostKeyPolicy!
+static Zorg.Ssh.HostKeyPolicy.KnownHostsFile(string! path = "~/.ssh/known_hosts", bool addUnknownHostsUnsafe = false, System.TimeProvider? timeProvider = null) -> Zorg.Ssh.HostKeyPolicy!
 static Zorg.Ssh.Sftp.SftpAttributes.operator !=(Zorg.Ssh.Sftp.SftpAttributes? left, Zorg.Ssh.Sftp.SftpAttributes? right) -> bool
 static Zorg.Ssh.Sftp.SftpAttributes.operator ==(Zorg.Ssh.Sftp.SftpAttributes? left, Zorg.Ssh.Sftp.SftpAttributes? right) -> bool
 static Zorg.Ssh.Sftp.SftpEntry.operator !=(Zorg.Ssh.Sftp.SftpEntry? left, Zorg.Ssh.Sftp.SftpEntry? right) -> bool
@@ -440,12 +479,18 @@ static Zorg.Ssh.Sftp.SftpServer.ServeAsync(Zorg.Ssh.SshServerSession! session, Z
 static Zorg.Ssh.SshAlgorithms.Default.get -> Zorg.Ssh.SshAlgorithms!
 static Zorg.Ssh.SshClient.ConnectAsync(Zorg.Ssh.SshClientOptions! options, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Zorg.Ssh.SshClient!>!
 static Zorg.Ssh.SshClient.ConnectOverStreamAsync(System.IO.Stream! stream, Zorg.Ssh.SshClientOptions! options, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Zorg.Ssh.SshClient!>!
+static Zorg.Ssh.SshClientOptions.FromConfig(string! hostAlias, Zorg.Ssh.SshConfig? config = null, Zorg.Ssh.HostKeyPolicy? hostKeyPolicy = null, System.Collections.Generic.IReadOnlyList<Zorg.Ssh.SshCredential!>? credentials = null, Microsoft.Extensions.Logging.ILoggerFactory? loggerFactory = null) -> Zorg.Ssh.SshClientOptions!
 static Zorg.Ssh.SshCommandResult.operator !=(Zorg.Ssh.SshCommandResult? left, Zorg.Ssh.SshCommandResult? right) -> bool
 static Zorg.Ssh.SshCommandResult.operator ==(Zorg.Ssh.SshCommandResult? left, Zorg.Ssh.SshCommandResult? right) -> bool
+static Zorg.Ssh.SshConfig.Load(string? path = null, Microsoft.Extensions.Logging.ILogger? logger = null) -> Zorg.Ssh.SshConfig!
+static Zorg.Ssh.SshConfig.Parse(string! text, Microsoft.Extensions.Logging.ILogger? logger = null) -> Zorg.Ssh.SshConfig!
+static Zorg.Ssh.SshCredential.FromAgent(string? agentPath = null, int maxKeysOffered = 5) -> Zorg.Ssh.SshCredential!
 static Zorg.Ssh.SshCredential.FromKeyboardInteractive(System.Func<System.Collections.Generic.IReadOnlyList<Zorg.Ssh.SshPrompt!>!, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<string!>!>>! respond) -> Zorg.Ssh.SshCredential!
 static Zorg.Ssh.SshCredential.FromPassword(string! password) -> Zorg.Ssh.SshCredential!
 static Zorg.Ssh.SshCredential.FromPrivateKey(string! keyText, string? passphrase = null) -> Zorg.Ssh.SshCredential!
-static Zorg.Ssh.SshCredential.FromPrivateKeyFile(string! path, string? passphrase = null) -> Zorg.Ssh.SshCredential!
+static Zorg.Ssh.SshCredential.FromPrivateKeyFile(string! path, string? passphrase = null, string? certificatePath = null) -> Zorg.Ssh.SshCredential!
+static Zorg.Ssh.SshHostConfig.operator !=(Zorg.Ssh.SshHostConfig? left, Zorg.Ssh.SshHostConfig? right) -> bool
+static Zorg.Ssh.SshHostConfig.operator ==(Zorg.Ssh.SshHostConfig? left, Zorg.Ssh.SshHostConfig? right) -> bool
 static Zorg.Ssh.SshHostKey.GenerateEd25519() -> Zorg.Ssh.SshHostKey!
 static Zorg.Ssh.SshHostKey.Load(string! keyText, string? passphrase = null) -> Zorg.Ssh.SshHostKey!
 static Zorg.Ssh.SshHostKeyInfo.operator !=(Zorg.Ssh.SshHostKeyInfo? left, Zorg.Ssh.SshHostKeyInfo? right) -> bool

@@ -74,7 +74,11 @@ public sealed record SshPasswordRequest(string UserName, string Password)
     public override string ToString() => $"SshPasswordRequest {{ UserName = {UserName} }}";
 }
 
-/// <summary>A login attempt with a public key. The handler runs before the signature is checked, so <see cref="SshAuthDecision.Accept"/> only takes effect if the client proves it holds the key.</summary>
+/// <summary>
+/// A login attempt with a public key. The handler runs before the signature is checked, so <see cref="SshAuthDecision.Accept"/>
+/// only takes effect if the client proves it holds the key. OpenSSH certificates aren't supported on the server: one is
+/// a failed attempt, and the handler never sees it.
+/// </summary>
 /// <param name="UserName">The user name. It's unverified, and chosen by the client.</param>
 /// <param name="KeyType">The key type, for example <c>ssh-ed25519</c>.</param>
 /// <param name="Sha256Fingerprint">The key's fingerprint in OpenSSH form.</param>
