@@ -427,3 +427,19 @@ static Zorg.Ssh.SshPtyRequest.operator ==(Zorg.Ssh.SshPtyRequest? left, Zorg.Ssh
 static Zorg.Ssh.SshPublicKeyRequest.operator !=(Zorg.Ssh.SshPublicKeyRequest? left, Zorg.Ssh.SshPublicKeyRequest? right) -> bool
 static Zorg.Ssh.SshPublicKeyRequest.operator ==(Zorg.Ssh.SshPublicKeyRequest? left, Zorg.Ssh.SshPublicKeyRequest? right) -> bool
 static Zorg.Ssh.SshServer.StartAsync(Zorg.Ssh.SshServerOptions! options, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Zorg.Ssh.SshServer!>!
+Zorg.Ssh.Sftp.SftpServer
+Zorg.Ssh.Sftp.SftpServerOptions
+Zorg.Ssh.Sftp.SftpServerOptions.LoggerFactory.get -> Microsoft.Extensions.Logging.ILoggerFactory?
+Zorg.Ssh.Sftp.SftpServerOptions.LoggerFactory.init -> void
+Zorg.Ssh.Sftp.SftpServerOptions.MaxListingBatch.get -> int
+Zorg.Ssh.Sftp.SftpServerOptions.MaxListingBatch.init -> void
+Zorg.Ssh.Sftp.SftpServerOptions.MaxOpenHandles.get -> int
+Zorg.Ssh.Sftp.SftpServerOptions.MaxOpenHandles.init -> void
+Zorg.Ssh.Sftp.SftpServerOptions.MaxReadSize.get -> int
+Zorg.Ssh.Sftp.SftpServerOptions.MaxReadSize.init -> void
+Zorg.Ssh.Sftp.SftpServerOptions.ReadOnly.get -> bool
+Zorg.Ssh.Sftp.SftpServerOptions.ReadOnly.init -> void
+Zorg.Ssh.Sftp.SftpServerOptions.RootDirectory.get -> string!
+Zorg.Ssh.Sftp.SftpServerOptions.RootDirectory.init -> void
+Zorg.Ssh.Sftp.SftpServerOptions.SftpServerOptions() -> void
+static Zorg.Ssh.Sftp.SftpServer.ServeAsync(Zorg.Ssh.SshServerSession! session, Zorg.Ssh.Sftp.SftpServerOptions! options, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<int>!
