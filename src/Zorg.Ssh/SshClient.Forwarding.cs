@@ -402,7 +402,7 @@ public sealed partial class SshClient
             socket = await TcpRelay.ConnectAsync(host, port, limit.Token).ConfigureAwait(false);
 #pragma warning restore CA2000
         }
-        catch (Exception ex) when (ex is SocketException or OperationCanceledException)
+        catch (Exception ex) when (ex is SocketException or OperationCanceledException or ArgumentException)
         {
             await _connection.RefuseIncomingAsync(open, SshConnection.OpenFailureConnectFailed, "connect failed").ConfigureAwait(false);
             return;

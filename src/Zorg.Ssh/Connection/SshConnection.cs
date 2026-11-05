@@ -44,7 +44,7 @@ internal sealed class SshConnection : IAsyncDisposable
     private readonly SemaphoreSlim _globalRequestOrder = new(1, 1);
 #pragma warning restore CA2213
 
-    // Unbounded in type only: a channel has two entries at most, a credit and a close.
+    // Unbounded in type only: a channel has a few entries at most, a credit, a close, and a close that timed out.
     private readonly Channel<(SshChannel Channel, bool Close)> _deferred =
         System.Threading.Channels.Channel.CreateUnbounded<(SshChannel, bool)>(new UnboundedChannelOptions { SingleReader = true });
     private readonly Channel<IncomingChannelOpen> _incoming =
@@ -663,10 +663,22 @@ internal sealed class SshConnection : IAsyncDisposable
             return;
         }
 
-        SshChannel channel;
+        SshChannel? channel = null;
         lock (_gate)
         {
-            channel = Register();
+            if (_channels.Count < _maxChannels)
+            {
+                channel = Register();
+            }
+        }
+
+        if (channel is null)
+        {
+            // A relay frees its slot when it ends, but its channel stays until the client's CLOSE arrives. Throwing
+            // here would end every session on the connection over an open that merely crossed that CLOSE.
+            ReleaseIncomingSession();
+            SendOpenFailure(remoteId, OpenFailureResourceShortage, "too many channels");
+            return;
         }
 
         channel.SetRemote(remoteId, window, maxPacket);
@@ -745,7 +757,17 @@ internal sealed class SshConnection : IAsyncDisposable
             throw new SshProtocolException("The peer confirmed a channel that isn't being opened.");
         }
 
-        channel.SetRemote(remoteId, window, maxPacket);
+        try
+        {
+            channel.SetRemote(remoteId, window, maxPacket);
+        }
+        catch (SshProtocolException ex)
+        {
+            // The waiter has left _opening, so the end of the connection won't find it.
+            waiter.TrySetException(ex);
+            throw;
+        }
+
         waiter.TrySetResult(channel);
     }
 

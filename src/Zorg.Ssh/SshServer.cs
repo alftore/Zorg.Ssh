@@ -494,7 +494,7 @@ public sealed partial class SshServer : IAsyncDisposable
         {
             return (await TcpRelay.ConnectAsync(request.Host, request.Port, limit.Token).ConfigureAwait(false), 0);
         }
-        catch (Exception ex) when (ex is SocketException or OperationCanceledException)
+        catch (Exception ex) when (ex is SocketException or OperationCanceledException or ArgumentException)
         {
             LogConnectionEnded(_logger, ex);
             return (null, SshConnection.OpenFailureConnectFailed);

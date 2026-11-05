@@ -57,6 +57,9 @@ internal sealed class SshChannel : IAsyncDisposable
     private bool _eofSent;
     private bool _eofReceived;
     private bool _closeSent;
+
+    // Set while _closeSent is true but the CLOSE isn't queued yet. The channel is shut for everything except that CLOSE.
+    private bool _closeOwed;
     private bool _closeReceived;
     private Exception? _failure;
 
@@ -144,27 +147,43 @@ internal sealed class SshChannel : IAsyncDisposable
         await SendOrderedAsync(SimpleMessage(MessageNumber.ChannelEof), cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>Sends CLOSE, after anything already queued for this channel. Safe to call more than once.</summary>
+    /// <summary>
+    /// Sends CLOSE, after anything already queued for this channel. Safe to call more than once. Cancelling gives up
+    /// the wait, not the close: the peer holds resources until it hears, so the connection's sender loop finishes it.
+    /// </summary>
     public async ValueTask CloseAsync(CancellationToken cancellationToken)
     {
-        await _sendLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            lock (_gate)
+            await _sendLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
             {
-                if (_closeSent)
+                lock (_gate)
                 {
-                    return;
+                    if (_closeSent && !_closeOwed)
+                    {
+                        return;
+                    }
+
+                    _closeSent = true;
+                    _closeOwed = true;
                 }
 
-                _closeSent = true;
+                await _connection.SendAsync(SimpleMessage(MessageNumber.ChannelClose), cancellationToken).ConfigureAwait(false);
+                lock (_gate)
+                {
+                    _closeOwed = false;
+                }
             }
-
-            await _connection.SendAsync(SimpleMessage(MessageNumber.ChannelClose), cancellationToken).ConfigureAwait(false);
+            finally
+            {
+                _sendLock.Release();
+            }
         }
-        finally
+        catch (OperationCanceledException)
         {
-            _sendLock.Release();
+            _connection.QueueClose(this);
+            throw;
         }
 
         FinishIfClosed();
@@ -348,7 +367,11 @@ internal sealed class SshChannel : IAsyncDisposable
             return false;
         }
 
-        return wantReply;
+        lock (_gate)
+        {
+            // The request crossed our CLOSE, and nothing is sent after that.
+            return wantReply && !_closeSent;
+        }
     }
 
     /// <summary>Fails everything waiting on this channel, because the connection has ended.</summary>
@@ -359,6 +382,7 @@ internal sealed class SshChannel : IAsyncDisposable
             _failure ??= failure;
             ConnectionFailure = _closeReceived && _closeSent ? null : failure;
             _closeSent = true;
+            _closeOwed = false;
             _closeReceived = true;
         }
 
@@ -441,7 +465,7 @@ internal sealed class SshChannel : IAsyncDisposable
         bool done;
         lock (_gate)
         {
-            done = _closeSent && _closeReceived;
+            done = _closeSent && !_closeOwed && _closeReceived;
             _failure ??= done ? new SshConnectionException("The channel is closed.") : null;
         }
 
