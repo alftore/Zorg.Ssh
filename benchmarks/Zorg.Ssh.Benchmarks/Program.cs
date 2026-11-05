@@ -1,3 +1,16 @@
 using BenchmarkDotNet.Running;
+using Zorg.Ssh.Benchmarks;
 
-BenchmarkSwitcher.FromAssembly(typeof(Program).Assembly).Run(args);
+if (args is ["--ceiling"])
+{
+    await TcpCeiling.RunAsync();
+    return;
+}
+
+if (args is ["--phases"])
+{
+    await ConnectPhases.RunAsync();
+    return;
+}
+
+BenchmarkSwitcher.FromAssembly(typeof(CipherBenchmarks).Assembly).Run(args);

@@ -1,4 +1,23 @@
-# Working on Zorg.Ssh
+# Using and working on Zorg.Ssh
+
+## Writing code that uses Zorg.Ssh
+
+- Start with `SshClient.ConnectAsync(new SshClientOptions { ... }, ct)`. `Host`, `UserName` and `HostKeyPolicy` are required, and `await using` closes the connection.
+- There's no default host key policy. Use `HostKeyPolicy.KnownHostsFile()` or `.Fingerprint("SHA256:...")`. `AcceptAnyUnsafe()` is for tests against a machine you control, never for a fix to a connection error.
+- Never catch `SshHostKeyException` to retry or to switch policy. It can mean an attack, so show it to a person.
+- `Credentials = [...]` are tried in order: `SshCredential.FromPrivateKeyFile`, `.FromPrivateKey`, `.FromPassword`, `.FromKeyboardInteractive`.
+- `client.ExecuteAsync(command, ct)` returns `SshCommandResult`. Check `ExitCode`, which is null after a signal. A non-zero exit doesn't throw.
+- For large, binary or long-running output, use `StartProcessAsync`, and read `StandardOutput` and `StandardError` at the same time: they share a window. Dispose `StandardInput` to send EOF.
+- The command line goes through the server's shell, so quote anything from a user.
+- `await using SftpClient sftp = await client.OpenSftpAsync(ct)`. Use `UploadFileAsync` and `DownloadFileAsync` for files. `SftpFile` reads can be short, and its sync methods block.
+- Names from a listing are untrusted. Check `SftpEntry.IsSafeName`, and pass `maxTotalBytes` to `DownloadDirectoryAsync`.
+- Catch `SshException` and its subtypes. A connection that has failed stays failed: connect again.
+- Nothing times out except `ConnectTimeout`, so pass a `CancellationToken`.
+- `SshServer.StartAsync` needs a host key, a `PasswordHandler` or `PublicKeyHandler`, and a `SessionHandler`. Load the key with `SshHostKey.Load`, because a generated one can't be saved.
+- These don't exist, so don't call them: algorithm options, SCP, compression, port forwarding, an agent, certificates, `~/.ssh/config`, an SFTP server. `src/Zorg.Ssh/PublicAPI.Unshipped.txt` is the full API.
+- It's pre-release and unreviewed. `docs/` has the details, and `docs/troubleshooting.md` covers each exception.
+
+## Working on the repo
 
 ```bash
 dotnet build Zorg.Ssh.slnx -nologo -v q

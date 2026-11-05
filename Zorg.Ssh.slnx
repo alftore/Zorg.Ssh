@@ -20,5 +20,6 @@
   </Folder>
   <Folder Name="/samples/">
     <Project Path="samples/Zorg.Ssh.AotSmoke/Zorg.Ssh.AotSmoke.csproj" />
+    <Project Path="samples/Zorg.Ssh.Examples/Zorg.Ssh.Examples.csproj" />
   </Folder>
 </Solution>

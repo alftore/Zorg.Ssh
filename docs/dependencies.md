@@ -29,6 +29,8 @@ Rules:
 | xunit.v3 4.0.2 | Apache-2.0 | Test framework | Low. |
 | coverlet.MTP 10.1.0 | MIT | Coverage | Low. |
 | BenchmarkDotNet 0.15.8 | MIT | Benchmarks | Low. |
+| SSH.NET 2026.0.0 | MIT | Benchmark only: a library to compare with in `docs/benchmarks.md` | Low. Only `benchmarks/` references it, so removing it loses a comparison and nothing else. |
+| Tmds.Ssh 0.26.0 | MIT | Benchmark only: a library to compare with in `docs/benchmarks.md` | Low. Only `benchmarks/` references it. It depends on the public API analyzers, so that project turns off their rules. |
 
 ## Considered and rejected
 
