@@ -134,6 +134,13 @@ public sealed class SshConfigTests : IDisposable
         Assert.Equal([Path.Combine(Home, "kh").Replace('\\', Path.DirectorySeparatorChar)], host.UserKnownHostsFiles.Select(p => p.Replace('/', Path.DirectorySeparatorChar)));
     }
 
+    // ssh 10.6 expands this and older versions don't, so the ssh -G oracle can't cover it on every machine.
+    [Fact]
+    public void Tokens_expand_in_the_user_as_in_recent_ssh()
+    {
+        Assert.Equal("web", Resolve("User %h\n", "web").User);
+    }
+
     [Fact]
     public void Tilde_means_the_home_directory()
     {

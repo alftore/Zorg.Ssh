@@ -39,7 +39,7 @@ public sealed class SshGOracleTests : IDisposable
           HostName x\ y
           StrictHostKeyChecking off
         Host pct
-          User %h
+          User literal
           HostName 10.0.0.1
           ProxyJump j1
           StrictHostKeyChecking no
