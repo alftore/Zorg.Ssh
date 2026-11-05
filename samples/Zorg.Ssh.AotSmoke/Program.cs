@@ -23,5 +23,6 @@ writer.Dispose();
 
 CipherSmoke.Run(Check);
 KeySmoke.Run(Check);
+KeyFileSmoke.Run(Check);
 
 return failures == 0 ? 0 : 1;

@@ -33,6 +33,27 @@ public abstract class HostKeyPolicy
     {
     }
 
+    /// <summary>
+    /// Checks the server against an OpenSSH <c>known_hosts</c> file, the usual choice. An unknown host is refused:
+    /// nothing is added to the file unless <paramref name="addUnknownHostsUnsafe"/> is set.
+    /// </summary>
+    /// <param name="path">The file. The default is <c>~/.ssh/known_hosts</c>.</param>
+    /// <param name="addUnknownHostsUnsafe">
+    /// Trusts a host seen for the first time, and records it, as <c>ssh -o StrictHostKeyChecking=accept-new</c>
+    /// does. <b>A first connection can then be intercepted without anyone noticing.</b> A changed key is still refused.
+    /// </param>
+    /// <returns>The policy.</returns>
+    /// <example>
+    /// <code>
+    /// HostKeyPolicy policy = HostKeyPolicy.KnownHostsFile();
+    /// </code>
+    /// </example>
+    public static HostKeyPolicy KnownHostsFile(string path = "~/.ssh/known_hosts", bool addUnknownHostsUnsafe = false)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(path);
+        return new KnownHostsPolicy(SshCredential.ExpandHome(path), addUnknownHostsUnsafe);
+    }
+
     /// <summary>Trusts only the key with this fingerprint, the safest choice when you know it.</summary>
     /// <param name="sha256Fingerprint">The fingerprint from <c>ssh-keygen -lf</c>, starting <c>SHA256:</c>.</param>
     /// <returns>The policy.</returns>
@@ -78,6 +99,32 @@ public abstract class HostKeyPolicy
         "SHA256:" + Convert.ToBase64String(SHA256.HashData(blob)).TrimEnd('=');
 
     internal abstract ValueTask<bool> CheckAsync(string host, int port, SshPublicKey key, CancellationToken cancellationToken);
+}
+
+/// <summary>A check against a known_hosts file. It explains itself by exception, because "not trusted" alone is no help here.</summary>
+internal sealed class KnownHostsPolicy(string path, bool addUnknown) : HostKeyPolicy
+{
+    internal override ValueTask<bool> CheckAsync(string host, int port, SshPublicKey key, CancellationToken cancellationToken)
+    {
+        string fingerprint = ComputeFingerprint(key.Blob.Span);
+        switch (KnownHosts.KnownHostsFile.Load(path).Lookup(host, port, key))
+        {
+            case KnownHosts.KnownHostStatus.Trusted:
+                return ValueTask.FromResult(true);
+            case KnownHosts.KnownHostStatus.Revoked:
+                throw new SshHostKeyException($"The host key of {host} ({fingerprint}) is marked revoked in {path}. Don't connect until the administrator has replaced it.");
+            case KnownHosts.KnownHostStatus.Changed:
+                throw new SshHostKeyException($"The host key of {host} has changed to {fingerprint}, or the server offered a different key type from the one in {path}. This can mean an attack: check with the server's administrator before updating the file.");
+            default:
+                if (addUnknown)
+                {
+                    KnownHosts.KnownHostsFile.Append(path, host, port, key);
+                    return ValueTask.FromResult(true);
+                }
+
+                throw new SshHostKeyException($"{host} isn't in {path}. Its key is {key.KeyType} {fingerprint}. Check that with the server's administrator, then add it, for example by connecting once with ssh.");
+        }
+    }
 }
 
 /// <summary>A check based on a delegate.</summary>

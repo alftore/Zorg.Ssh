@@ -42,6 +42,48 @@ public abstract class SshCredential
         return new PasswordCredential(password);
     }
 
+    /// <summary>Creates a credential from a private key file. It's read when it's needed, and <c>~</c> means the home directory.</summary>
+    /// <param name="path">The key file: OpenSSH, PKCS#1, SEC1 or PKCS#8 format.</param>
+    /// <param name="passphrase">The passphrase, if the file is encrypted.</param>
+    /// <returns>The credential.</returns>
+    /// <example>
+    /// <code>
+    /// SshCredential credential = SshCredential.FromPrivateKeyFile("~/.ssh/id_ed25519");
+    /// </code>
+    /// </example>
+    public static SshCredential FromPrivateKeyFile(string path, string? passphrase = null)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(path);
+        return new PrivateKeyCredential(
+            () =>
+            {
+                try
+                {
+                    return Crypto.KeyFiles.SshKeyFile.Load(System.IO.File.ReadAllText(ExpandHome(path)), passphrase);
+                }
+                catch (Exception ex) when (ex is System.IO.IOException or UnauthorizedAccessException)
+                {
+                    throw new SshKeyFileException($"Couldn't read the key file {path}: {ex.Message}", ex);
+                }
+            },
+            ownsKey: true);
+    }
+
+    /// <summary>Creates a credential from the text of a private key.</summary>
+    /// <param name="keyText">The key file's contents.</param>
+    /// <param name="passphrase">The passphrase, if the key is encrypted.</param>
+    /// <returns>The credential.</returns>
+    /// <example>
+    /// <code>
+    /// SshCredential credential = SshCredential.FromPrivateKey(secrets.Get("deploy-key"));
+    /// </code>
+    /// </example>
+    public static SshCredential FromPrivateKey(string keyText, string? passphrase = null)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(keyText);
+        return new PrivateKeyCredential(() => Crypto.KeyFiles.SshKeyFile.Load(keyText, passphrase), ownsKey: true);
+    }
+
     /// <summary>Creates a credential that answers keyboard-interactive prompts.</summary>
     /// <param name="respond">Returns one answer per prompt.</param>
     /// <returns>The credential.</returns>
@@ -56,6 +98,11 @@ public abstract class SshCredential
         ArgumentNullException.ThrowIfNull(respond);
         return new KeyboardInteractiveCredential(respond);
     }
+
+    internal static string ExpandHome(string path) =>
+        path.StartsWith("~/", StringComparison.Ordinal) || path.StartsWith("~\\", StringComparison.Ordinal)
+            ? System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), path[2..])
+            : path;
 }
 
 /// <summary>A password.</summary>

@@ -244,13 +244,17 @@ override Zorg.Ssh.SshPublicKeyRequest.ToString() -> string!
 static Zorg.Ssh.HostKeyPolicy.AcceptAnyUnsafe() -> Zorg.Ssh.HostKeyPolicy!
 static Zorg.Ssh.HostKeyPolicy.Custom(System.Func<Zorg.Ssh.SshHostKeyInfo!, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask<bool>>! check) -> Zorg.Ssh.HostKeyPolicy!
 static Zorg.Ssh.HostKeyPolicy.Fingerprint(string! sha256Fingerprint) -> Zorg.Ssh.HostKeyPolicy!
+static Zorg.Ssh.HostKeyPolicy.KnownHostsFile(string! path = "~/.ssh/known_hosts", bool addUnknownHostsUnsafe = false) -> Zorg.Ssh.HostKeyPolicy!
 static Zorg.Ssh.SshClient.ConnectAsync(Zorg.Ssh.SshClientOptions! options, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Zorg.Ssh.SshClient!>!
 static Zorg.Ssh.SshClient.ConnectOverStreamAsync(System.IO.Stream! stream, Zorg.Ssh.SshClientOptions! options, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Zorg.Ssh.SshClient!>!
 static Zorg.Ssh.SshCommandResult.operator !=(Zorg.Ssh.SshCommandResult? left, Zorg.Ssh.SshCommandResult? right) -> bool
 static Zorg.Ssh.SshCommandResult.operator ==(Zorg.Ssh.SshCommandResult? left, Zorg.Ssh.SshCommandResult? right) -> bool
 static Zorg.Ssh.SshCredential.FromKeyboardInteractive(System.Func<System.Collections.Generic.IReadOnlyList<Zorg.Ssh.SshPrompt!>!, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<string!>!>>! respond) -> Zorg.Ssh.SshCredential!
 static Zorg.Ssh.SshCredential.FromPassword(string! password) -> Zorg.Ssh.SshCredential!
+static Zorg.Ssh.SshCredential.FromPrivateKey(string! keyText, string? passphrase = null) -> Zorg.Ssh.SshCredential!
+static Zorg.Ssh.SshCredential.FromPrivateKeyFile(string! path, string? passphrase = null) -> Zorg.Ssh.SshCredential!
 static Zorg.Ssh.SshHostKey.GenerateEd25519() -> Zorg.Ssh.SshHostKey!
+static Zorg.Ssh.SshHostKey.Load(string! keyText, string? passphrase = null) -> Zorg.Ssh.SshHostKey!
 static Zorg.Ssh.SshHostKeyInfo.operator !=(Zorg.Ssh.SshHostKeyInfo? left, Zorg.Ssh.SshHostKeyInfo? right) -> bool
 static Zorg.Ssh.SshHostKeyInfo.operator ==(Zorg.Ssh.SshHostKeyInfo? left, Zorg.Ssh.SshHostKeyInfo? right) -> bool
 static Zorg.Ssh.SshPasswordRequest.operator !=(Zorg.Ssh.SshPasswordRequest? left, Zorg.Ssh.SshPasswordRequest? right) -> bool

@@ -34,6 +34,17 @@ public sealed class SshHostKey : IDisposable
     /// </example>
     public static SshHostKey GenerateEd25519() => new(SshPrivateKey.GenerateEd25519());
 
+    /// <summary>Loads a host key from the text of a private key file.</summary>
+    /// <param name="keyText">The file's contents: OpenSSH, PKCS#1, SEC1 or PKCS#8 format.</param>
+    /// <param name="passphrase">The passphrase, if the key is encrypted.</param>
+    /// <returns>The key.</returns>
+    /// <example>
+    /// <code>
+    /// using SshHostKey key = SshHostKey.Load(File.ReadAllText("/etc/myapp/ssh_host_ed25519_key"));
+    /// </code>
+    /// </example>
+    public static SshHostKey Load(string keyText, string? passphrase = null) => new(Crypto.KeyFiles.SshKeyFile.Load(keyText, passphrase));
+
     /// <summary>Zeroes the key.</summary>
     public void Dispose() => Key.Dispose();
 }

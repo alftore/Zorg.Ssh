@@ -17,10 +17,10 @@ internal static class BCryptPbkdf
 {
     /// <summary>
     /// The most rounds accepted, because the count comes from a file. <c>ssh-keygen</c> writes 16 to 24 by default.
-    /// A round costs about 7 ms in an optimized build, so a hostile file can hold a caller for about 30 seconds, and
+    /// A round costs about 7 ms in an optimized build, so a hostile file can hold a caller for about 8 seconds, and
     /// only if the caller supplies a passphrase.
     /// </summary>
-    public const int MaxRounds = 4096;
+    public const int MaxRounds = 1024;
 
     /// <summary>The most output one call can make: 32 blocks of 32 bytes, as OpenBSD defines it.</summary>
     public const int MaxOutputLength = HashLength * HashLength;
