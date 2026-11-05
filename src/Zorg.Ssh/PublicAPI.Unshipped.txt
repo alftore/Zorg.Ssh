@@ -86,6 +86,10 @@ Zorg.Ssh.SshHostKeyInfo.Port.init -> void
 Zorg.Ssh.SshHostKeyInfo.Sha256Fingerprint.get -> string!
 Zorg.Ssh.SshHostKeyInfo.Sha256Fingerprint.init -> void
 Zorg.Ssh.SshHostKeyInfo.SshHostKeyInfo(string! Host, int Port, string! KeyType, string! Sha256Fingerprint) -> void
+Zorg.Ssh.SshKeyFileException
+Zorg.Ssh.SshKeyFileException.SshKeyFileException() -> void
+Zorg.Ssh.SshKeyFileException.SshKeyFileException(string! message) -> void
+Zorg.Ssh.SshKeyFileException.SshKeyFileException(string! message, System.Exception! innerException) -> void
 Zorg.Ssh.SshNegotiationException
 Zorg.Ssh.SshNegotiationException.Family.get -> string!
 Zorg.Ssh.SshNegotiationException.LocalAlgorithms.get -> System.Collections.Generic.IReadOnlyList<string!>!
