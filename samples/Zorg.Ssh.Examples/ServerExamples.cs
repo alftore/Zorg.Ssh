@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Linq;
 using System.Net;
 using System.Security.Cryptography;
 using System.Text;
@@ -60,15 +59,12 @@ internal static class ServerExamples
         SshServerOptions options = new()
         {
             HostKeys = [hostKey],
+            RequiredAuthMethods = ["publickey", "password"],
             PublicKeyHandler = (request, ct) => ValueTask.FromResult(
-                allowedKeys.Contains(request.Sha256Fingerprint) ? SshAuthDecision.Partial : SshAuthDecision.Reject),
+                allowedKeys.Contains(request.Sha256Fingerprint) ? SshAuthDecision.Accept : SshAuthDecision.Reject),
             PasswordHandler = (request, ct) => ValueTask.FromResult(
                 IsPasswordRight(request.UserName, request.Password) ? SshAuthDecision.Accept : SshAuthDecision.Reject),
-            SessionHandler = async (session, ct) =>
-            {
-                string[] needed = ["publickey", "password"];
-                return needed.All(session.Principal.Methods.Contains) ? await RunSessionAsync(session, ct) : 1;
-            },
+            SessionHandler = RunSessionAsync,
         };
         // end-doc
         return options;

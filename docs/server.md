@@ -44,7 +44,7 @@ You own the keys: dispose them after the server has stopped. `using` before `awa
 
 At least one of `PasswordHandler` and `PublicKeyHandler` is required. Only the methods with a handler are offered. The server has no keyboard-interactive login, and a client that tries to change a password is disconnected.
 
-A handler returns `SshAuthDecision.Accept`, `Reject` or `Partial`. The user name in a request is unverified and chosen by the client.
+A handler returns `SshAuthDecision.Accept` or `Reject`. The user name in a request is unverified and chosen by the client.
 
 ### Passwords
 
@@ -80,25 +80,22 @@ The handler runs before the signature is checked, because a client may ask wheth
 
 ### Two steps
 
-`Partial` means this step passed and another must pass too.
+`RequiredAuthMethods` lists methods that must all pass. The server enforces it, whatever the handlers return.
 
 ```csharp
 SshServerOptions options = new()
 {
     HostKeys = [hostKey],
+    RequiredAuthMethods = ["publickey", "password"],
     PublicKeyHandler = (request, ct) => ValueTask.FromResult(
-        allowedKeys.Contains(request.Sha256Fingerprint) ? SshAuthDecision.Partial : SshAuthDecision.Reject),
+        allowedKeys.Contains(request.Sha256Fingerprint) ? SshAuthDecision.Accept : SshAuthDecision.Reject),
     PasswordHandler = (request, ct) => ValueTask.FromResult(
         IsPasswordRight(request.UserName, request.Password) ? SshAuthDecision.Accept : SshAuthDecision.Reject),
-    SessionHandler = async (session, ct) =>
-    {
-        string[] needed = ["publickey", "password"];
-        return needed.All(session.Principal.Methods.Contains) ? await RunSessionAsync(session, ct) : 1;
-    },
+    SessionHandler = RunSessionAsync,
 };
 ```
 
-The server doesn't require any order of steps for you. A handler isn't told what has already passed on its connection, so in this sample a client with only the password is logged in. The check in `SessionHandler` is what stops it there, so keep that check. `Principal.Methods` lists every method that passed, in order.
+A client can pass them in either order, and a password alone gets no further. `Principal.Methods` lists every method that passed, in order.
 
 ## Sessions
 
@@ -150,7 +147,7 @@ What the server doesn't do for you:
 - There's no SFTP server. The subsystem request reaches your handler, and the client's `OpenSftpAsync` then fails.
 - There's no port forwarding. Those channels are refused.
 
-The token cancels when the server stops. It isn't cancelled when the client goes away. Reads on `Input` then end or fail, and writes fail with an `SshException`, so a handler that does other long work has to watch for that itself.
+The token cancels when the server stops, and when the client closes the session or goes away. Reads on `Input` then end or fail, and writes fail with an `SshException`, so a handler that does other long work has to watch for that itself.
 
 If a handler throws, the error is logged, the client gets exit code 1, and it learns nothing about why.
 

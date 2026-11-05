@@ -114,7 +114,7 @@ What hasn't been checked:
 - **No fuzzing.** Hostile-input tests are hand-written.
 - **Timing side channels** haven't been measured, in this code or in BouncyCastle.
 - **Zeroing** is done in code, but nothing proves that no copy remains, and a garbage collector can move memory.
-- **The server against scanners.** `ssh-audit` and Terrapin-Scanner haven't been run against it.
+- **The server against scanners.** `ssh-audit` reports no failures, and tests check that. Terrapin-Scanner itself hasn't been run, though `ssh-audit` checks for the same flaw.
 - **SFTP against other servers.** Only OpenSSH's `sftp-server` has been tested. Commercial and appliance servers haven't, and neither has the OpenSSH server for Windows.
 - **Real network equipment**, and its quirks.
 - **Native AOT** is covered by a smoke test of the algorithms, not by a full session.
