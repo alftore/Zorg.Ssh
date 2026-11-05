@@ -275,6 +275,7 @@ public sealed class SshClient : IAsyncDisposable
             Role = SshRole.Client,
             Logger = logger,
             HandshakeTimeout = options.ConnectTimeout,
+            HostKeyAlgorithms = options.HostKeyPolicy.HostKeyAlgorithmsFor(options.Host, options.Port),
             HostKeyValidator = (key, ct) => options.HostKeyPolicy.CheckAsync(options.Host, options.Port, key, ct),
         };
 

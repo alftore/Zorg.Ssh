@@ -183,6 +183,18 @@ internal sealed class KnownHostsFile
         return otherKey ? KnownHostStatus.Changed : KnownHostStatus.Unknown;
     }
 
+    /// <summary>Gets whether any <c>@cert-authority</c> line applies to a host.</summary>
+    public bool HasCertificateAuthority(string host, int port) =>
+        AnyLine(host, port, KnownHostMarker.CertificateAuthority, default, anyKey: true);
+
+    /// <summary>Gets whether this exact key is a <c>@cert-authority</c> for a host.</summary>
+    public bool IsCertificateAuthority(string host, int port, ReadOnlySpan<byte> blob) =>
+        AnyLine(host, port, KnownHostMarker.CertificateAuthority, blob, anyKey: false);
+
+    /// <summary>Gets whether this exact key is <c>@revoked</c> for a host.</summary>
+    public bool IsRevoked(string host, int port, ReadOnlySpan<byte> blob) =>
+        AnyLine(host, port, KnownHostMarker.Revoked, blob, anyKey: false);
+
     /// <summary>
     /// The HMAC-SHA1 of a host name, keyed with the salt. The name is what the file hashes: lower case, in
     /// <c>[host]:port</c> form unless the port is 22.
@@ -210,6 +222,21 @@ internal sealed class KnownHostsFile
             }
         });
         return port == DefaultPort ? name : $"[{name}]:{port}";
+    }
+
+    private bool AnyLine(string host, int port, KnownHostMarker marker, ReadOnlySpan<byte> blob, bool anyKey)
+    {
+        string name = LookupName(host, port);
+        byte[] nameBytes = Encoding.UTF8.GetBytes(name);
+        foreach (KnownHostsEntry entry in _entries)
+        {
+            if (entry.Marker == marker && (anyKey || blob.SequenceEqual(entry.Blob.Span)) && entry.MatchesHost(name, nameBytes))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static string HashedField(string name)
@@ -343,11 +370,11 @@ internal sealed class KnownHostsEntry
     internal static char Fold(char c) => c is >= 'A' and <= 'Z' ? (char)(c + ('a' - 'A')) : c;
 
     /// <summary>
-    /// Matches a <c>*</c> and <c>?</c> pattern against a name, ignoring ASCII case. It backs up to the last star
+    /// Matches a <c>*</c> and <c>?</c> pattern against a name, by default ignoring ASCII case. It backs up to the last star
     /// only, so its cost is at most the product of the two lengths. A recursive matcher can take exponential time in
     /// the number of stars, and here the pattern comes from a file.
     /// </summary>
-    internal static bool MatchesGlob(ReadOnlySpan<char> pattern, ReadOnlySpan<char> name)
+    internal static bool MatchesGlob(ReadOnlySpan<char> pattern, ReadOnlySpan<char> name, bool ignoreCase = true)
     {
         int p = 0;
         int n = 0;
@@ -360,7 +387,7 @@ internal sealed class KnownHostsEntry
                 star = p++;
                 resume = n;
             }
-            else if (p < pattern.Length && (pattern[p] == '?' || Fold(pattern[p]) == Fold(name[n])))
+            else if (p < pattern.Length && (pattern[p] == '?' || pattern[p] == name[n] || (ignoreCase && Fold(pattern[p]) == Fold(name[n]))))
             {
                 p++;
                 n++;

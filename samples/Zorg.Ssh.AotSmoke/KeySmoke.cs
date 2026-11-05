@@ -3,6 +3,7 @@ using System.Linq;
 using System.Text;
 using Zorg.Ssh.Crypto;
 using Zorg.Ssh.Crypto.Keys;
+using Zorg.Ssh.Protocol;
 
 namespace Zorg.Ssh.AotSmoke;
 
@@ -26,6 +27,45 @@ internal static class KeySmoke
 
             signature[^1] ^= 1;
             check($"tampered {algorithm}", !parsed.Verify(algorithm, data, signature));
+
+            using SshPrivateKey ca = SshPrivateKey.GenerateEd25519();
+            SshCertificate certificate = Certify(key, ca);
+            string certificateAlgorithm = SshCertificate.CertificateAlgorithm(algorithm);
+            using CertifiedPrivateKey certified = new(Generate(algorithm), certificate);
+            check($"certificate {algorithm}", certificate.CheckCaSignature() is null && certificate.SupportsSignatureAlgorithm(certificateAlgorithm));
+            check($"certificate signs {algorithm}", certificate.Verify(certificateAlgorithm, data, key.Sign(algorithm, data)));
+            check($"certified key {algorithm}", certified.SignatureAlgorithms.Contains(certificateAlgorithm));
+        }
+    }
+
+    /// <summary>Writes a certificate by hand, as the library only ever reads them.</summary>
+    private static SshCertificate Certify(SshPrivateKey key, SshPrivateKey ca)
+    {
+        byte[] plain = key.PublicKey.Blob.ToArray();
+        SshWriter writer = new(4096);
+        try
+        {
+            SshReader reader = new(plain);
+            reader.ReadBinary();
+            writer.WriteUtf8String(key.PublicKey.KeyType + "-cert-v01@openssh.com");
+            writer.WriteBinary(new byte[32]);
+            writer.WriteRaw(reader.RemainingSpan);
+            writer.WriteUInt64(1);
+            writer.WriteUInt32(SshCertificate.HostType);
+            writer.WriteUtf8String("smoke");
+            writer.WriteBinary([]);
+            writer.WriteUInt64(0);
+            writer.WriteUInt64(ulong.MaxValue);
+            writer.WriteBinary([]);
+            writer.WriteBinary([]);
+            writer.WriteBinary([]);
+            writer.WriteBinary(ca.PublicKey.Blob.Span);
+            writer.WriteBinary(ca.Sign("ssh-ed25519", writer.Written));
+            return SshCertificate.ParseCertificate(writer.Written);
+        }
+        finally
+        {
+            writer.Dispose();
         }
     }
 
