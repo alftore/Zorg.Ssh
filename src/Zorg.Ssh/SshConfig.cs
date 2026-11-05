@@ -36,7 +36,7 @@ public enum SshStrictHostKeyChecking
 /// <param name="IdentitiesOnly">Whether to use only these files, and not the agent.</param>
 /// <param name="UserKnownHostsFiles">The known_hosts files, in order. Empty means <c>none</c>.</param>
 /// <param name="StrictHostKeyChecking">The host key setting.</param>
-/// <param name="ProxyJump">The <c>ProxyJump</c> value, if any. It's reported but isn't acted on.</param>
+/// <param name="ProxyJump">The <c>ProxyJump</c> value, if any. <see cref="SshClientOptions.FromConfig"/> refuses a host that has one.</param>
 /// <example>
 /// <code>
 /// SshHostConfig host = SshConfig.Load().Resolve("web");
@@ -596,7 +596,4 @@ internal static partial class ConfigLog
 {
     [LoggerMessage(Level = LogLevel.Information, Message = "Ignoring the Match block at {File} line {Line}: Match isn't supported")]
     public static partial void MatchIgnored(ILogger logger, string file, int line);
-
-    [LoggerMessage(Level = LogLevel.Warning, Message = "Ignoring ProxyJump for {Host}: this build has no jump host support, so the connection goes direct")]
-    public static partial void ProxyJumpIgnored(ILogger logger, string host);
 }

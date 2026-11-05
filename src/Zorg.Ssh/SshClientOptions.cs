@@ -57,7 +57,7 @@ public sealed class SshClientOptions
     /// <c>StrictHostKeyChecking no</c> throws <see cref="SshConfigException"/> unless
     /// <paramref name="hostKeyPolicy"/> is given, because a config file mustn't silently weaken security. The check
     /// can be dropped only by passing <see cref="HostKeyPolicy.AcceptAnyUnsafe"/> here.
-    /// <c>ProxyJump</c> isn't supported: it's logged, and the connection goes direct.
+    /// A host with <c>ProxyJump</c> throws <see cref="SshConfigException"/>: this method can't follow it, and going direct could bypass a required bastion.
     /// </summary>
     /// <param name="hostAlias">The host name or <c>Host</c> alias.</param>
     /// <param name="config">The config. The default is <c>~/.ssh/config</c>.</param>
@@ -82,9 +82,10 @@ public sealed class SshClientOptions
         ArgumentException.ThrowIfNullOrEmpty(hostAlias);
         ILogger? logger = loggerFactory?.CreateLogger<SshConfig>();
         SshHostConfig host = (config ?? SshConfig.Load(logger: logger)).Resolve(hostAlias);
-        if (host.ProxyJump is not null && logger is not null)
+        if (host.ProxyJump is not null)
         {
-            ConfigLog.ProxyJumpIgnored(logger, host.HostName);
+            // Connecting directly could bypass the bastion the config requires, so it isn't a quiet fallback.
+            throw new SshConfigException($"{hostAlias} uses ProxyJump, which FromConfig can't follow. Connect to the jump host yourself, then connect through it.");
         }
 
         if (hostKeyPolicy is null && host.StrictHostKeyChecking == SshStrictHostKeyChecking.No)

@@ -364,13 +364,10 @@ public sealed class SshConfigTests : IDisposable
     }
 
     [Fact]
-    public void Proxy_jump_is_reported_and_logged()
+    public void Proxy_jump_is_reported()
     {
-        RecordingLogger logger = new();
         SshConfig config = SshConfig.Parse("ProxyJump bastion\n", Home, null);
         Assert.Equal("bastion", config.Resolve("web").ProxyJump);
-        SshClientOptions.FromConfig("web", config, loggerFactory: new RecordingFactory(logger));
-        Assert.Contains(logger.Messages, m => m.Contains("ProxyJump", StringComparison.Ordinal));
         Assert.Null(SshConfig.Parse("ProxyJump none\n", Home, null).Resolve("web").ProxyJump);
     }
 
