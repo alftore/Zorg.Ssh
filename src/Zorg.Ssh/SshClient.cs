@@ -9,6 +9,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Zorg.Ssh.Auth;
 using Zorg.Ssh.Connection;
+using Zorg.Ssh.Sftp;
 using Zorg.Ssh.Transport;
 
 namespace Zorg.Ssh;
@@ -215,6 +216,22 @@ public sealed class SshClient : IAsyncDisposable
     /// </example>
     public Task<SshProcess> StartShellAsync(SshProcessOptions? options = null, CancellationToken cancellationToken = default) =>
         StartAsync("shell", null, options ?? new SshProcessOptions { Pty = new SshPtyOptions() }, cancellationToken);
+
+    /// <summary>Starts an SFTP session on a new channel. Several sessions can share one client.</summary>
+    /// <param name="cancellationToken">Cancels the start. It doesn't affect a session that has started.</param>
+    /// <returns>The session. Disposing it closes its channel, and leaves this client connected.</returns>
+    /// <exception cref="SshException">The server refused the subsystem, so SFTP may not be enabled there.</exception>
+    /// <example>
+    /// <code>
+    /// await using SftpClient sftp = await client.OpenSftpAsync(cancellationToken);
+    /// byte[] config = await sftp.ReadAllBytesAsync("/etc/app.conf", cancellationToken);
+    /// </code>
+    /// </example>
+    public async Task<SftpClient> OpenSftpAsync(CancellationToken cancellationToken = default)
+    {
+        SshChannel channel = await OpenSubsystemAsync("sftp", cancellationToken).ConfigureAwait(false);
+        return await SftpClient.OpenOverChannelAsync(channel, ServerVersion, cancellationToken).ConfigureAwait(false);
+    }
 
     /// <summary>Closes the connection.</summary>
     /// <returns>A task that completes when the connection is closed.</returns>
