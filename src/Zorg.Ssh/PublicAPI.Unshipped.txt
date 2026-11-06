@@ -189,6 +189,10 @@ Zorg.Ssh.SshClientOptions.HostKeyPolicy.get -> Zorg.Ssh.HostKeyPolicy!
 Zorg.Ssh.SshClientOptions.HostKeyPolicy.init -> void
 Zorg.Ssh.SshClientOptions.JumpHost.get -> Zorg.Ssh.SshClient?
 Zorg.Ssh.SshClientOptions.JumpHost.init -> void
+Zorg.Ssh.SshClientOptions.KeepAliveCountMax.get -> int
+Zorg.Ssh.SshClientOptions.KeepAliveCountMax.init -> void
+Zorg.Ssh.SshClientOptions.KeepAliveInterval.get -> System.TimeSpan
+Zorg.Ssh.SshClientOptions.KeepAliveInterval.init -> void
 Zorg.Ssh.SshClientOptions.LoggerFactory.get -> Microsoft.Extensions.Logging.ILoggerFactory?
 Zorg.Ssh.SshClientOptions.LoggerFactory.init -> void
 Zorg.Ssh.SshClientOptions.MaxCommandOutputBytes.get -> int
@@ -412,6 +416,10 @@ Zorg.Ssh.SshServerOptions.DirectTcpHandler.get -> System.Func<Zorg.Ssh.SshDirect
 Zorg.Ssh.SshServerOptions.DirectTcpHandler.init -> void
 Zorg.Ssh.SshServerOptions.HostKeys.get -> System.Collections.Generic.IReadOnlyList<Zorg.Ssh.SshHostKey!>!
 Zorg.Ssh.SshServerOptions.HostKeys.init -> void
+Zorg.Ssh.SshServerOptions.KeepAliveCountMax.get -> int
+Zorg.Ssh.SshServerOptions.KeepAliveCountMax.init -> void
+Zorg.Ssh.SshServerOptions.KeepAliveInterval.get -> System.TimeSpan
+Zorg.Ssh.SshServerOptions.KeepAliveInterval.init -> void
 Zorg.Ssh.SshServerOptions.LoggerFactory.get -> Microsoft.Extensions.Logging.ILoggerFactory?
 Zorg.Ssh.SshServerOptions.LoggerFactory.init -> void
 Zorg.Ssh.SshServerOptions.LoginGraceTime.get -> System.TimeSpan

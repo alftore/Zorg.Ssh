@@ -47,6 +47,8 @@ SshClientOptions options = new()
 | `Port` | 22 | The TCP port. |
 | `Credentials` | none | Tried in order. See below. |
 | `ConnectTimeout` | 30 seconds | One limit for TCP connect, key exchange and login together. |
+| `KeepAliveInterval` | 30 seconds | How long the connection can be silent before a probe goes out. `TimeSpan.Zero` turns it off. See [Keepalive](#keepalive). |
+| `KeepAliveCountMax` | 3 | How many more silent intervals end the connection. |
 | `MaxCommandOutputBytes` | 64 MiB | The most `ExecuteAsync` keeps per stream before it fails. |
 | `BannerHandler` | none | Receives the server's login banner. The server chooses that text. |
 | `LoggerFactory` | none | A standard `ILoggerFactory`. Secrets aren't logged. |
@@ -217,6 +219,35 @@ catch (OperationCanceledException)
 ```
 
 Closing a channel doesn't reliably stop a remote command. What happens to it is up to the server.
+
+### Keepalive
+
+Keepalive notices a server that has gone, so a call with no token doesn't wait for ever. It's on by default, and it starts after login.
+
+```csharp
+SshClientOptions options = new()
+{
+    Host = "example.com",
+    UserName = "alice",
+    Credentials = [SshCredential.FromPassword(password)],
+    HostKeyPolicy = HostKeyPolicy.Fingerprint(knownFingerprint),
+    KeepAliveInterval = TimeSpan.FromSeconds(15),
+    KeepAliveCountMax = 4,
+};
+```
+
+- If nothing arrives for one interval, the client sends a `keepalive@openssh.com` request. Any packet counts as an answer, so a busy connection sends no probes.
+- Only one probe is out at a time. After it, `KeepAliveCountMax` more silent intervals end the connection. With the defaults that's 2 minutes of silence.
+- A server that keeps sending but has stopped reading is never silent. So one socket write that doesn't finish within the interval times the count also ends the connection. With the defaults that's 90 seconds, or up to one interval more.
+- No probe goes out during a rekey, because nothing but the rekey can. Silence still counts. A live rekey sends packets, and each one restarts the count.
+- The connection fails with `SshConnectionException`, and everything waiting on it wakes: commands, stream reads and writes, SFTP calls and forwards. Connect again to continue.
+- `TimeSpan.Zero` turns all of this off. The interval can be 1 second to 1 day, and the count 1 to 1000.
+
+A zero window isn't a dead server. If the server answers probes but grants no window, the connection stays up, and a write waits. Pass that writer its own token.
+
+Keepalive doesn't limit a command either: `sleep 3600` runs for an hour while the server answers. And a server that sends a packet in every interval stays connected, whatever else it's doing.
+
+The probe waits behind data already queued. On a very slow link that's busy sending, it might not get through in time, so raise the interval there.
 
 ## Processes
 

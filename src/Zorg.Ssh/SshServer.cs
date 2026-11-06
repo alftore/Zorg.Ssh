@@ -64,6 +64,9 @@ public sealed partial class SshServer : IAsyncDisposable
             Role = SshRole.Server,
             HostKeys = [.. options.HostKeys.Select(k => k.Key)],
             HandshakeTimeout = options.LoginGraceTime,
+            KeepAliveInterval = options.KeepAliveInterval,
+            KeepAliveCountMax = options.KeepAliveCountMax,
+            TimeProvider = options.TimeProvider,
             KexAlgorithms = options.Algorithms.KeyExchange,
             HostKeyAlgorithms = options.Algorithms.HostKeys,
             Ciphers = options.Algorithms.Ciphers,
@@ -95,6 +98,7 @@ public sealed partial class SshServer : IAsyncDisposable
         }
 
         options.Algorithms.Validate();
+        TransportOptions.ValidateKeepAlive(options.KeepAliveInterval, options.KeepAliveCountMax);
         if (options.PasswordHandler is null && options.PublicKeyHandler is null)
         {
             throw new ArgumentException("Set PasswordHandler or PublicKeyHandler, or nobody can log in.", nameof(options));
