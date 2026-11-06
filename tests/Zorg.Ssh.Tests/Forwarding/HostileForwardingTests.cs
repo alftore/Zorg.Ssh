@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Net.Sockets;
 using System.Text;
@@ -570,6 +571,7 @@ public sealed class HostileForwardingTests
     {
         using SshHostKey hostKey = SshHostKey.GenerateEd25519();
         TaskCompletionSource decide = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCompletionSource entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
         await using SshServer sshServer = await SshServer.StartAsync(
             new SshServerOptions
             {
@@ -578,6 +580,7 @@ public sealed class HostileForwardingTests
                 SessionHandler = static (_, _) => Task.FromResult(0),
                 DirectTcpHandler = async (_, ct) =>
                 {
+                    entered.TrySetResult();
                     await decide.Task.WaitAsync(ct);
                     return SshForwardDecision.Deny;
                 },
@@ -604,6 +607,20 @@ public sealed class HostileForwardingTests
             }),
             Ct);
 
+        // The open is waiting on the handler, and the connection is still healthy. Without this, a connection
+        // that died on the open itself would pass the rest of the test for the wrong reason.
+        await entered.Task.WaitAsync(Limit, Ct);
+        await transport.SendAsync(
+            Message(static w =>
+            {
+                w.Byte(MessageNumber.GlobalRequest);
+                w.String("ping@zorg");
+                w.Bool(true);
+            }),
+            Ct);
+        ReadOnlyMemory<byte> pong = await transport.ReceiveAsync(Ct).AsTask().WaitAsync(Limit, Ct);
+        Assert.Equal(MessageNumber.RequestFailure, pong.Span[0]);
+
         // Channel 0 is the first id the server would hand out.
         await transport.SendAsync(
             Message(static w =>
@@ -614,13 +631,23 @@ public sealed class HostileForwardingTests
             }),
             Ct);
 
-        await Assert.ThrowsAnyAsync<SshException>(async () =>
+        // The connection layer ends it, so the wire reason is "by application", with the text "closed". Nothing
+        // for the open comes first: it is neither confirmed nor refused, and no data reaches the handler's channel.
+        List<byte> seen = [];
+        SshDisconnectedException disconnect = await Assert.ThrowsAsync<SshDisconnectedException>(async () =>
         {
             while (true)
             {
-                await transport.ReceiveAsync(Ct).AsTask().WaitAsync(Limit, Ct);
+                ReadOnlyMemory<byte> reply = await transport.ReceiveAsync(Ct).AsTask().WaitAsync(Limit, Ct);
+                seen.Add(reply.Span[0]);
             }
         });
+        Assert.Equal(11u, disconnect.ReasonCode);
+        Assert.Equal("closed", disconnect.Description);
+        Assert.DoesNotContain(MessageNumber.ChannelOpenConfirmation, seen);
+        Assert.DoesNotContain(MessageNumber.ChannelOpenFailure, seen);
+        Assert.DoesNotContain(MessageNumber.ChannelData, seen);
+        Assert.False(decide.Task.IsCompleted);
         decide.SetResult();
     }
 

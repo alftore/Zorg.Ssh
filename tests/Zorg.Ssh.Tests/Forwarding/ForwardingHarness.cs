@@ -22,8 +22,14 @@ internal sealed class TcpService : IAsyncDisposable
     private readonly Task _loop;
     private int _accepted;
 
-    public TcpService(Func<NetworkStream, CancellationToken, Task> handler)
+    public TcpService(Func<NetworkStream, CancellationToken, Task> handler, int? receiveBufferSize = null)
     {
+        if (receiveBufferSize is { } size)
+        {
+            // Set before listening, so accepted sockets start with a small window and the sender soon blocks.
+            _listener.Server.ReceiveBufferSize = size;
+        }
+
         _listener.Start();
         Port = ((IPEndPoint)_listener.LocalEndpoint).Port;
         _loop = Task.Run(() => AcceptAsync(handler));

@@ -299,22 +299,27 @@ public sealed class ForwardingReviewRegressionTests
     [Fact]
     public async Task Data_then_eof_then_close_all_reach_a_slow_local_reader()
     {
-        const int Chunks = 40;
+        // A whole window, so the relay's socket can't take it all while the local reader is stopped.
+        const int Chunks = 64;
         const int ChunkSize = 32768;
         TaskCompletionSource<long> total = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        await using TcpService target = new(async (stream, ct) =>
-        {
-            await Task.Delay(500, ct);
-            byte[] buffer = new byte[65536];
-            long sum = 0;
-            int read;
-            while ((read = await stream.ReadAsync(buffer, ct)) != 0)
+        TaskCompletionSource release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using TcpService target = new(
+            async (stream, ct) =>
             {
-                sum += read;
-            }
+                // Reads nothing until the test lets it, which is after the channel has closed. No timing involved.
+                await release.Task.WaitAsync(ct);
+                byte[] buffer = new byte[65536];
+                long sum = 0;
+                int read;
+                while ((read = await stream.ReadAsync(buffer, ct)) != 0)
+                {
+                    sum += read;
+                }
 
-            total.TrySetResult(sum);
-        });
+                total.TrySetResult(sum);
+            },
+            receiveBufferSize: 4096);
         (ScriptedServer server, SshClient client) = await ConnectAsync(Ct);
         await using (server)
         await using (client)
@@ -356,6 +361,20 @@ public sealed class ForwardingReviewRegressionTests
                 }),
                 Ct);
 
+            // The client answers a CLOSE with its own once its channel has closed. Credit is only sent when the relay
+            // has read half the window, so none before that answer means most of the data is still in the channel,
+            // unread, while the channel is closed. That is the case where the relay has to drain.
+            while (true)
+            {
+                byte number = (await server.NextAsync(Ct))[0];
+                Assert.NotEqual(MessageNumber.ChannelWindowAdjust, number);
+                if (number == MessageNumber.ChannelClose)
+                {
+                    break;
+                }
+            }
+
+            release.SetResult();
             Assert.Equal((long)Chunks * ChunkSize, await total.Task.WaitAsync(Limit, Ct));
         }
     }
