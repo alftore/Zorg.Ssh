@@ -162,9 +162,11 @@ internal sealed class SshConnection : IAsyncDisposable
 
     /// <summary>
     /// Confirms a channel the peer opened, and returns it. Until now it had no local id, so nothing the peer
-    /// sends can reach it early. A failure here ends only this open.
+    /// sends can reach it early. A failure here ends only this open. If <paramref name="cancellationToken"/> ends
+    /// first, the confirmation was never queued, so the channel slot is freed and the peer's open is refused
+    /// instead, because the peer is still waiting for an answer.
     /// </summary>
-    public async Task<SshChannel> AcceptIncomingAsync(IncomingChannelOpen open)
+    public async Task<SshChannel> AcceptIncomingAsync(IncomingChannelOpen open, CancellationToken cancellationToken)
     {
         SshChannel? channel = null;
         lock (_gate)
@@ -182,7 +184,7 @@ internal sealed class SshConnection : IAsyncDisposable
 
         if (channel is null)
         {
-            await RefuseIncomingAsync(open, OpenFailureResourceShortage, "too many channels").ConfigureAwait(false);
+            await RefuseIncomingAsync(open, OpenFailureResourceShortage, "too many channels", cancellationToken).ConfigureAwait(false);
             throw new SshException("Too many channels are open on this connection, so a forwarded connection was refused.");
         }
 
@@ -192,11 +194,12 @@ internal sealed class SshConnection : IAsyncDisposable
         {
             channel.SetRemote(open.RemoteId, open.Window, open.MaxPacket);
             WriteConfirmation(ref writer, open.RemoteId, channel.LocalId);
-            send = SendAsync(writer.Written, _stopToken);
+            send = SendAsync(writer.Written, cancellationToken);
         }
-        catch
+        catch (Exception ex)
         {
             Forget(channel);
+            OweRefusalOnCancel(ex, open, cancellationToken);
             throw;
         }
         finally
@@ -208,31 +211,66 @@ internal sealed class SshConnection : IAsyncDisposable
         {
             await send.ConfigureAwait(false);
         }
-        catch
+        catch (Exception ex)
         {
             Forget(channel);
+            OweRefusalOnCancel(ex, open, cancellationToken);
             throw;
         }
 
         return channel;
     }
 
-    /// <summary>Refuses a channel the peer opened. It goes through the send queue, so it isn't for the receive loop.</summary>
-    public async ValueTask RefuseIncomingAsync(IncomingChannelOpen open, int reason, string text)
+    /// <summary>
+    /// Refuses a channel the peer opened. It goes through the send queue, so it isn't for the receive loop.
+    /// If <paramref name="cancellationToken"/> ends first, the refusal wasn't queued and the peer is still waiting,
+    /// so it goes out in the background, bound to the connection, and this returns without throwing.
+    /// </summary>
+    public async ValueTask RefuseIncomingAsync(IncomingChannelOpen open, int reason, string text, CancellationToken cancellationToken)
     {
-        ValueTask send;
+        try
+        {
+            await SendRefusalAsync(open, reason, text, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested && !_stopToken.IsCancellationRequested)
+        {
+            _ = RefuseInBackgroundAsync(open, reason, text);
+        }
+    }
+
+    private ValueTask SendRefusalAsync(IncomingChannelOpen open, int reason, string text, CancellationToken cancellationToken)
+    {
         SshWriter writer = new(64);
         try
         {
             WriteOpenFailure(ref writer, open.RemoteId, reason, text);
-            send = SendAsync(writer.Written, _stopToken);
+            return SendAsync(writer.Written, cancellationToken);
         }
         finally
         {
             writer.Dispose();
         }
+    }
 
-        await send.ConfigureAwait(false);
+    /// <summary>A cancelled confirmation never reached the peer, which still waits for an answer.</summary>
+    private void OweRefusalOnCancel(Exception ex, IncomingChannelOpen open, CancellationToken cancellationToken)
+    {
+        if (ex is OperationCanceledException && cancellationToken.IsCancellationRequested && !_stopToken.IsCancellationRequested)
+        {
+            _ = RefuseInBackgroundAsync(open, OpenFailureConnectFailed, "cancelled");
+        }
+    }
+
+    private async Task RefuseInBackgroundAsync(IncomingChannelOpen open, int reason, string text)
+    {
+        try
+        {
+            await SendRefusalAsync(open, reason, text, _stopToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is OperationCanceledException or SshException)
+        {
+            // The connection is ending, and the peer's open goes with it.
+        }
     }
 
     /// <summary>

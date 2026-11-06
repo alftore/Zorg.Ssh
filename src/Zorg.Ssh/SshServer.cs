@@ -432,14 +432,14 @@ public sealed partial class SshServer : IAsyncDisposable
             (Socket? target, int refusal) = await ConnectDirectTcpAsync(open, principal).ConfigureAwait(false);
             if (target is null)
             {
-                await connection.RefuseIncomingAsync(open, refusal, "refused").ConfigureAwait(false);
+                await connection.RefuseIncomingAsync(open, refusal, "refused", _stop.Token).ConfigureAwait(false);
                 return;
             }
 
             SshChannel channel;
             try
             {
-                channel = await connection.AcceptIncomingAsync(open).ConfigureAwait(false);
+                channel = await connection.AcceptIncomingAsync(open, _stop.Token).ConfigureAwait(false);
             }
             catch
             {

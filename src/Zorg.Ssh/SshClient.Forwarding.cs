@@ -404,14 +404,14 @@ public sealed partial class SshClient
         }
         catch (Exception ex) when (ex is SocketException or OperationCanceledException or ArgumentException)
         {
-            await _connection.RefuseIncomingAsync(open, SshConnection.OpenFailureConnectFailed, "connect failed").ConfigureAwait(false);
+            await _connection.RefuseIncomingAsync(open, SshConnection.OpenFailureConnectFailed, "connect failed", cancellationToken).ConfigureAwait(false);
             return;
         }
 
         SshChannel channel;
         try
         {
-            channel = await _connection.AcceptIncomingAsync(open).ConfigureAwait(false);
+            channel = await _connection.AcceptIncomingAsync(open, cancellationToken).ConfigureAwait(false);
         }
         catch
         {
