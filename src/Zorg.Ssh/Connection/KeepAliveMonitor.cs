@@ -33,6 +33,7 @@ internal sealed class KeepAliveMonitor
     private readonly TimeSpan _interval;
     private readonly int _countMax;
     private readonly TimeSpan _stallLimit;
+    private volatile Task _probe = Task.CompletedTask;
     private int _probesSent;
     private int _probesAnswered;
 
@@ -52,11 +53,13 @@ internal sealed class KeepAliveMonitor
     /// <summary>Gets how many probes the peer has answered.</summary>
     public int ProbesAnswered => Volatile.Read(ref _probesAnswered);
 
+    /// <summary>Gets whether a probe is still out. Its task ends a moment after the reply, and until then no other goes.</summary>
+    public bool ProbeOutstanding => !_probe.IsCompleted;
+
     /// <summary>Runs until the connection ends. If it decides the peer has gone, that's what ends it.</summary>
     public async Task RunAsync(CancellationToken stop)
     {
         CancellationTokenSource? sendLimit = null;
-        Task probe = Task.CompletedTask;
         long lastSeen = _transport.LastReceivedTimestamp;
         int silentIntervals = 0;
         TimeSpan wait = _interval;
@@ -66,7 +69,7 @@ internal sealed class KeepAliveMonitor
             {
                 // A send still waiting after an interval gives up, so a full queue can't hold the request line.
                 // Waking early is harmless: that means a packet came, and there's no need for the probe.
-                if (!probe.IsCompleted)
+                if (ProbeOutstanding)
                 {
                     await sendLimit!.CancelAsync().ConfigureAwait(false);
                 }
@@ -102,11 +105,11 @@ internal sealed class KeepAliveMonitor
                 }
 
                 // At most one in the line, or a peer that never replies would grow it.
-                if (probe.IsCompleted && !keyExchange)
+                if (!ProbeOutstanding && !keyExchange)
                 {
                     sendLimit?.Dispose();
                     sendLimit = new CancellationTokenSource();
-                    probe = ProbeAsync(sendLimit.Token);
+                    _probe = ProbeAsync(sendLimit.Token);
                 }
             }
         }

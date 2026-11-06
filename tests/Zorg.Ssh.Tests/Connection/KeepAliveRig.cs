@@ -440,7 +440,7 @@ internal sealed class KeepAliveRig : IAsyncDisposable
     {
         if ((AutoAnswer || AutoUnimplemented) && !Ended)
         {
-            await UntilAsync(() => Connection.PendingGlobalRequests == 0 || Ended);
+            await UntilAsync(() => (Connection.PendingGlobalRequests == 0 && !Monitor.ProbeOutstanding) || Ended);
         }
     }
 

@@ -195,7 +195,7 @@ public sealed class KeepAliveClientServerTests : IDisposable
         {
             await ElapseAsync(1, () => client.Connection.Ended.IsCompleted);
             int expected = i;
-            while (client.Connection.KeepAlive!.ProbesAnswered < expected)
+            while (client.Connection.KeepAlive!.ProbesAnswered < expected || client.Connection.KeepAlive.ProbeOutstanding)
             {
                 await Task.Delay(1, Ct);
             }
