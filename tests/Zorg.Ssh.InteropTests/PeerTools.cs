@@ -36,9 +36,13 @@ internal static class PeerTools
 
     public static void RequireContainers()
     {
-        if (!ContainerCli.IsAvailable)
+        try
         {
-            Missing<bool>("podman or docker");
+            _ = ContainerCli.Path;
+        }
+        catch (ContainerCliNotFoundException ex)
+        {
+            Missing<bool>($"a working podman or docker ({ex.Message})");
         }
     }
 

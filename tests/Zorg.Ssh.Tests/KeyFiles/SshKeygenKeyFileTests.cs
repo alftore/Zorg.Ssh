@@ -146,11 +146,18 @@ public class SshKeygenKeyFileTests
         Assert.Equal(SshKeyFile.LegacyPem, refused.Message);
     }
 
+    // OpenSSH 9.6 (Ubuntu 24.04) ignores -m PKCS8 for ed25519 and writes its own format. Newer releases write PKCS#8.
+    private static void SkipIfKeygenCannotWritePkcs8(GeneratedKey generated) =>
+        Assert.SkipWhen(
+            generated.PrivateText.Contains("BEGIN OPENSSH PRIVATE KEY", StringComparison.Ordinal),
+            "This ssh-keygen can't write PKCS#8 for this key type. It needs a newer OpenSSH.");
+
     [Theory]
     [MemberData(nameof(Pkcs8KeyTypes))]
     public void Pkcs8_keys_load_and_sign(string type, string? bits)
     {
         GeneratedKey generated = KeyFileTools.Generate(type, bits, format: "PKCS8");
+        SkipIfKeygenCannotWritePkcs8(generated);
         Assert.Contains("BEGIN PRIVATE KEY", generated.PrivateText, StringComparison.Ordinal);
 
         using SshPrivateKey key = SshKeyFile.Load(generated.PrivateText);
@@ -162,6 +169,7 @@ public class SshKeygenKeyFileTests
     public void Encrypted_pkcs8_keys_load_and_sign(string type, string? bits)
     {
         GeneratedKey generated = KeyFileTools.Generate(type, bits, format: "PKCS8", passphrase: KeyFileTools.Passphrase);
+        SkipIfKeygenCannotWritePkcs8(generated);
         Assert.Contains("BEGIN ENCRYPTED PRIVATE KEY", generated.PrivateText, StringComparison.Ordinal);
 
         using SshPrivateKey key = SshKeyFile.Load(generated.PrivateText, KeyFileTools.Passphrase);

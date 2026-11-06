@@ -3,6 +3,7 @@
 FROM mcr.microsoft.com/dotnet/sdk:10.0-noble
 RUN apt-get update \
  && apt-get install -y --no-install-recommends openssh-client openssh-server podman-remote clang zlib1g-dev \
+ && ln -s /usr/bin/podman-remote /usr/local/bin/podman \
  && rm -rf /var/lib/apt/lists/*
 ENV DOTNET_NOLOGO=1 \
     DOTNET_CLI_TELEMETRY_OPTOUT=1 \

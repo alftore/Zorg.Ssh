@@ -35,8 +35,22 @@ public class OpenSshClientTests
     [MemberData(nameof(Kex))]
     public async Task Ssh_completes_each_key_exchange_with_our_server(string kex)
     {
+        Assert.SkipUnless(SshSupportsKex(kex), $"This OpenSSH client doesn't have {kex}.");
         string log = await RunAsync(["-o", $"KexAlgorithms={kex}"]);
         Assert.Contains($"kex: algorithm: {kex}", log);
+    }
+
+    // An older ssh, such as 9.6 on Ubuntu 24.04, refuses a method it doesn't know before it connects, so the test would only time out.
+    private static bool SshSupportsKex(string kex)
+    {
+        ProcessStartInfo start = new(PeerTools.RequireSshClient()) { RedirectStandardOutput = true, RedirectStandardInput = true };
+        start.ArgumentList.Add("-Q");
+        start.ArgumentList.Add("kex");
+        using Process process = Process.Start(start)!;
+        process.StandardInput.Close();
+        string[] supported = process.StandardOutput.ReadToEnd().Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        process.WaitForExit();
+        return Array.IndexOf(supported, kex) >= 0;
     }
 
     [Theory]
