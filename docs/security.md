@@ -40,6 +40,7 @@ Guarantee 4 has limits you should know about:
 | Server address | Loopback |
 | Server limits | See [server.md](server.md#limits) |
 | Unauthenticated connections per source address | 5, counted by IPv4 address or IPv6 /64 |
+| Idle logged-in connection (no open channel) | Not closed by default. `IdleTimeout` sets it |
 
 Strict key exchange, the fix for Terrapin, is used whenever the peer supports it. Against an old server without it, the connection goes ahead without that protection.
 

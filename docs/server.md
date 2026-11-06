@@ -183,6 +183,7 @@ SshServerOptions options = new()
     MaxUnauthenticatedConnections = 10,
     MaxUnauthenticatedPerAddress = 3,
     LoginGraceTime = TimeSpan.FromSeconds(15),
+    IdleTimeout = TimeSpan.FromMinutes(10),
     MaxAuthAttempts = 3,
     MaxSessionsPerConnection = 4,
 };
@@ -194,9 +195,12 @@ SshServerOptions options = new()
 | `MaxUnauthenticatedConnections` | 20 | The most connections not yet logged in, so idle ones can't crowd out real users. |
 | `MaxUnauthenticatedPerAddress` | 5 | The most connections not yet logged in that one source address may hold, so one address can't take every unauthenticated slot. See below. |
 | `LoginGraceTime` | 30 seconds | The time allowed to log in. |
+| `IdleTimeout` | none | How long a logged-in connection may have no open channel before the server closes it. See below. |
 | `MaxAuthAttempts` | 6 | Failed attempts allowed per connection. |
 | `MaxSessionsPerConnection` | 10 | The most sessions on one connection. |
 
 `MaxUnauthenticatedPerAddress` counts by the source address of the accepted socket, before anything is read. An IPv4-mapped IPv6 address (`::ffff:192.0.2.7`) counts as its IPv4 address, and IPv6 addresses count together by /64 prefix, because one host commonly owns a whole /64. A connection over the limit is closed at once, like one over `MaxConnections`. The count is given back when the connection logs in, fails to, runs out of `LoginGraceTime`, or ends, so a client that logs in leaves room for the next. Clients behind one NAT share an address, so raise the limit for a gateway that fronts many users. It doesn't apply to `ServeStreamAsync`, which has no address, and there are no penalties for repeat failures or random early drop as in OpenSSH's `MaxStartups`: an attacker with many addresses is still bounded only by `MaxUnauthenticatedConnections`.
+
+`IdleTimeout` is like OpenSSH's `UnusedConnectionTimeout`. It starts when the client logs in, and runs only while the connection has no open channel: a session or a direct-tcpip forward that is still open, including one whose handler is still running, stops the clock. Opening a channel resets it, and it starts again from zero when the last channel closes. Keepalive traffic doesn't count as activity, so a client that only answers keepalives is still closed. The server sends a polite DISCONNECT and logs the close at `Information` level. The server never accepts remote forwards, so there is no listener that could count as use. It must be above zero.
 
 `Banner` is text sent to clients before login. `LoggerFactory` takes a standard `ILoggerFactory`, and passwords and keys aren't logged.

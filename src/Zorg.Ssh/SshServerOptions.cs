@@ -312,6 +312,24 @@ public sealed class SshServerOptions
     /// </example>
     public int MaxUnauthenticatedPerAddress { get; init; } = 5;
 
+    /// <summary>
+    /// Gets how long a logged-in connection may have no open channel before the server closes it, like OpenSSH's
+    /// <c>UnusedConnectionTimeout</c>. Null, the default, means never. Opening a channel resets it, and the clock
+    /// restarts when the last channel closes. Keepalive traffic doesn't count as activity. Must be above zero.
+    /// </summary>
+    /// <example>
+    /// <code>
+    /// SshServerOptions options = new()
+    /// {
+    ///     HostKeys = [hostKey],
+    ///     PasswordHandler = handler,
+    ///     SessionHandler = RunSessionAsync,
+    ///     IdleTimeout = TimeSpan.FromMinutes(10),
+    /// };
+    /// </code>
+    /// </example>
+    public TimeSpan? IdleTimeout { get; init; }
+
     /// <summary>Gets the time allowed to log in. The default is 30 seconds.</summary>
     public TimeSpan LoginGraceTime { get; init; } = TimeSpan.FromSeconds(30);
 

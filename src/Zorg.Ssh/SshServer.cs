@@ -51,13 +51,15 @@ public sealed partial class SshServer : IAsyncDisposable
     private readonly TransportOptions _transportOptions;
     private int _connectionCount;
     private readonly PerAddressLimiter _perAddress;
+    private readonly TimeProvider _idleTime;
     private int _unauthenticatedCount;
     private int _disposed;
     private Task? _acceptLoop;
 
-    private SshServer(SshServerOptions options, TcpListener listener)
+    private SshServer(SshServerOptions options, TcpListener listener, TimeProvider idleTime)
     {
         _options = options;
+        _idleTime = idleTime;
         _perAddress = new PerAddressLimiter(options.MaxUnauthenticatedPerAddress);
         _listener = listener;
         _logger = options.LoggerFactory?.CreateLogger<SshServer>() ?? NullLogger<SshServer>.Instance;
@@ -91,6 +93,10 @@ public sealed partial class SshServer : IAsyncDisposable
     /// </code>
     /// </example>
     public static Task<SshServer> StartAsync(SshServerOptions options, CancellationToken cancellationToken = default)
+        => StartWithClockAsync(options, TimeProvider.System, cancellationToken);
+
+    /// <summary>Starts listening with a time source for the idle timeout, so tests don't have to sleep.</summary>
+    internal static Task<SshServer> StartWithClockAsync(SshServerOptions options, TimeProvider idleTime, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(options);
         cancellationToken.ThrowIfCancellationRequested();
@@ -110,9 +116,14 @@ public sealed partial class SshServer : IAsyncDisposable
             throw new ArgumentOutOfRangeException(nameof(options), options.MaxUnauthenticatedPerAddress, "MaxUnauthenticatedPerAddress must be at least 1, or nobody can log in.");
         }
 
+        if (options.IdleTimeout is { } idle && idle <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(nameof(options), idle, "IdleTimeout must be above zero. Leave it null for no idle timeout.");
+        }
+
         TcpListener listener = new(options.Address, options.Port);
         listener.Start();
-        SshServer server = new(options, listener);
+        SshServer server = new(options, listener, idleTime);
         server._acceptLoop = Task.Run(server.AcceptLoopAsync, CancellationToken.None);
         return Task.FromResult(server);
     }
@@ -175,6 +186,9 @@ public sealed partial class SshServer : IAsyncDisposable
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Refused a connection: limit reached")]
     private static partial void LogLimitReached(ILogger logger);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Closed a connection with no open channel for {IdleTimeout}")]
+    private static partial void LogIdleClosed(ILogger logger, TimeSpan idleTimeout);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "A session handler ignored cancellation during shutdown")]
     private static partial void LogShutdownTimedOut(ILogger logger);
@@ -460,22 +474,73 @@ public sealed partial class SshServer : IAsyncDisposable
     private async Task ServeChannelsAsync(SshConnection connection, SshPrincipal principal)
     {
         List<Task> sessions = [];
+        IdleMonitor? idle = _options.IdleTimeout is { } timeout ? new IdleMonitor(timeout, _idleTime) : null;
+
+        // Ends the accept loop below, either because the server is stopping or because the connection sat idle.
+        using CancellationTokenSource ended = CancellationTokenSource.CreateLinkedTokenSource(_stop.Token);
+#pragma warning disable CA2025 // The finally block below awaits the watcher before the source is disposed.
+        Task watcher = CloseWhenIdleAsync(idle, ended);
+#pragma warning restore CA2025
         try
         {
-            await foreach (IncomingChannelOpen open in connection.IncomingChannels.ReadAllAsync(_stop.Token).ConfigureAwait(false))
+            try
             {
-                sessions.Add(open.Channel is { } channel
-                    ? Task.Run(() => ServeSessionAsync(connection, channel, principal), CancellationToken.None)
-                    : Task.Run(() => ServeDirectTcpAsync(connection, open, principal), CancellationToken.None));
-                sessions.RemoveAll(static s => s.IsCompleted);
+                await foreach (IncomingChannelOpen open in connection.IncomingChannels.ReadAllAsync(ended.Token).ConfigureAwait(false))
+                {
+                    idle?.ChannelOpened();
+                    sessions.Add(open.Channel is { } channel
+                        ? Task.Run(() => RunCountedAsync(idle, () => ServeSessionAsync(connection, channel, principal)), CancellationToken.None)
+                        : Task.Run(() => RunCountedAsync(idle, () => ServeDirectTcpAsync(connection, open, principal)), CancellationToken.None));
+                    sessions.RemoveAll(static s => s.IsCompleted);
+                }
             }
+            catch (OperationCanceledException)
+            {
+                // The server is stopping, or the connection was idle.
+            }
+
+            await Task.WhenAll(sessions).ConfigureAwait(false);
+        }
+        finally
+        {
+            await ended.CancelAsync().ConfigureAwait(false);
+            await watcher.ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>Runs one channel's work and tells the idle clock when it ends, however it ends.</summary>
+    private static async Task RunCountedAsync(IdleMonitor? idle, Func<Task> work)
+    {
+        try
+        {
+            await work().ConfigureAwait(false);
+        }
+        finally
+        {
+            idle?.ChannelClosed();
+        }
+    }
+
+    private async Task CloseWhenIdleAsync(IdleMonitor? idle, CancellationTokenSource ended)
+    {
+        if (idle is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await idle.WaitForIdleAsync(ended.Token).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
-            // The server is stopping.
+            return;
         }
 
-        await Task.WhenAll(sessions).ConfigureAwait(false);
+        LogIdleClosed(_logger, _options.IdleTimeout!.Value);
+
+        // The connection is disposed after this, which sends the DISCONNECT.
+        await ended.CancelAsync().ConfigureAwait(false);
     }
 
     /// <summary>

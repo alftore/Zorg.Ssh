@@ -426,6 +426,8 @@ Zorg.Ssh.SshServerOptions.MaxUnauthenticatedConnections.get -> int
 Zorg.Ssh.SshServerOptions.MaxUnauthenticatedConnections.init -> void
 Zorg.Ssh.SshServerOptions.MaxUnauthenticatedPerAddress.get -> int
 Zorg.Ssh.SshServerOptions.MaxUnauthenticatedPerAddress.init -> void
+Zorg.Ssh.SshServerOptions.IdleTimeout.get -> System.TimeSpan?
+Zorg.Ssh.SshServerOptions.IdleTimeout.init -> void
 Zorg.Ssh.SshServerOptions.PasswordHandler.get -> System.Func<Zorg.Ssh.SshPasswordRequest!, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask<Zorg.Ssh.SshAuthDecision>>?
 Zorg.Ssh.SshServerOptions.PasswordHandler.init -> void
 Zorg.Ssh.SshServerOptions.Port.get -> int

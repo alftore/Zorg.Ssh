@@ -102,6 +102,7 @@ internal static class ServerExamples
             MaxUnauthenticatedConnections = 10,
             MaxUnauthenticatedPerAddress = 3,
             LoginGraceTime = TimeSpan.FromSeconds(15),
+            IdleTimeout = TimeSpan.FromMinutes(10),
             MaxAuthAttempts = 3,
             MaxSessionsPerConnection = 4,
         };
