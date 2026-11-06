@@ -271,6 +271,7 @@ internal sealed class KeepAliveRig : IAsyncDisposable
     private readonly Task _reading;
     private readonly CancellationToken _token;
     private int _requestsSeen;
+    private uint _lastRequestSequence;
 
     private KeepAliveRig(ManualClock clock, FaultStream link, FaultStream peerLink, SshConnection connection, SshTransport peer, CancellationToken token)
     {
@@ -297,6 +298,12 @@ internal sealed class KeepAliveRig : IAsyncDisposable
 
     /// <summary>Gets or sets whether the peer answers every global request at once, as OpenSSH does.</summary>
     public bool AutoAnswer { get; set; }
+
+    /// <summary>Gets or sets whether the peer answers every global request with UNIMPLEMENTED, as a build without them does.</summary>
+    public bool AutoUnimplemented { get; set; }
+
+    /// <summary>Gets the sequence number of the last global request the peer received.</summary>
+    public uint LastRequestSequence => Volatile.Read(ref _lastRequestSequence);
 
     /// <summary>Gets how many global requests the peer has received.</summary>
     public int RequestsSeen => Volatile.Read(ref _requestsSeen);
@@ -365,6 +372,15 @@ internal sealed class KeepAliveRig : IAsyncDisposable
     public Task AnswerAsync(byte number, params byte[] data) =>
         Peer.SendAsync([number, .. data], _token).AsTask();
 
+    /// <summary>Sends an UNIMPLEMENTED naming <paramref name="sequence"/>.</summary>
+    public Task UnimplementedAsync(uint sequence)
+    {
+        byte[] payload = new byte[5];
+        payload[0] = MessageNumber.Unimplemented;
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(payload.AsSpan(1), sequence);
+        return Peer.SendAsync(payload, _token).AsTask();
+    }
+
     /// <summary>Sends an IGNORE, and waits for it to reach the connection, so the clock can't run ahead of it.</summary>
     public async Task PeerSpeaksAsync()
     {
@@ -412,7 +428,7 @@ internal sealed class KeepAliveRig : IAsyncDisposable
 
     private async Task SettleAsync()
     {
-        if (AutoAnswer && !Ended)
+        if ((AutoAnswer || AutoUnimplemented) && !Ended)
         {
             await UntilAsync(() => Connection.PendingGlobalRequests == 0 || Ended);
         }
@@ -431,9 +447,14 @@ internal sealed class KeepAliveRig : IAsyncDisposable
                         SshReader request = new(message.Span);
                         request.ReadByte();
                         string name = request.ReadUtf8String();
+                        Volatile.Write(ref _lastRequestSequence, Peer.LastReceivedSequence);
                         Interlocked.Increment(ref _requestsSeen);
                         _globalRequests.Writer.TryWrite(name);
-                        if (AutoAnswer)
+                        if (AutoUnimplemented)
+                        {
+                            Peer.SendUnimplementedForLastPacket();
+                        }
+                        else if (AutoAnswer)
                         {
                             Peer.SendControl([MessageNumber.RequestFailure]);
                         }

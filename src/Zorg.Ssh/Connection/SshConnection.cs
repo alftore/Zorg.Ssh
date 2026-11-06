@@ -66,6 +66,7 @@ internal sealed class SshConnection : IAsyncDisposable
 
         // Kept apart from the source, which is gone by the time a late accept might ask for it.
         _stopToken = _stop.Token;
+        _transport.UnimplementedHandler = HandleUnimplemented;
     }
 
     /// <summary>Gets or sets whether the peer may open session channels. A client leaves this off.</summary>
@@ -303,7 +304,7 @@ internal sealed class SshConnection : IAsyncDisposable
 
     /// <summary>
     /// Sends a global request that wants a reply, and returns once it's on its way. The task it returns ends with
-    /// the data of a success reply, or null for a failure. If nobody awaits that task, the request still holds its
+    /// the data of a success reply, or null for a failure, which includes a peer that answers UNIMPLEMENTED. If nobody awaits that task, the request still holds its
     /// place in the line, so later replies still find their own requests.
     /// <paramref name="onReply"/> runs in the receive loop before the task completes, so whatever it does happens
     /// before the next message is read. It must not wait.
@@ -348,7 +349,7 @@ internal sealed class SshConnection : IAsyncDisposable
 
             try
             {
-                await SendAsync(payload, cancellationToken).ConfigureAwait(false);
+                await _transport.SendAsync(payload, cancellationToken, pending.Sent).ConfigureAwait(false);
             }
             catch
             {
@@ -645,7 +646,39 @@ internal sealed class SshConnection : IAsyncDisposable
             _globalRequests.RemoveFirst();
         }
 
-        byte[]? reply = message[0] == MessageNumber.RequestSuccess ? message[1..].ToArray() : null;
+        Complete(pending, message[0] == MessageNumber.RequestSuccess ? message[1..].ToArray() : null);
+    }
+
+    /// <summary>
+    /// A peer that doesn't know global requests answers UNIMPLEMENTED, naming the packet's sequence number. That's a
+    /// failure reply for that request, and for no other. A number that matches nothing is dropped, so a flood costs
+    /// one walk of a bounded line each. Numbers repeat after a strict rekey's reset or a wrap, but a peer answers in
+    /// order, so the oldest match is the right one. A request still queued has no number, and can't be named.
+    /// </summary>
+    private void HandleUnimplemented(uint sequence)
+    {
+        PendingGlobalRequest? pending = null;
+        lock (_gate)
+        {
+            for (LinkedListNode<PendingGlobalRequest>? node = _globalRequests.First; node is not null; node = node.Next)
+            {
+                if (node.Value.Sent.Is(sequence))
+                {
+                    pending = node.Value;
+                    _globalRequests.Remove(node);
+                    break;
+                }
+            }
+        }
+
+        if (pending is not null)
+        {
+            Complete(pending, null);
+        }
+    }
+
+    private static void Complete(PendingGlobalRequest pending, byte[]? reply)
+    {
         try
         {
             pending.OnReply?.Invoke(reply);
@@ -972,6 +1005,9 @@ internal sealed record IncomingChannelOpen(string Type, uint RemoteId, uint Wind
 internal sealed class PendingGlobalRequest(Action<byte[]?>? onReply)
 {
     public Action<byte[]?>? OnReply { get; } = onReply;
+
+    /// <summary>Gets the sequence number the request went out with, which is how an UNIMPLEMENTED names it.</summary>
+    public SentSequence Sent { get; } = new();
 
     public TaskCompletionSource<byte[]?> Reply { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 }

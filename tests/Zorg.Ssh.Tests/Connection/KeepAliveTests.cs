@@ -162,6 +162,221 @@ public class KeepAliveTests
         Assert.Equal(0, rig.Connection.PendingGlobalRequests);
     }
 
+    [Theory]
+    [MemberData(nameof(Roles))]
+    public async Task A_peer_answering_unimplemented_stays_connected_and_probing_continues(bool asClient)
+    {
+        await using KeepAliveRig rig = await KeepAliveRig.StartAsync(Role(asClient), Ct);
+        rig.AutoUnimplemented = true;
+
+        await rig.IntervalsAsync(20);
+
+        Assert.False(rig.Ended);
+        Assert.Equal(20, rig.RequestsSeen);
+        Assert.Equal(20, rig.Monitor.ProbesAnswered);
+        Assert.Equal(0, rig.Connection.PendingGlobalRequests);
+    }
+
+    [Fact]
+    public async Task A_callers_request_gets_its_own_failure_from_such_a_peer()
+    {
+        await using KeepAliveRig rig = await KeepAliveRig.StartAsync(SshRole.Client, Ct);
+        rig.AutoUnimplemented = true;
+        await rig.IntervalsAsync(2);
+
+        Task<byte[]?> reply = await rig.Connection.StartGlobalRequestAsync("tcpip-forward", [], null, Ct);
+
+        Assert.Null(await reply.WaitAsync(Limit, Ct));
+        Assert.Equal(0, rig.Connection.PendingGlobalRequests);
+    }
+
+    [Fact]
+    public async Task Unimplemented_runs_the_callers_reply_action_as_a_failure()
+    {
+        await using KeepAliveRig rig = await KeepAliveRig.StartAsync(SshRole.Client, Ct);
+        rig.AutoUnimplemented = true;
+        TaskCompletionSource<byte[]?> seen = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        Task<byte[]?> reply = await rig.Connection.StartGlobalRequestAsync("tcpip-forward", [], r => seen.TrySetResult(r), Ct);
+
+        Assert.Null(await reply.WaitAsync(Limit, Ct));
+        Assert.Null(await seen.Task.WaitAsync(Limit, Ct));
+    }
+
+    [Fact]
+    public async Task A_callers_request_after_an_unimplemented_probe_gets_its_own_reply()
+    {
+        await using KeepAliveRig rig = await KeepAliveRig.StartAsync(SshRole.Client, Ct);
+
+        await rig.IntervalsAsync(1);
+        Assert.Equal(KeepAliveMonitor.RequestName, await rig.NextGlobalRequestAsync());
+        uint probe = rig.LastRequestSequence;
+
+        Task<byte[]?> reply = await rig.Connection.StartGlobalRequestAsync("tcpip-forward", [], null, Ct);
+        Assert.Equal("tcpip-forward", await rig.NextGlobalRequestAsync());
+
+        await rig.UnimplementedAsync(probe);
+        await rig.AnswerAsync(MessageNumber.RequestSuccess, 4, 5);
+
+        Assert.Equal([4, 5], await reply.WaitAsync(Limit, Ct));
+        await rig.UntilAsync(() => rig.Monitor.ProbesAnswered == 1);
+    }
+
+    [Fact]
+    public async Task Unimplemented_can_name_a_request_behind_the_first()
+    {
+        await using KeepAliveRig rig = await KeepAliveRig.StartAsync(SshRole.Client, Ct);
+
+        Task<byte[]?> first = await rig.Connection.StartGlobalRequestAsync("first", [], null, Ct);
+        Assert.Equal("first", await rig.NextGlobalRequestAsync());
+        Task<byte[]?> second = await rig.Connection.StartGlobalRequestAsync("second", [], null, Ct);
+        Assert.Equal("second", await rig.NextGlobalRequestAsync());
+
+        await rig.UnimplementedAsync(rig.LastRequestSequence);
+        Assert.Null(await second.WaitAsync(Limit, Ct));
+        Assert.False(first.IsCompleted);
+
+        await rig.AnswerAsync(MessageNumber.RequestSuccess, 1);
+        Assert.Equal([1], await first.WaitAsync(Limit, Ct));
+    }
+
+    [Fact]
+    public async Task Unimplemented_naming_another_sequence_completes_nothing()
+    {
+        await using KeepAliveRig rig = await KeepAliveRig.StartAsync(SshRole.Client, Ct);
+
+        Task<byte[]?> reply = await rig.Connection.StartGlobalRequestAsync("tcpip-forward", [], null, Ct);
+        Assert.Equal("tcpip-forward", await rig.NextGlobalRequestAsync());
+        uint sequence = rig.LastRequestSequence;
+
+        await rig.UnimplementedAsync(sequence + 1);
+        await rig.UnimplementedAsync(sequence - 1);
+        await rig.UnimplementedAsync(uint.MaxValue);
+        await rig.PeerSpeaksAsync();
+
+        Assert.False(reply.IsCompleted);
+        Assert.Equal(1, rig.Connection.PendingGlobalRequests);
+
+        await rig.AnswerAsync(MessageNumber.RequestSuccess, 8);
+        Assert.Equal([8], await reply.WaitAsync(Limit, Ct));
+    }
+
+    [Fact]
+    public async Task A_flood_of_unimplemented_changes_nothing()
+    {
+        await using KeepAliveRig rig = await KeepAliveRig.StartAsync(SshRole.Client, Ct);
+
+        Task<byte[]?> reply = await rig.Connection.StartGlobalRequestAsync("tcpip-forward", [], null, Ct);
+        Assert.Equal("tcpip-forward", await rig.NextGlobalRequestAsync());
+        uint sequence = rig.LastRequestSequence;
+
+        for (uint i = 1; i <= 5000; i++)
+        {
+            await rig.UnimplementedAsync(sequence + i);
+        }
+
+        await rig.PeerSpeaksAsync();
+        Assert.False(reply.IsCompleted);
+        Assert.False(rig.Ended);
+        Assert.Equal(1, rig.Connection.PendingGlobalRequests);
+
+        // One real answer, then the same again, which has nothing left to name.
+        await rig.UnimplementedAsync(sequence);
+        await rig.UnimplementedAsync(sequence);
+        Assert.Null(await reply.WaitAsync(Limit, Ct));
+        await rig.PeerSpeaksAsync();
+        Assert.False(rig.Ended);
+        Assert.Equal(0, rig.Connection.PendingGlobalRequests);
+    }
+
+    [Fact]
+    public async Task A_request_still_queued_cannot_be_named()
+    {
+        await using KeepAliveRig rig = await KeepAliveRig.StartAsync(SshRole.Client, Ct);
+        rig.Link.Hold();
+        await rig.Connection.SendAsync(new byte[] { MessageNumber.Ignore, 0, 0, 0, 0 }, Ct);
+        await rig.UntilAsync(() => rig.Link.WritesWaiting == 1);
+
+        Task<byte[]?> reply = await rig.Connection.StartGlobalRequestAsync("tcpip-forward", [], null, Ct);
+        for (uint i = 0; i < 200; i++)
+        {
+            await rig.UnimplementedAsync(i);
+        }
+
+        await rig.UnimplementedAsync(uint.MaxValue);
+        await rig.PeerSpeaksAsync();
+        Assert.False(reply.IsCompleted);
+
+        rig.Link.Open();
+        Assert.Equal("tcpip-forward", await rig.NextGlobalRequestAsync());
+        await rig.AnswerAsync(MessageNumber.RequestSuccess, 6);
+        Assert.Equal([6], await reply.WaitAsync(Limit, Ct));
+    }
+
+    [Fact]
+    public async Task A_request_cancelled_before_it_was_written_leaves_nothing_to_name()
+    {
+        await using KeepAliveRig rig = await KeepAliveRig.StartAsync(SshRole.Client, Ct, queueCapacity: 1);
+        rig.Link.Hold();
+        byte[] ignore = [MessageNumber.Ignore, 0, 0, 0, 0];
+        await rig.Connection.SendAsync(ignore, Ct);
+        await rig.UntilAsync(() => rig.Link.WritesWaiting == 1);
+        await rig.Connection.SendAsync(ignore, Ct);
+
+        using CancellationTokenSource cancel = new();
+        Task<Task<byte[]?>> start = rig.Connection.StartGlobalRequestAsync("tcpip-forward", [], null, cancel.Token);
+        await rig.UntilAsync(() => rig.Connection.PendingGlobalRequests == 1);
+        await cancel.CancelAsync();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => start.WaitAsync(Limit, Ct));
+        Assert.Equal(0, rig.Connection.PendingGlobalRequests);
+    }
+
+    [Fact]
+    public async Task After_a_strict_sequence_reset_the_oldest_request_with_the_number_is_answered_first()
+    {
+        await using KeepAliveRig rig = await KeepAliveRig.StartAsync(SshRole.Client, Ct);
+
+        Task<byte[]?> before = await rig.Connection.StartGlobalRequestAsync("before", [], null, Ct);
+        Assert.Equal("before", await rig.NextGlobalRequestAsync());
+        uint sequence = rig.LastRequestSequence;
+
+        int done = rig.Connection.Transport.CompletedKeyExchanges;
+        rig.Connection.Transport.RequestRekey();
+        await rig.UntilAsync(() => rig.Connection.Transport.CompletedKeyExchanges == done + 1 && rig.Peer.CompletedKeyExchanges == done + 1);
+
+        // Strict KEX started the numbers again at zero, so walk them back up to the one the first request has.
+        for (uint i = 0; i < sequence; i++)
+        {
+            await rig.Connection.SendAsync(new byte[] { MessageNumber.Ignore, 0, 0, 0, 0 }, Ct);
+        }
+
+        Task<byte[]?> after = await rig.Connection.StartGlobalRequestAsync("after", [], null, Ct);
+        Assert.Equal("after", await rig.NextGlobalRequestAsync());
+        Assert.Equal(sequence, rig.LastRequestSequence);
+
+        await rig.UnimplementedAsync(sequence);
+        Assert.Null(await before.WaitAsync(Limit, Ct));
+        Assert.False(after.IsCompleted);
+
+        await rig.AnswerAsync(MessageNumber.RequestSuccess, 2);
+        Assert.Equal([2], await after.WaitAsync(Limit, Ct));
+    }
+
+    [Fact]
+    public async Task A_malformed_unimplemented_is_still_ignored()
+    {
+        await using KeepAliveRig rig = await KeepAliveRig.StartAsync(SshRole.Client, Ct);
+        Task<byte[]?> reply = await rig.Connection.StartGlobalRequestAsync("tcpip-forward", [], null, Ct);
+        Assert.Equal("tcpip-forward", await rig.NextGlobalRequestAsync());
+
+        await rig.AnswerAsync(MessageNumber.Unimplemented, 0, 0);
+        await rig.PeerSpeaksAsync();
+
+        Assert.False(rig.Ended);
+        Assert.False(reply.IsCompleted);
+    }
+
     [Fact]
     public async Task A_stuck_probe_gives_up_the_request_line_after_an_interval()
     {

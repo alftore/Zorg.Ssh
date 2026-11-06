@@ -211,7 +211,7 @@ SshServerOptions options = new()
 
 Keepalive frees the slot of a client that has gone. It's on by default, and it starts after login. Before login, `LoginGraceTime` does that job.
 
-- If nothing arrives for one interval, the server sends a `keepalive@openssh.com` request. Any packet counts as an answer, so a busy connection sends no probes.
+- If nothing arrives for one interval, the server sends a `keepalive@openssh.com` request. Any packet counts as an answer, so a busy connection sends no probes. A client that doesn't know global requests can answer `UNIMPLEMENTED`, and that counts too.
 - Only one probe is out at a time. After it, `KeepAliveCountMax` more silent intervals end the connection. With the defaults that's 2 minutes of silence.
 - A client that keeps sending but has stopped reading is never silent. So one socket write that doesn't finish within the interval times the count also ends the connection. With the defaults that's 90 seconds, or up to one interval more.
 - When the connection ends, each handler's token is cancelled, and its stream calls throw `SshConnectionException`. A handler that ignores both still holds its slot.

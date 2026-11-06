@@ -125,6 +125,15 @@ internal sealed partial class SshTransport : IAsyncDisposable
     /// <summary>Gets the host key the server proved it holds. Null on a server.</summary>
     public SshPublicKey? PeerHostKey => _peerHostKey;
 
+    /// <summary>
+    /// Gets or sets who hears the sequence number in each UNIMPLEMENTED. It runs in the receive path, so it must not
+    /// wait. Set it before the receive path starts. Nothing is listening during the handshake or auth.
+    /// </summary>
+    public Action<uint>? UnimplementedHandler { get; set; }
+
+    /// <summary>Gets the sequence number of the last packet received.</summary>
+    internal uint LastReceivedSequence => _lastReceivedSequence;
+
     /// <summary>Gets the options this transport runs with.</summary>
     public TransportOptions Options => _options;
 
@@ -210,7 +219,7 @@ internal sealed partial class SshTransport : IAsyncDisposable
     /// <paramref name="payload"/> is copied, so it can be reused when this returns. The receive path must
     /// use <see cref="SendControl"/> instead.
     /// </summary>
-    public ValueTask SendAsync(scoped ReadOnlySpan<byte> payload, CancellationToken cancellationToken)
+    public ValueTask SendAsync(scoped ReadOnlySpan<byte> payload, CancellationToken cancellationToken, SentSequence? sent = null)
     {
         ThrowIfFailed();
         if (payload.Length > MaxSendPayload)
@@ -218,7 +227,7 @@ internal sealed partial class SshTransport : IAsyncDisposable
             throw new ArgumentException("The message is larger than the transport sends.", nameof(payload));
         }
 
-        OutgoingPacket packet = OutgoingPacket.Create(payload);
+        OutgoingPacket packet = OutgoingPacket.Create(payload, sent: sent);
         return EnqueueAsync(packet, cancellationToken);
     }
 
@@ -472,7 +481,14 @@ internal sealed partial class SshTransport : IAsyncDisposable
                     throw ParseDisconnect(payload.Span);
                 case MessageNumber.Ignore:
                 case MessageNumber.Debug:
+                    return null;
                 case MessageNumber.Unimplemented:
+                    // Malformed ones stay ignored, as they always were: there's nothing to act on.
+                    if (payload.Length >= 5)
+                    {
+                        UnimplementedHandler?.Invoke(BinaryPrimitives.ReadUInt32BigEndian(payload.Span[1..]));
+                    }
+
                     return null;
                 case MessageNumber.ExtInfo:
                     if (!firstAfterNewKeys)
@@ -688,6 +704,7 @@ internal sealed partial class SshTransport : IAsyncDisposable
             PacketCipher cipher = _sendCipher;
             int length = packet.Frame(cipher);
             cipher.Seal(packet.Buffer.AsSpan(0, length + cipher.TagLength), _sendSequence);
+            packet.Sent?.Record(_sendSequence);
 
             // One write that never ends is what a peer that stopped reading looks like. A slow reader still finishes them.
             Volatile.Write(ref _writeStartedTimestamp, _options.TimeProvider.GetTimestamp());
