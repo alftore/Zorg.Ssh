@@ -49,7 +49,7 @@ public sealed class KeepAliveInteropTests : IDisposable
         Credentials = [SshCredential.FromPassword(Password)],
         HostKeyPolicy = HostKeyPolicy.AcceptAnyUnsafe(),
         KeepAliveInterval = Interval,
-        KeepAliveCountMax = 2,
+        KeepAliveCountMax = 3,
     };
 
     [Theory(Timeout = TestTimeoutMs)]
@@ -123,7 +123,7 @@ public sealed class KeepAliveInteropTests : IDisposable
                 HostKeys = [_hostKey],
                 PublicKeyHandler = (_, _) => ValueTask.FromResult(SshAuthDecision.Accept),
                 KeepAliveInterval = Interval,
-                KeepAliveCountMax = 2,
+                KeepAliveCountMax = 3,
                 SessionHandler = async (session, ct) =>
                 {
                     try
