@@ -215,9 +215,16 @@ public sealed class KeepAliveClientServerTests : IDisposable
         Task<SshCommandResult> execute = client.ExecuteAsync("wait", CancellationToken.None);
         await _handlerStarted.Task.WaitAsync(Limit, Ct);
 
+        // The handler starts as soon as its exec reply is queued, so that reply can still be on its way, and can land
+        // after the clock has moved. It's a packet, so it rightly restarts the count: the end then comes up to four
+        // intervals later than four from here. One packet can do that once, because the path is dead behind it.
         KillPath();
-        await ElapseAsync(4, () => client.Connection.Ended.IsCompleted);
+        for (int i = 0; i < 9 && !client.Connection.Ended.IsCompleted; i++)
+        {
+            await ElapseAsync(1, () => client.Connection.Ended.IsCompleted);
+        }
 
+        Assert.True(client.Connection.Ended.IsCompleted, "Nine silent intervals must end the connection.");
         SshConnectionException ex = await Assert.ThrowsAnyAsync<SshConnectionException>(() => execute.WaitAsync(Limit, Ct));
         Assert.True(Mentions(ex, "stopped answering keepalives"), ex.ToString());
     }

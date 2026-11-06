@@ -269,8 +269,11 @@ public sealed class SocksTests : IAsyncLifetime
 
         byte[] script = [5, 1, 0, 5, 1, 0];
         using TcpClient stalled = await RawAsync(proxy, script[..bytes]);
-        await WaitUntilAsync(() => proxy.ActiveConnections == 0);
+
+        // In this order: the count can read zero before the socket is even accepted, and the slot is freed just after
+        // the socket closes. So the drop comes first, and then the count can only be on its way to zero.
         await AssertDroppedAsync(stalled);
+        await WaitUntilAsync(() => proxy.ActiveConnections == 0);
 
         using TcpClient next = await Socks.GreetAsync(proxy.LocalEndPoint, Ct);
         Assert.Equal(0, await Socks.RequestAsync(next, Socks.IPv4Request(IPAddress.Loopback, _echo.Port), Ct));
