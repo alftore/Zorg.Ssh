@@ -32,6 +32,19 @@ Rules:
 | SSH.NET 2026.0.0 | MIT | Benchmark only: a library to compare with in `docs/benchmarks.md` | Low. Only `benchmarks/` references it, so removing it loses a comparison and nothing else. |
 | Tmds.Ssh 0.26.0 | MIT | Benchmark only: a library to compare with in `docs/benchmarks.md` | Low. Only `benchmarks/` references it. It depends on the public API analyzers, so that project turns off their rules. |
 
+## Fuzzing (not shipped)
+
+Only `tests/Zorg.Ssh.Fuzz` references SharpFuzz. `src/Zorg.Ssh` gains no dependency, only an `InternalsVisibleTo`. Licences were read from the `.nuspec` of each exact version.
+
+| Package | Licence | Why | Risk |
+|---|---|---|---|
+| SharpFuzz 2.3.0 | MIT | Coverage feedback for libFuzzer: the target calls `Fuzzer.LibFuzzer.Run`, and the instrumenter patches `Zorg.Ssh.dll` | Low. One maintainer, but small, and the licence has been MIT since the start. Removing it loses fuzzing and nothing else. |
+| SharpFuzz.Common 2.2.0 | MIT | Dependency of SharpFuzz | Low. Same project. |
+| dnlib 4.4.0 | MIT | IL rewriting inside SharpFuzz. It brings `System.Reflection.Emit` 4.7.0 (MIT, Microsoft) and `System.Reflection.Emit.Lightweight` 4.7.0 for netstandard2.0 only, which net10.0 doesn't pull in. | Low. Widely used, and only the fuzz project loads it. |
+| SharpFuzz.CommandLine 2.3.0 | MIT | The `sharpfuzz` instrumenter, a dotnet tool installed in the fuzz image (`scripts/linux/Dockerfile.fuzz`), not a project reference | Low. Same project. |
+| libfuzzer-dotnet, commit bd39d4e | MIT | The libFuzzer driver that talks to the .NET process. Built from source in the fuzz image, and the file's SHA-256 is checked before it is compiled. | Low. A single 267-line C++ file. If the repository vanishes, copy the file into `scripts/linux/`. |
+| libclang-rt-18-dev (Ubuntu apt) | Apache-2.0 with LLVM exceptions | The libFuzzer runtime for `clang -fsanitize=fuzzer` | Low. In the image only. |
+
 ## Considered and rejected
 
 | Package | Reason |

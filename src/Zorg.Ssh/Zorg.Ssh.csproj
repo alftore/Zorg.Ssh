@@ -21,6 +21,7 @@
     <InternalsVisibleTo Include="Zorg.Ssh.InteropTests" />
     <InternalsVisibleTo Include="Zorg.Ssh.Benchmarks" />
     <InternalsVisibleTo Include="Zorg.Ssh.AotSmoke" />
+    <InternalsVisibleTo Include="Zorg.Ssh.Fuzz" />
   </ItemGroup>
 
 </Project>

@@ -1,0 +1,18 @@
+# The fuzz image: the .NET SDK on Ubuntu 24.04 (glibc), clang with its libFuzzer runtime, the SharpFuzz
+# instrumenter, and the libFuzzer driver for SharpFuzz built from source at a pinned commit.
+# Everything is baked in once. Do not run apt-get or download anything in a fuzz run.
+FROM mcr.microsoft.com/dotnet/sdk:10.0-noble
+ENV DOTNET_NOLOGO=1 \
+    DOTNET_CLI_TELEMETRY_OPTOUT=1 \
+    DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends clang libclang-rt-18-dev ca-certificates curl \
+ && rm -rf /var/lib/apt/lists/*
+# libfuzzer-dotnet (MIT) at a pinned commit, checked against the hash of the file that was read and reviewed.
+# SharpFuzz.CommandLine 2.3.0 (MIT) is the instrumenter. Its dependencies (dnlib 4.4.0, SharpFuzz.Common 2.2.0) are MIT too.
+RUN curl -fsSL -o /tmp/libfuzzer-dotnet.cc https://raw.githubusercontent.com/Metalnem/libfuzzer-dotnet/bd39d4e88d715ab460a929943645be2a186cde52/libfuzzer-dotnet.cc \
+ && echo "90f019e2e9ad3a0b93c7ecc2c5afb2fbfc8b5aab6aac51c7e0d349ec79354f36  /tmp/libfuzzer-dotnet.cc" | sha256sum -c - \
+ && clang++ -fsanitize=fuzzer -O2 -o /usr/local/bin/libfuzzer-dotnet /tmp/libfuzzer-dotnet.cc \
+ && rm /tmp/libfuzzer-dotnet.cc \
+ && dotnet tool install --tool-path /usr/local/share/sharpfuzz SharpFuzz.CommandLine --version 2.3.0 \
+ && ln -s /usr/local/share/sharpfuzz/sharpfuzz /usr/local/bin/sharpfuzz

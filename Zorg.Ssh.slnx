@@ -12,6 +12,7 @@
     <Project Path="src/Zorg.Ssh/Zorg.Ssh.csproj" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/Zorg.Ssh.Fuzz/Zorg.Ssh.Fuzz.csproj" />
     <Project Path="tests/Zorg.Ssh.InteropTests/Zorg.Ssh.InteropTests.csproj" />
     <Project Path="tests/Zorg.Ssh.Tests/Zorg.Ssh.Tests.csproj" />
   </Folder>
