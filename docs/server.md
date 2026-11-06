@@ -196,7 +196,7 @@ SshServerOptions options = new()
 | `MaxUnauthenticatedPerAddress` | 5 | The most connections not yet logged in that one source address may hold, so one address can't take every unauthenticated slot. See below. |
 | `LoginGraceTime` | 30 seconds | The time allowed to log in. |
 | `IdleTimeout` | none | How long a logged-in connection may have no open channel before the server closes it. See below. |
-| `KeepAliveInterval` | 30 seconds | How long a logged-in connection can be silent before a probe goes out. `TimeSpan.Zero` turns it off. |
+| `KeepAliveInterval` | 5 minutes | How long a logged-in connection can be silent before a probe goes out. `TimeSpan.Zero` turns it off. |
 | `KeepAliveCountMax` | 3 | How many more silent intervals end the connection. |
 | `MaxAuthAttempts` | 6 | Failed attempts allowed per connection. |
 | `MaxSessionsPerConnection` | 10 | The most sessions on one connection. |
@@ -212,7 +212,7 @@ SshServerOptions options = new()
 Keepalive frees the slot of a client that has gone. It's on by default, and it starts after login. Before login, `LoginGraceTime` does that job.
 
 - If nothing arrives for one interval, the server sends a `keepalive@openssh.com` request. Any packet counts as an answer, so a busy connection sends no probes. A client that doesn't know global requests can answer `UNIMPLEMENTED`, and that counts too.
-- Only one probe is out at a time. After it, `KeepAliveCountMax` more silent intervals end the connection. With the defaults that's 2 minutes of silence.
+- Only one probe is out at a time. After it, `KeepAliveCountMax` more silent intervals end the connection. With the defaults that's 20 minutes of silence. Set a shorter interval to notice sooner, at the cost of dropping a connection over a shorter network break. The default is the one Debian's OpenSSH uses for `BatchMode`, because upstream OpenSSH leaves it off and relies on TCP keepalive, which can't see a peer that stops reading.
 - A client that keeps sending but has stopped reading is never silent. So one socket write that doesn't finish within the interval times the count also ends the connection. With the defaults that's 90 seconds, or up to one interval more.
 - When the connection ends, each handler's token is cancelled, and its stream calls throw `SshConnectionException`. A handler that ignores both still holds its slot.
 - A client that answers probes but grants no window is alive. The connection stays up, and a handler's write waits. Use the handler's token, and a timeout of your own if you need one.

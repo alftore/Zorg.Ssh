@@ -113,15 +113,15 @@ public sealed class KeepAliveClientServerTests : IDisposable
     private Task ElapseAsync(int intervals, Func<bool> finished) => _clock.AdvanceAsync(Interval * intervals, finished);
 
     [Fact]
-    public async Task The_defaults_are_30_seconds_and_3_on_both_roles()
+    public async Task The_defaults_are_5_minutes_and_3_on_both_roles()
     {
         await using SshServer server = await SshServer.StartAsync(new SshServerOptions { HostKeys = [_hostKey], SessionHandler = WaitForeverAsync, PasswordHandler = (_, _) => ValueTask.FromResult(SshAuthDecision.Accept) }, Ct);
         SshClientOptions options = new() { Host = "h", UserName = "u", HostKeyPolicy = HostKeyPolicy.AcceptAnyUnsafe() };
         SshServerOptions serverOptions = new() { HostKeys = [], SessionHandler = WaitForeverAsync };
 
-        Assert.Equal(TimeSpan.FromSeconds(30), options.KeepAliveInterval);
+        Assert.Equal(TimeSpan.FromMinutes(5), options.KeepAliveInterval);
         Assert.Equal(3, options.KeepAliveCountMax);
-        Assert.Equal(TimeSpan.FromSeconds(30), serverOptions.KeepAliveInterval);
+        Assert.Equal(TimeSpan.FromMinutes(5), serverOptions.KeepAliveInterval);
         Assert.Equal(3, serverOptions.KeepAliveCountMax);
 
         (Stream clientSide, Stream serverSide) = DuplexStream.CreatePair();

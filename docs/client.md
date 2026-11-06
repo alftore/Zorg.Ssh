@@ -47,7 +47,7 @@ SshClientOptions options = new()
 | `Port` | 22 | The TCP port. |
 | `Credentials` | none | Tried in order. See below. |
 | `ConnectTimeout` | 30 seconds | One limit for TCP connect, key exchange and login together. |
-| `KeepAliveInterval` | 30 seconds | How long the connection can be silent before a probe goes out. `TimeSpan.Zero` turns it off. See [Keepalive](#keepalive). |
+| `KeepAliveInterval` | 5 minutes | How long the connection can be silent before a probe goes out. `TimeSpan.Zero` turns it off. See [Keepalive](#keepalive). |
 | `KeepAliveCountMax` | 3 | How many more silent intervals end the connection. |
 | `MaxCommandOutputBytes` | 64 MiB | The most `ExecuteAsync` keeps per stream before it fails. |
 | `BannerHandler` | none | Receives the server's login banner. The server chooses that text. |
@@ -237,7 +237,7 @@ SshClientOptions options = new()
 ```
 
 - If nothing arrives for one interval, the client sends a `keepalive@openssh.com` request. Any packet counts as an answer, so a busy connection sends no probes. A server that doesn't know global requests can answer `UNIMPLEMENTED`, and that counts too.
-- Only one probe is out at a time. After it, `KeepAliveCountMax` more silent intervals end the connection. With the defaults that's 2 minutes of silence.
+- Only one probe is out at a time. After it, `KeepAliveCountMax` more silent intervals end the connection. With the defaults that's 20 minutes of silence. Set a shorter interval to notice sooner, at the cost of dropping a connection over a shorter network break. The default is the one Debian's OpenSSH uses for `BatchMode`, because upstream OpenSSH leaves it off and relies on TCP keepalive, which can't see a peer that stops reading.
 - A server that keeps sending but has stopped reading is never silent. So one socket write that doesn't finish within the interval times the count also ends the connection. With the defaults that's 90 seconds, or up to one interval more.
 - No probe goes out during a rekey, because nothing but the rekey can. Silence still counts. A live rekey sends packets, and each one restarts the count.
 - The connection fails with `SshConnectionException`, and everything waiting on it wakes: commands, stream reads and writes, SFTP calls and forwards. Connect again to continue.

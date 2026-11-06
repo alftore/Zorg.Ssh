@@ -334,7 +334,7 @@ public sealed class SshServerOptions
     public TimeSpan LoginGraceTime { get; init; } = TimeSpan.FromSeconds(30);
 
     /// <summary>
-    /// Gets how long the connection can be silent before a probe goes out. The default is 30 seconds, and
+    /// Gets how long the connection can be silent before a probe goes out. The default is 5 minutes, and
     /// <see cref="TimeSpan.Zero"/> turns keepalive and the stalled-send check off. Otherwise it's 1 second to 1 day.
     /// Keepalive starts after login. Any packet from the client counts as an answer, so a busy connection sends no
     /// probes. If it stays silent for <see cref="KeepAliveCountMax"/> more intervals, or one write to it stays
@@ -346,11 +346,11 @@ public sealed class SshServerOptions
     /// KeepAliveInterval = TimeSpan.FromSeconds(15),
     /// </code>
     /// </example>
-    public TimeSpan KeepAliveInterval { get; init; } = TimeSpan.FromSeconds(30);
+    public TimeSpan KeepAliveInterval { get; init; } = TimeSpan.FromMinutes(5);
 
     /// <summary>
     /// Gets how many intervals of silence after the probe end the connection. The default is 3, and it's 1 to 1000.
-    /// With the defaults, a dead client is noticed after 2 minutes of silence, and a stalled send after 90 seconds or a little more.
+    /// With the defaults, a dead client is noticed after 20 minutes of silence, and a stalled send after 15 minutes or a little more.
     /// </summary>
     /// <example>
     /// <code>
