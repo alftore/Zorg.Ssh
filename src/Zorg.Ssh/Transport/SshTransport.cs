@@ -30,6 +30,7 @@ internal sealed partial class SshTransport : IAsyncDisposable
     private const int ControlQueueCapacity = 256;
     private const int MaxDisconnectText = 256;
     private const int MaxSendPayload = 40 * 1024;
+    private const long NoWriteRunning = long.MinValue;
 
     /// <summary>The most packets under one key. Past this the sequence number repeats, and with it the ChaCha20 nonce.</summary>
     private const long MaxPacketsPerKey = (1L << 32) - 2;
@@ -72,6 +73,8 @@ internal sealed partial class SshTransport : IAsyncDisposable
     private volatile TransportPhase _phase = TransportPhase.InitialKex;
     private volatile int _sendLoopStarted;
     private long _lastKexTimestamp;
+    private long _lastReceivedTimestamp;
+    private long _writeStartedTimestamp = NoWriteRunning;
     private ITimer? _deadline;
     private int _shutdownStarted;
     private int _receiving;
@@ -80,6 +83,7 @@ internal sealed partial class SshTransport : IAsyncDisposable
     {
         _stream = stream;
         _options = options;
+        _lastReceivedTimestamp = options.TimeProvider.GetTimestamp();
         _reader = new PacketReader(stream, options.MaxPacketLength);
         _sendQueue = Channel.CreateBounded<OutgoingPacket>(new BoundedChannelOptions(options.SendQueueCapacity)
         {
@@ -120,6 +124,34 @@ internal sealed partial class SshTransport : IAsyncDisposable
 
     /// <summary>Gets the host key the server proved it holds. Null on a server.</summary>
     public SshPublicKey? PeerHostKey => _peerHostKey;
+
+    /// <summary>Gets the options this transport runs with.</summary>
+    public TransportOptions Options => _options;
+
+    /// <summary>Gets when the last whole packet arrived, of any type, on the clock of <see cref="TransportOptions.TimeProvider"/>.</summary>
+    public long LastReceivedTimestamp => Volatile.Read(ref _lastReceivedTimestamp);
+
+    /// <summary>Gets how long the socket write now running has taken, or zero if none is running.</summary>
+    public TimeSpan WritePendingFor
+    {
+        get
+        {
+            long started = Volatile.Read(ref _writeStartedTimestamp);
+            return started == NoWriteRunning ? TimeSpan.Zero : _options.TimeProvider.GetElapsedTime(started);
+        }
+    }
+
+    /// <summary>Gets whether a key exchange is running, which holds back everything but its own messages.</summary>
+    public bool KeyExchangeRunning
+    {
+        get
+        {
+            lock (_kexLock)
+            {
+                return _parked || _kexStep != KexStep.Idle;
+            }
+        }
+    }
 
     private Exception? Failure => Volatile.Read(ref _failureSlot);
 
@@ -207,6 +239,13 @@ internal sealed partial class SshTransport : IAsyncDisposable
 
         _wake.Writer.TryWrite(true);
     }
+
+    /// <summary>
+    /// Ends the connection from outside the two loops, without waiting and without a DISCONNECT, because a peer
+    /// that got here isn't listening. A stuck write ends when the shutdown cancels it. The receive loop then
+    /// wakes with this failure, or with an earlier one.
+    /// </summary>
+    public void Abort(SshConnectionException failure) => Fail(failure, null);
 
     /// <summary>Replies UNIMPLEMENTED to the packet just returned by <see cref="ReceiveAsync"/>.</summary>
     public void SendUnimplementedForLastPacket() => SendUnimplemented(_lastReceivedSequence);
@@ -398,6 +437,7 @@ internal sealed partial class SshTransport : IAsyncDisposable
             uint sequence = _receiveSequence;
             _lastReceivedSequence = sequence;
             ReadOnlyMemory<byte> payload = await _reader.ReadPacketAsync(_receiveCipher, sequence, token).ConfigureAwait(false);
+            Volatile.Write(ref _lastReceivedTimestamp, _options.TimeProvider.GetTimestamp());
             AdvanceReceiveSequence();
             bool first = !_anyPacketReceived;
             _anyPacketReceived = true;
@@ -648,8 +688,12 @@ internal sealed partial class SshTransport : IAsyncDisposable
             PacketCipher cipher = _sendCipher;
             int length = packet.Frame(cipher);
             cipher.Seal(packet.Buffer.AsSpan(0, length + cipher.TagLength), _sendSequence);
+
+            // One write that never ends is what a peer that stopped reading looks like. A slow reader still finishes them.
+            Volatile.Write(ref _writeStartedTimestamp, _options.TimeProvider.GetTimestamp());
             await _stream.WriteAsync(packet.Buffer.AsMemory(0, length + cipher.TagLength), _closing.Token).ConfigureAwait(false);
             await _stream.FlushAsync(_closing.Token).ConfigureAwait(false);
+            Volatile.Write(ref _writeStartedTimestamp, NoWriteRunning);
             _sendSequence++;
             _bytesSent += packet.PayloadLength;
             _packetsSent++;

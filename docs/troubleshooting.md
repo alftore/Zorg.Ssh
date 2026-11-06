@@ -100,6 +100,9 @@ The network failed or the connection closed. Connect again to continue: a client
 - "Timed out": `ConnectTimeout` covers TCP connect, key exchange and login together. Raise it for a slow server, or a slow keyboard-interactive login with a person at the keyboard.
 - "The peer closed the connection" during login: a server can drop connections at its own limits, such as OpenSSH's `MaxStartups`, or its `PerSourcePenalties` after repeated failures.
 - "The key exchange timed out": the peer stopped answering. Check that it's a working SSH server.
+- "The peer stopped answering keepalives": nothing arrived for `KeepAliveInterval` and then `KeepAliveCountMax` more intervals. The peer or the path has gone. Raise both for a link that drops out for a while, and check that nothing between you drops idle connections.
+- "The peer went silent during a key exchange": the same, during a rekey. No probe can go out then, so only the peer's own packets count.
+- "The peer stopped reading": one socket write stayed unfinished for `KeepAliveInterval` times `KeepAliveCountMax`. The peer may still be sending. Check whether it's stuck, and raise both if it's only very slow.
 - "The channel is closed": this one process has ended, or you've used its stream after disposing it. The client may still work.
 
 ## SshDisconnectedException
@@ -165,7 +168,8 @@ During `DownloadDirectoryAsync`, a name from the server couldn't safely become a
 - **A process makes no progress.** You may be reading only one of `StandardOutput` and `StandardError`. They share a window, so read both at once.
 - **A process doesn't exit.** Many commands wait for the end of stdin. Dispose `StandardInput` to send EOF. EOF follows the data, so a write that is still waiting for the server delays it, and so does a server that has stopped reading.
 - **`ExecuteAsync` never returns.** The command is still running, or a background process it started kept stdout open. Pass a token with a timeout. `ExecuteAsync` closes stdin for you.
-- **No timeouts by default.** Apart from `ConnectTimeout`, nothing limits how long a command or transfer takes. Use a `CancellationToken`.
+- **A write never finishes, and the connection stays up.** The peer answers keepalives but grants no window. That's a live peer, not a dead one, so keepalive leaves it alone. Pass the write a token.
+- **No time limit on a live peer.** Keepalive ends a connection to a peer that has gone. Apart from that and `ConnectTimeout`, nothing limits how long a command or transfer takes. Use a `CancellationToken`.
 
 ## Logging
 

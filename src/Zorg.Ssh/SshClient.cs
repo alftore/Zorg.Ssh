@@ -112,6 +112,7 @@ public sealed partial class SshClient : IAsyncDisposable
     {
         ArgumentNullException.ThrowIfNull(options);
         options.Algorithms.Validate();
+        TransportOptions.ValidateKeepAlive(options.KeepAliveInterval, options.KeepAliveCountMax);
         using CancellationTokenSource timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(options.ConnectTimeout);
 
@@ -174,6 +175,7 @@ public sealed partial class SshClient : IAsyncDisposable
         ArgumentNullException.ThrowIfNull(stream);
         ArgumentNullException.ThrowIfNull(options);
         options.Algorithms.Validate();
+        TransportOptions.ValidateKeepAlive(options.KeepAliveInterval, options.KeepAliveCountMax);
         using CancellationTokenSource timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(options.ConnectTimeout);
         return await ConnectCoreAsync(stream, options, timeout.Token, cancellationToken).ConfigureAwait(false);
@@ -299,6 +301,9 @@ public sealed partial class SshClient : IAsyncDisposable
 
     internal int CompletedKeyExchanges => _connection.Transport.CompletedKeyExchanges;
 
+    /// <summary>Gets the connection, for tests.</summary>
+    internal SshConnection Connection => _connection;
+
     private static async Task<SshClient> ConnectCoreAsync(Stream stream, SshClientOptions options, CancellationToken timeoutToken, CancellationToken callerToken)
     {
         ILogger logger = options.LoggerFactory?.CreateLogger<SshClient>() ?? NullLogger<SshClient>.Instance;
@@ -307,6 +312,9 @@ public sealed partial class SshClient : IAsyncDisposable
             Role = SshRole.Client,
             Logger = logger,
             HandshakeTimeout = options.ConnectTimeout,
+            KeepAliveInterval = options.KeepAliveInterval,
+            KeepAliveCountMax = options.KeepAliveCountMax,
+            TimeProvider = options.TimeProvider,
             KexAlgorithms = options.Algorithms.KeyExchange,
 
             // An explicit list is the caller's. Otherwise the policy can put certificate algorithms first.

@@ -217,6 +217,22 @@ internal static class ClientExamples
         // end-doc
     }
 
+    public static SshClientOptions KeepAlive(string password, string knownFingerprint)
+    {
+        // doc:keepalive
+        SshClientOptions options = new()
+        {
+            Host = "example.com",
+            UserName = "alice",
+            Credentials = [SshCredential.FromPassword(password)],
+            HostKeyPolicy = HostKeyPolicy.Fingerprint(knownFingerprint),
+            KeepAliveInterval = TimeSpan.FromSeconds(15),
+            KeepAliveCountMax = 4,
+        };
+        // end-doc
+        return options;
+    }
+
     public static async Task JumpHost(SshClientOptions bastionOptions, string password, string innerFingerprint, CancellationToken cancellationToken)
     {
         // doc:jump-host

@@ -12,7 +12,7 @@
 - `await using SftpClient sftp = await client.OpenSftpAsync(ct)`. Use `UploadFileAsync` and `DownloadFileAsync` for files. `SftpFile` reads can be short, and its sync methods block.
 - Names from a listing are untrusted. Check `SftpEntry.IsSafeName`, and pass `maxTotalBytes` to `DownloadDirectoryAsync`.
 - Catch `SshException` and its subtypes. A connection that has failed stays failed: connect again.
-- Nothing times out except `ConnectTimeout`, so pass a `CancellationToken`.
+- A dead or stalled peer ends the connection with `SshConnectionException`, through `KeepAliveInterval` and `KeepAliveCountMax` (30 seconds and 3 by default, `TimeSpan.Zero` turns them off). A live peer can still take for ever: a long command and a zero window don't time out, so pass a `CancellationToken`.
 - For SFTP on a server, call `SftpServer.ServeAsync` from the `SessionHandler`, with `SftpServerOptions.RootDirectory`.
 - `SshServer.StartAsync` needs a host key, a `PasswordHandler` or `PublicKeyHandler`, and a `SessionHandler`. Load the key with `SshHostKey.Load`, because a generated one can't be saved.
 - These don't exist, so don't call them: SCP, compression, agent forwarding. `src/Zorg.Ssh/PublicAPI.Unshipped.txt` is the full API.

@@ -56,6 +56,7 @@ internal sealed class SshConnection : IAsyncDisposable
     private int _incomingSessions;
     private Task? _loop;
     private Task? _senderLoop;
+    private Task? _keepAliveLoop;
     private Exception? _failure;
 
     public SshConnection(SshTransport transport, int maxChannels = 256)
@@ -92,14 +93,38 @@ internal sealed class SshConnection : IAsyncDisposable
     /// <summary>Gets how many deferred sends are waiting for the sender loop.</summary>
     internal int DeferredCount => _deferred.Reader.Count;
 
+    /// <summary>Gets how many global requests are waiting for a reply.</summary>
+    internal int PendingGlobalRequests
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _globalRequests.Count;
+            }
+        }
+    }
+
+    /// <summary>Gets the keepalive monitor, or null if it's turned off.</summary>
+    internal KeepAliveMonitor? KeepAlive { get; private set; }
+
     /// <summary>Gets the transport.</summary>
     public SshTransport Transport => _transport;
 
-    /// <summary>Starts the receive loop. Call once, after auth.</summary>
+    /// <summary>
+    /// Starts the loops. Call once, after auth, so keepalive never runs before it (T11): before auth,
+    /// the connect timeout and the login grace time do that job.
+    /// </summary>
     public void Start()
     {
         _loop = Task.Run(ReceiveLoopAsync, CancellationToken.None);
         _senderLoop = Task.Run(SenderLoopAsync, CancellationToken.None);
+        if (_transport.Options.KeepAliveInterval > TimeSpan.Zero)
+        {
+            KeepAliveMonitor monitor = new(this);
+            KeepAlive = monitor;
+            _keepAliveLoop = Task.Run(() => monitor.RunAsync(_stopToken), CancellationToken.None);
+        }
     }
 
     /// <summary>Opens a channel and waits for the peer to confirm it. <paramref name="extra"/> is what the channel type adds to the message.</summary>
@@ -395,6 +420,7 @@ internal sealed class SshConnection : IAsyncDisposable
         _deferred.Writer.TryComplete();
         await WaitForAsync(_loop).ConfigureAwait(false);
         await WaitForAsync(_senderLoop).ConfigureAwait(false);
+        await WaitForAsync(_keepAliveLoop).ConfigureAwait(false);
         await _transport.DisposeAsync().ConfigureAwait(false);
         _stop.Dispose();
     }

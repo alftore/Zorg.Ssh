@@ -333,6 +333,35 @@ public sealed class SshServerOptions
     /// <summary>Gets the time allowed to log in. The default is 30 seconds.</summary>
     public TimeSpan LoginGraceTime { get; init; } = TimeSpan.FromSeconds(30);
 
+    /// <summary>
+    /// Gets how long the connection can be silent before a probe goes out. The default is 30 seconds, and
+    /// <see cref="TimeSpan.Zero"/> turns keepalive and the stalled-send check off. Otherwise it's 1 second to 1 day.
+    /// Keepalive starts after login. Any packet from the client counts as an answer, so a busy connection sends no
+    /// probes. If it stays silent for <see cref="KeepAliveCountMax"/> more intervals, or one write to it stays
+    /// unfinished for this interval times <see cref="KeepAliveCountMax"/>, the connection fails with
+    /// <see cref="SshConnectionException"/> and everything waiting on it wakes. A client that answers probes but grants no window is alive: a handler writing to it needs its token.
+    /// </summary>
+    /// <example>
+    /// <code>
+    /// KeepAliveInterval = TimeSpan.FromSeconds(15),
+    /// </code>
+    /// </example>
+    public TimeSpan KeepAliveInterval { get; init; } = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// Gets how many intervals of silence after the probe end the connection. The default is 3, and it's 1 to 1000.
+    /// With the defaults, a dead client is noticed after 2 minutes of silence, and a stalled send after 90 seconds or a little more.
+    /// </summary>
+    /// <example>
+    /// <code>
+    /// KeepAliveCountMax = 5,
+    /// </code>
+    /// </example>
+    public int KeepAliveCountMax { get; init; } = 3;
+
+    /// <summary>Gets the clock, for tests.</summary>
+    internal TimeProvider TimeProvider { get; init; } = TimeProvider.System;
+
     /// <summary>Gets the failed login attempts allowed per connection. The default is 6.</summary>
     public int MaxAuthAttempts { get; init; } = 6;
 
