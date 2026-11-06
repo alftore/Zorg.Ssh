@@ -185,7 +185,10 @@ internal sealed class ChannelStream(SshChannel channel) : Stream
     }
 }
 
-/// <summary>Sends channel data. Disposing it sends EOF, so the far side sees the end of its stdin.</summary>
+/// <summary>
+/// Sends channel data. Disposing it sends EOF, so the far side sees the end of its stdin. That never waits: the EOF
+/// goes through the connection's sender loop, so a full send queue delays it and can't lose it.
+/// </summary>
 internal sealed class ChannelWriteStream(SshChannel channel, uint? extendedType = null) : Stream
 {
     private bool _disposed;
@@ -228,33 +231,15 @@ internal sealed class ChannelWriteStream(SshChannel channel, uint? extendedType 
 
     public override void SetLength(long value) => throw new NotSupportedException();
 
-    public override async ValueTask DisposeAsync()
-    {
-        if (!_disposed)
-        {
-            _disposed = true;
-            try
-            {
-                using CancellationTokenSource limit = new(TimeSpan.FromSeconds(5));
-                if (extendedType is null)
-                {
-                    await channel.SendEofAsync(limit.Token).ConfigureAwait(false);
-                }
-            }
-            catch (Exception ex) when (ex is SshException or OperationCanceledException)
-            {
-                // The connection has gone, so there's nobody to tell.
-            }
-        }
-
-        await base.DisposeAsync().ConfigureAwait(false);
-    }
-
     protected override void Dispose(bool disposing)
     {
         if (disposing && !_disposed)
         {
-            DisposeAsync().AsTask().GetAwaiter().GetResult();
+            _disposed = true;
+            if (extendedType is null)
+            {
+                channel.QueueEof();
+            }
         }
 
         base.Dispose(disposing);

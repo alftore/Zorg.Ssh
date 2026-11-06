@@ -163,7 +163,7 @@ During `DownloadDirectoryAsync`, a name from the server couldn't safely become a
 ## Calls that seem to hang
 
 - **A process makes no progress.** You may be reading only one of `StandardOutput` and `StandardError`. They share a window, so read both at once.
-- **A process doesn't exit.** Many commands wait for the end of stdin. Dispose `StandardInput` to send EOF.
+- **A process doesn't exit.** Many commands wait for the end of stdin. Dispose `StandardInput` to send EOF. EOF follows the data, so a write that is still waiting for the server delays it, and so does a server that has stopped reading.
 - **`ExecuteAsync` never returns.** The command is still running, or a background process it started kept stdout open. Pass a token with a timeout. `ExecuteAsync` closes stdin for you.
 - **No timeouts by default.** Apart from `ConnectTimeout`, nothing limits how long a command or transfer takes. Use a `CancellationToken`.
 
