@@ -12,6 +12,10 @@ namespace Zorg.Ssh.Tests.Server;
 /// <summary>Keepalive through the public client and server, joined in memory, with no token passed to what's waiting.</summary>
 public sealed class KeepAliveClientServerTests : IDisposable
 {
+    // Either keepalive failure. Which comes first here can depend on a preempted write, because this clock can cross
+    // three intervals in the time a real write takes. KeepAliveTests holds that still, and checks each one exactly.
+    private const string PeerGone = "The peer stopped";
+
     private static readonly TimeSpan Interval = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan Limit = TimeSpan.FromSeconds(20);
 
@@ -226,7 +230,7 @@ public sealed class KeepAliveClientServerTests : IDisposable
 
         Assert.True(client.Connection.Ended.IsCompleted, "Nine silent intervals must end the connection.");
         SshConnectionException ex = await Assert.ThrowsAnyAsync<SshConnectionException>(() => execute.WaitAsync(Limit, Ct));
-        Assert.True(Mentions(ex, "stopped answering keepalives"), ex.ToString());
+        Assert.True(Mentions(ex, PeerGone), ex.ToString());
     }
 
     [Fact]
@@ -245,7 +249,7 @@ public sealed class KeepAliveClientServerTests : IDisposable
         await ElapseAsync(4, () => client.Connection.Ended.IsCompleted);
 
         SshConnectionException ex = await Assert.ThrowsAnyAsync<SshConnectionException>(() => read.WaitAsync(Limit, Ct));
-        Assert.True(Mentions(ex, "stopped answering keepalives"), ex.ToString());
+        Assert.True(Mentions(ex, PeerGone), ex.ToString());
         await Assert.ThrowsAnyAsync<SshConnectionException>(() => exit.WaitAsync(Limit, Ct));
     }
 
@@ -265,7 +269,7 @@ public sealed class KeepAliveClientServerTests : IDisposable
         await ElapseAsync(4, () => client.Connection.Ended.IsCompleted);
 
         SshConnectionException ex = await Assert.ThrowsAnyAsync<SshConnectionException>(() => call.WaitAsync(Limit, Ct));
-        Assert.True(Mentions(ex, "stopped answering keepalives"), ex.ToString());
+        Assert.True(Mentions(ex, PeerGone), ex.ToString());
     }
 
     [Fact]
@@ -281,7 +285,7 @@ public sealed class KeepAliveClientServerTests : IDisposable
         await ElapseAsync(4, () => _handlerEnded.Task.IsCompleted);
 
         Exception? ex = await _handlerEnded.Task.WaitAsync(Limit, Ct);
-        Assert.True(Mentions(ex, "stopped answering keepalives"), ex?.ToString());
+        Assert.True(Mentions(ex, PeerGone), ex?.ToString());
 
         // The connection's task ending is what gives back the slot.
         await _served.WaitAsync(Limit, Ct);

@@ -351,7 +351,11 @@ internal sealed class KeepAliveRig : IAsyncDisposable
     }
 
     /// <summary>Moves time on, letting every tick on the way finish, and every probe be answered if <see cref="AutoAnswer"/> is set.</summary>
-    public Task ElapseAsync(TimeSpan by) => Clock.AdvanceAsync(by, () => Ended, SettleAsync);
+    public async Task ElapseAsync(TimeSpan by)
+    {
+        await SettleAsync();
+        await Clock.AdvanceAsync(by, () => Ended, SettleAsync);
+    }
 
     public Task IntervalsAsync(double intervals) => ElapseAsync(Interval * intervals);
 
@@ -436,8 +440,13 @@ internal sealed class KeepAliveRig : IAsyncDisposable
         await Peer.DisposeAsync();
     }
 
+    /// <summary>
+    /// Lets real work finish before the clock moves. This clock can cross an interval in microseconds, so a write
+    /// that's merely preempted would look stalled. One a test is holding is left alone.
+    /// </summary>
     private async Task SettleAsync()
     {
+        await UntilAsync(() => Connection.Transport.WritePendingFor == TimeSpan.Zero || Link.WritesWaiting > 0 || Ended);
         if ((AutoAnswer || AutoUnimplemented) && !Ended)
         {
             await UntilAsync(() => (Connection.PendingGlobalRequests == 0 && !Monitor.ProbeOutstanding) || Ended);
