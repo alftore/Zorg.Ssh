@@ -96,10 +96,12 @@ public sealed class ForwardingReviewRegressionTests
     [Fact]
     public async Task A_session_open_crossing_a_relays_close_is_refused_without_ending_the_connection()
     {
-        await using TcpService target = new(static (stream, _) =>
+        // The reset comes after a pause. On Linux, a reset that beats the server's connect to the finish makes the connect
+        // fail, so the server sends CHANNEL_OPEN_FAILURE and there is no relay and no CLOSE to cross.
+        await using TcpService target = new(static async (stream, ct) =>
         {
+            await Task.Delay(200, ct);
             stream.Socket.Close(0);
-            return Task.CompletedTask;
         });
         using SshHostKey key = SshHostKey.GenerateEd25519();
         await using SshServer server = await SshServer.StartAsync(
@@ -131,8 +133,20 @@ public sealed class ForwardingReviewRegressionTests
                 w.UInt32(1);
             }),
             Ct);
-        while ((await transport.ReceiveAsync(Ct).AsTask().WaitAsync(Limit, Ct)).Span[0] != MessageNumber.ChannelClose)
+        List<byte> seen = [];
+        try
         {
+            byte received;
+            do
+            {
+                received = (await transport.ReceiveAsync(Ct).AsTask().WaitAsync(Limit, Ct)).Span[0];
+                seen.Add(received);
+            }
+            while (received != MessageNumber.ChannelClose);
+        }
+        catch (TimeoutException)
+        {
+            Assert.Fail($"No CHANNEL_CLOSE arrived. The server sent message numbers: {string.Join(", ", seen)}.");
         }
 
         // The slot is freed just after the CLOSE goes out, and this test holds its own CLOSE back.

@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 # The Linux gate: build and test Zorg.Ssh in a Linux container, on Podman or Docker.
 #
-#   scripts/test-linux.sh [--variant alpine|ubuntu] [--interop] [--aot] [--hide-ssh] [--no-peers]
+#   scripts/test-linux.sh [--variant alpine|ubuntu] [--interop] [--aot] [--args "X"] [--repeat N] [--hide-ssh] [--no-peers]
 #
 #   --variant   alpine (default, musl, OpenSSL 3.5, so BCL ML-KEM runs) or ubuntu (glibc, OpenSSL 3.0).
 #   --interop   Also run the interop suite. It starts peers as sibling containers through the Podman
 #               machine's socket, so this needs Podman.
 #   --aot       Also publish and run samples/Zorg.Ssh.AotSmoke with Native AOT.
+#   --args "X"  Extra arguments for dotnet test, such as --args "--filter-class *HostileForwardingTests".
+#   --repeat N  Run the unit tests N times in one container, to chase a flaky test.
 #   --hide-ssh  Remove ssh and ssh-keygen in the container, to prove that a missing peer fails the run.
 #   --no-peers  Don't set ZORG_REQUIRE_PEERS=1. By default a missing ssh or ssh-keygen fails a test.
 #
@@ -20,14 +22,18 @@ interop=0
 aot=0
 peers=1
 hide=0
+testargs=
+repeat=1
 while [ $# -gt 0 ]; do
   case "$1" in
     --variant) variant="$2"; shift ;;
     --interop) interop=1 ;;
     --aot) aot=1 ;;
+    --args) testargs="$2"; shift ;;
+    --repeat) repeat="$2"; shift ;;
     --hide-ssh) hide=1 ;;
     --no-peers) peers=0 ;;
-    -h|--help) sed -n '2,17p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,19p' "$0"; exit 0 ;;
     *) echo "Unknown argument: $1" >&2; exit 2 ;;
   esac
   shift
@@ -72,7 +78,7 @@ run_cli 1200 build --network host -t "$image" -f "scripts/linux/Dockerfile.$vari
 echo "image step: $((SECONDS - start)) s"
 
 socket_args=()
-env_args=(-e "ZORG_REQUIRE_PEERS=$peers" -e "ZORG_GATE_AOT=$aot" -e "ZORG_GATE_INTEROP=$interop" -e "ZORG_GATE_HIDE_SSH=$hide")
+env_args=(-e "ZORG_REQUIRE_PEERS=$peers" -e "ZORG_GATE_AOT=$aot" -e "ZORG_GATE_INTEROP=$interop" -e "ZORG_GATE_HIDE_SSH=$hide" -e "ZORG_GATE_TEST_ARGS=$testargs" -e "ZORG_GATE_REPEAT=$repeat")
 if [ "$interop" = 1 ]; then
   # The socket path is the one inside the Podman machine, where the engine runs.
   sock="$(run_cli 60 info --format '{{.Host.RemoteSocket.Path}}' | tr -d '\r')"

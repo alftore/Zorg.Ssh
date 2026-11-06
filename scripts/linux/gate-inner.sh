@@ -16,12 +16,17 @@ skip_summary() {
 run_tests() {
   project="$1"; limit="$2"; log="$3"
   s=$(date +%s)
-  timeout "$limit" dotnet test --project "$project" --no-build -nologo > "$log" 2>&1
+  # shellcheck disable=SC2086
+  timeout "$limit" dotnet test --project "$project" --no-build -nologo ${ZORG_GATE_TEST_ARGS:-} > "$log" 2>&1
   code=$?
   grep -E '^(failed|Test run summary| +(total|failed|succeeded|skipped|duration):)' "$log"
   skip_summary "$log"
   echo "$project: exit $code in $(( $(date +%s) - s )) s"
-  [ "$code" -eq 0 ] || { status=1; tail -n 40 "$log"; }
+  if [ "$code" -ne 0 ]; then
+    status=1
+    echo "---- failures in $log"
+    awk '/^failed /{ p=1 } /^skipped /{ p=0 } /^Test run summary/{ p=0 } p' "$log" | head -n 120
+  fi
 }
 
 if [ "${ZORG_GATE_HIDE_SSH:-0}" = 1 ]; then
@@ -48,7 +53,12 @@ timeout 900 dotnet build Zorg.Ssh.slnx -nologo -v q --no-restore || { echo "BUIL
 echo "build: $(( $(date +%s) - s )) s"
 
 step "Unit tests"
-run_tests tests/Zorg.Ssh.Tests 900 /tmp/unit.log
+n=0
+while [ "$n" -lt "${ZORG_GATE_REPEAT:-1}" ]; do
+  n=$((n + 1))
+  [ "${ZORG_GATE_REPEAT:-1}" -gt 1 ] && echo "run $n of ${ZORG_GATE_REPEAT}"
+  run_tests tests/Zorg.Ssh.Tests 900 /tmp/unit.log
+done
 
 if [ "${ZORG_GATE_INTEROP:-0}" = 1 ]; then
   step "Interop tests"

@@ -33,6 +33,20 @@ internal sealed class TcpService : IAsyncDisposable
 
     public int Accepted => Volatile.Read(ref _accepted);
 
+    /// <summary>
+    /// Waits until the service has taken <paramref name="count"/> connections. A client's connect finishes in the kernel
+    /// before the accept loop runs, so reading <see cref="Accepted"/> straight after a reply can see the old count.
+    /// </summary>
+    public async Task WaitForAcceptedAsync(int count, CancellationToken cancellationToken)
+    {
+        using CancellationTokenSource limit = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        limit.CancelAfter(TimeSpan.FromSeconds(10));
+        while (Accepted < count)
+        {
+            await Task.Delay(10, limit.Token);
+        }
+    }
+
     public static TcpService Echo() => new(static async (stream, ct) =>
     {
         byte[] buffer = new byte[32 * 1024];

@@ -28,6 +28,7 @@ dotnet build Zorg.Ssh.slnx -nologo -v q
 dotnet test --solution Zorg.Ssh.slnx --no-build
 ```
 
+- `scripts/test-linux.sh` builds and tests in a Linux container (add `--interop`, `--aot`). Set `ZORG_REQUIRE_PEERS=1` for any run where a missing `ssh` must fail, not skip. `CONTRIBUTING.md` has the details.
 - `CONTRIBUTING.md` has the conventions. The build fails on any warning.
 - Commits are signed through `commit.gpgsign`. Never bypass it. If signing fails, stop and tell the maintainer.
 - Commit messages and pull requests have no `Co-Authored-By` or "Generated with" lines. The README states that agents help build the library.

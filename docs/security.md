@@ -115,7 +115,7 @@ What hasn't been checked:
 - **The server against scanners.** `ssh-audit` reports no failures, and tests check that. Terrapin-Scanner itself hasn't been run, though `ssh-audit` checks for the same flaw.
 - **SFTP against other servers.** Only OpenSSH's `sftp-server` has been tested. Commercial and appliance servers haven't, and neither has the OpenSSH server for Windows.
 - **Real network equipment**, and its quirks.
-- **Native AOT** is covered by a smoke test of the algorithms, not by a full session.
-- **Other platforms.** Day-to-day work happens on Windows x64, with peers in Linux containers. The CI workflow also targets Ubuntu. macOS and Arm haven't been tried.
+- **Native AOT** is covered by a smoke test of the algorithms and one in-memory session (a command, an SFTP round trip, the agent protocol and `ssh_config` parsing), not by a real network connection.
+- **Other platforms.** Day-to-day work happens on Windows x64, with peers in Linux containers. The unit and interop suites also run in a Linux container (`scripts/test-linux.sh`) on Alpine (musl) and Ubuntu (glibc), on x64 only. The CI workflow also targets Ubuntu, but hasn't run yet. macOS and Arm haven't been tried.
 - **Long-running connections.** Rekeying has been tested, but not connections left up for days.
 - **The public API** can still change before 1.0.

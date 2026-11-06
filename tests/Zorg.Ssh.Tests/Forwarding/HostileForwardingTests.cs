@@ -224,6 +224,7 @@ public sealed class HostileForwardingTests
 
             await server.SendAsync(ForwardedOpen(1, Address, 8000), Ct);
             Assert.Null((await server.OpenReplyAsync(Ct)).Refusal);
+            await first.WaitForAcceptedAsync(1, Ct);
             Assert.Equal(1, first.Accepted);
             Assert.Equal(0, second.Accepted);
         }
@@ -469,6 +470,7 @@ public sealed class HostileForwardingTests
                 Assert.Equal(ResourceShortage, (await server.OpenReplyAsync(Ct)).Refusal);
             }
 
+            await target.WaitForAcceptedAsync(2, Ct);
             Assert.Equal(2, target.Accepted);
             await server.PingAsync(Ct);
             release.SetResult();
