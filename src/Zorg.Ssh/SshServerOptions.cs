@@ -292,6 +292,26 @@ public sealed class SshServerOptions
     /// <summary>Gets the most connections not yet logged in. The default is 20. It stops idle connections crowding out real users.</summary>
     public int MaxUnauthenticatedConnections { get; init; } = 20;
 
+    /// <summary>
+    /// Gets the most connections not yet logged in that one source address may hold. The default is 5. Without it,
+    /// one address could hold every <see cref="MaxUnauthenticatedConnections"/> slot and lock everyone else out.
+    /// An IPv4-mapped IPv6 address counts as its IPv4 address, and IPv6 addresses count together by /64 prefix,
+    /// because one host commonly owns a whole /64. A connection given to <see cref="SshServer.ServeStreamAsync"/>
+    /// has no address, so it isn't counted here. Must be at least 1.
+    /// </summary>
+    /// <example>
+    /// <code>
+    /// SshServerOptions options = new()
+    /// {
+    ///     HostKeys = [hostKey],
+    ///     PasswordHandler = handler,
+    ///     SessionHandler = RunSessionAsync,
+    ///     MaxUnauthenticatedPerAddress = 3,
+    /// };
+    /// </code>
+    /// </example>
+    public int MaxUnauthenticatedPerAddress { get; init; } = 5;
+
     /// <summary>Gets the time allowed to log in. The default is 30 seconds.</summary>
     public TimeSpan LoginGraceTime { get; init; } = TimeSpan.FromSeconds(30);
 

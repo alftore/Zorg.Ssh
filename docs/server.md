@@ -181,6 +181,7 @@ SshServerOptions options = new()
     Banner = "Authorised use only.\n",
     MaxConnections = 50,
     MaxUnauthenticatedConnections = 10,
+    MaxUnauthenticatedPerAddress = 3,
     LoginGraceTime = TimeSpan.FromSeconds(15),
     MaxAuthAttempts = 3,
     MaxSessionsPerConnection = 4,
@@ -191,8 +192,11 @@ SshServerOptions options = new()
 |---|---|---|
 | `MaxConnections` | 100 | The most connections at once. Past it, new ones are closed before a byte is read. |
 | `MaxUnauthenticatedConnections` | 20 | The most connections not yet logged in, so idle ones can't crowd out real users. |
+| `MaxUnauthenticatedPerAddress` | 5 | The most connections not yet logged in that one source address may hold, so one address can't take every unauthenticated slot. See below. |
 | `LoginGraceTime` | 30 seconds | The time allowed to log in. |
 | `MaxAuthAttempts` | 6 | Failed attempts allowed per connection. |
 | `MaxSessionsPerConnection` | 10 | The most sessions on one connection. |
+
+`MaxUnauthenticatedPerAddress` counts by the source address of the accepted socket, before anything is read. An IPv4-mapped IPv6 address (`::ffff:192.0.2.7`) counts as its IPv4 address, and IPv6 addresses count together by /64 prefix, because one host commonly owns a whole /64. A connection over the limit is closed at once, like one over `MaxConnections`. The count is given back when the connection logs in, fails to, runs out of `LoginGraceTime`, or ends, so a client that logs in leaves room for the next. Clients behind one NAT share an address, so raise the limit for a gateway that fronts many users. It doesn't apply to `ServeStreamAsync`, which has no address, and there are no penalties for repeat failures or random early drop as in OpenSSH's `MaxStartups`: an attacker with many addresses is still bounded only by `MaxUnauthenticatedConnections`.
 
 `Banner` is text sent to clients before login. `LoggerFactory` takes a standard `ILoggerFactory`, and passwords and keys aren't logged.

@@ -100,6 +100,7 @@ internal static class ServerExamples
             Banner = "Authorised use only.\n",
             MaxConnections = 50,
             MaxUnauthenticatedConnections = 10,
+            MaxUnauthenticatedPerAddress = 3,
             LoginGraceTime = TimeSpan.FromSeconds(15),
             MaxAuthAttempts = 3,
             MaxSessionsPerConnection = 4,

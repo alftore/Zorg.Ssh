@@ -50,6 +50,7 @@ public sealed partial class SshServer : IAsyncDisposable
     private readonly ConcurrentDictionary<Task, bool> _connections = new();
     private readonly TransportOptions _transportOptions;
     private int _connectionCount;
+    private readonly PerAddressLimiter _perAddress;
     private int _unauthenticatedCount;
     private int _disposed;
     private Task? _acceptLoop;
@@ -57,6 +58,7 @@ public sealed partial class SshServer : IAsyncDisposable
     private SshServer(SshServerOptions options, TcpListener listener)
     {
         _options = options;
+        _perAddress = new PerAddressLimiter(options.MaxUnauthenticatedPerAddress);
         _listener = listener;
         _logger = options.LoggerFactory?.CreateLogger<SshServer>() ?? NullLogger<SshServer>.Instance;
         _transportOptions = new TransportOptions
@@ -71,6 +73,9 @@ public sealed partial class SshServer : IAsyncDisposable
             Logger = _logger,
         };
     }
+
+    /// <summary>Gets how many source addresses have a counted unauthenticated connection. For tests: it must return to zero.</summary>
+    internal int UnauthenticatedAddressCount => _perAddress.Entries;
 
     /// <summary>Gets the address and port the server listens on.</summary>
     public IPEndPoint LocalEndPoint => (IPEndPoint)_listener.LocalEndpoint;
@@ -98,6 +103,11 @@ public sealed partial class SshServer : IAsyncDisposable
         if (options.PasswordHandler is null && options.PublicKeyHandler is null)
         {
             throw new ArgumentException("Set PasswordHandler or PublicKeyHandler, or nobody can log in.", nameof(options));
+        }
+
+        if (options.MaxUnauthenticatedPerAddress < 1)
+        {
+            throw new ArgumentOutOfRangeException(nameof(options), options.MaxUnauthenticatedPerAddress, "MaxUnauthenticatedPerAddress must be at least 1, or nobody can log in.");
         }
 
         TcpListener listener = new(options.Address, options.Port);
@@ -236,22 +246,33 @@ public sealed partial class SshServer : IAsyncDisposable
                 continue;
             }
 
-            if (!TryConfigure(socket))
+            if (!TryConfigure(socket) || SourceAddress(socket) is not { } address)
             {
+                socket.Dispose();
                 continue;
             }
 
             // S6: refused before a single byte is read, so a flood costs almost nothing.
-            if (!TryReserve())
+            if (!TryReserve(address))
             {
                 LogLimitReached(_logger);
                 socket.Dispose();
                 continue;
             }
 
+            try
+            {
 #pragma warning disable CA2000 // The connection owns the stream, and closes it on every path.
-            _ = Track(new NetworkStream(socket, ownsSocket: true));
+                _ = Track(new NetworkStream(socket, ownsSocket: true), address);
 #pragma warning restore CA2000
+            }
+            catch (Exception ex) when (ex is IOException or SocketException or ObjectDisposedException)
+            {
+                // The socket died before the connection took it over, so nothing else will give the counts back.
+                Interlocked.Decrement(ref _connectionCount);
+                ReleaseUnauthenticated(address);
+                socket.Dispose();
+            }
         }
     }
 
@@ -267,12 +288,28 @@ public sealed partial class SshServer : IAsyncDisposable
         }
         catch (SocketException)
         {
-            socket.Dispose();
             return false;
         }
     }
 
-    private bool TryReserve()
+    /// <summary>Reads the peer's address, or null if the socket has already gone.</summary>
+    private static IPAddress? SourceAddress(Socket socket)
+    {
+        try
+        {
+            return (socket.RemoteEndPoint as IPEndPoint)?.Address;
+        }
+        catch (Exception ex) when (ex is SocketException or ObjectDisposedException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Takes a connection slot, an unauthenticated slot and, when the source is known, a per-address count. It
+    /// takes all or nothing. A stream has no address, so it isn't counted per address.
+    /// </summary>
+    private bool TryReserve(IPAddress? address = null)
     {
         if (Interlocked.Increment(ref _connectionCount) > _options.MaxConnections)
         {
@@ -287,12 +324,29 @@ public sealed partial class SshServer : IAsyncDisposable
             return false;
         }
 
+        if (address is not null && !_perAddress.TryAcquire(address))
+        {
+            Interlocked.Decrement(ref _unauthenticatedCount);
+            Interlocked.Decrement(ref _connectionCount);
+            return false;
+        }
+
         return true;
     }
 
-    private Task Track(Stream stream)
+    /// <summary>Gives back the unauthenticated slot and the per-address count. Each connection calls this exactly once.</summary>
+    private void ReleaseUnauthenticated(IPAddress? address)
     {
-        Task connection = Task.Run(() => ServeAsync(stream), CancellationToken.None);
+        Interlocked.Decrement(ref _unauthenticatedCount);
+        if (address is not null)
+        {
+            _perAddress.Release(address);
+        }
+    }
+
+    private Task Track(Stream stream, IPAddress? address = null)
+    {
+        Task connection = Task.Run(() => ServeAsync(stream, address), CancellationToken.None);
         _connections.TryAdd(connection, true);
         _ = connection.ContinueWith(
             finished => _connections.TryRemove(finished, out _),
@@ -302,7 +356,7 @@ public sealed partial class SshServer : IAsyncDisposable
         return connection;
     }
 
-    private async Task ServeAsync(Stream stream)
+    private async Task ServeAsync(Stream stream, IPAddress? address)
     {
         bool authenticated = false;
         SshTransport? transport = null;
@@ -318,7 +372,7 @@ public sealed partial class SshServer : IAsyncDisposable
             ServerAuthenticator authenticator = new(transport, BuildAuthOptions());
             AuthenticatedUser user = await authenticator.AuthenticateAsync(grace.Token).ConfigureAwait(false);
             authenticated = true;
-            Interlocked.Decrement(ref _unauthenticatedCount);
+            ReleaseUnauthenticated(address);
 
             SshPrincipal principal = new(
                 user.Name,
@@ -357,7 +411,7 @@ public sealed partial class SshServer : IAsyncDisposable
 
             if (!authenticated)
             {
-                Interlocked.Decrement(ref _unauthenticatedCount);
+                ReleaseUnauthenticated(address);
             }
 
             Interlocked.Decrement(ref _connectionCount);

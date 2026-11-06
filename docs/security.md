@@ -39,6 +39,7 @@ Guarantee 4 has limits you should know about:
 | Time allowed for a rekey | 60 seconds |
 | Server address | Loopback |
 | Server limits | See [server.md](server.md#limits) |
+| Unauthenticated connections per source address | 5, counted by IPv4 address or IPv6 /64 |
 
 Strict key exchange, the fix for Terrapin, is used whenever the peer supports it. Against an old server without it, the connection goes ahead without that protection.
 
