@@ -1,0 +1,9 @@
+# The Linux gate image, glibc variant. Ubuntu 24.04 ships OpenSSL 3.0, so the BCL has no ML-KEM here.
+# The packages are baked into the image once. Do not run apt-get in a test run.
+FROM mcr.microsoft.com/dotnet/sdk:10.0-noble
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends openssh-client openssh-server podman-remote clang zlib1g-dev \
+ && rm -rf /var/lib/apt/lists/*
+ENV DOTNET_NOLOGO=1 \
+    DOTNET_CLI_TELEMETRY_OPTOUT=1 \
+    DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1

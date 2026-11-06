@@ -37,12 +37,45 @@ jobs:
       - name: Build
         run: dotnet build Zorg.Ssh.slnx -c Release
 
+      # ZORG_REQUIRE_PEERS=1 turns a missing ssh or ssh-keygen into a failure, so the OpenSSH tests can't pass by skipping.
+      # The interop suite needs a Linux container engine, which windows-latest doesn't have, so it has its own job.
       - name: Test
-        run: dotnet test --solution Zorg.Ssh.slnx -c Release --no-build
+        env:
+          ZORG_REQUIRE_PEERS: '1'
+        run: dotnet test --project tests/Zorg.Ssh.Tests -c Release --no-build
 
       - name: Pack
         shell: bash
         run: dotnet pack src/Zorg.Ssh/Zorg.Ssh.csproj -c Release --no-build -p:PackageOutputPath="$RUNNER_TEMP/packages"
+
+  interop:
+    name: Interop tests (ubuntu-latest, Docker)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          global-json-file: global.json
+
+      - name: Check the peers
+        run: |
+          docker version
+          ssh -V
+          command -v ssh-keygen sftp ssh-agent ssh-add
+
+      - name: Build
+        run: dotnet build tests/Zorg.Ssh.InteropTests -c Release
+
+      # Docker is the engine here. ZORG_REQUIRE_PEERS=1 makes a missing docker, ssh or sftp a failure, not a skip.
+      - name: Test
+        env:
+          ZORG_REQUIRE_PEERS: '1'
+          ZORG_SSH_CONTAINER_CLI: docker
+        run: dotnet test --project tests/Zorg.Ssh.InteropTests -c Release --no-build
 
   aot-smoke:
     name: AOT smoke publish

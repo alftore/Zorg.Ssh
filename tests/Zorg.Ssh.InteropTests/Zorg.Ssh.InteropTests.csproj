@@ -13,7 +13,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <AssemblyMetadata Include="PeersPath" Value="$(MSBuildProjectDirectory)\Peers" />
+    <AssemblyMetadata Include="PeersPath" Value="$(MSBuildProjectDirectory)/Peers" />
   </ItemGroup>
 
 </Project>

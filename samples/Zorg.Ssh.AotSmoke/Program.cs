@@ -24,5 +24,6 @@ writer.Dispose();
 CipherSmoke.Run(Check);
 KeySmoke.Run(Check);
 KeyFileSmoke.Run(Check);
+await ConnectionSmoke.RunAsync(Check);
 
 return failures == 0 ? 0 : 1;

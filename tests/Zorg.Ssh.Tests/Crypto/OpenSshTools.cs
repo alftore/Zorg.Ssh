@@ -11,7 +11,10 @@ using Zorg.Ssh.Protocol;
 
 namespace Zorg.Ssh.Tests.Crypto;
 
-/// <summary>Finds and runs the real OpenSSH tools. A missing tool skips locally and fails in CI.</summary>
+/// <summary>
+/// Finds and runs the real OpenSSH tools. A missing tool skips locally. It fails when <c>CI</c> is set or
+/// <c>ZORG_REQUIRE_PEERS=1</c>, because a test that passes by skipping proves nothing.
+/// </summary>
 internal static class OpenSshTools
 {
     /// <summary>Returns the full path of a tool, or stops the test.</summary>
@@ -23,9 +26,9 @@ internal static class OpenSshTools
             return path;
         }
 
-        if (Environment.GetEnvironmentVariable("CI") is not null)
+        if (Environment.GetEnvironmentVariable("CI") is not null || Environment.GetEnvironmentVariable("ZORG_REQUIRE_PEERS") == "1")
         {
-            Assert.Fail($"{name} is missing. CI must not pass by skipping an interop test.");
+            Assert.Fail($"{name} is missing. CI and ZORG_REQUIRE_PEERS=1 must not pass by skipping an interop test.");
         }
 
         Assert.Skip($"{name} isn't installed here.");

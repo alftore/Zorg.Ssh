@@ -1,0 +1,11 @@
+# The Linux gate image, musl variant. Alpine 3.24 ships OpenSSL 3.5, so the BCL ML-KEM path runs.
+# Pinned to the Alpine minor, so the OpenSSL version doesn't change under a run.
+# It has OpenSSH (ssh, ssh-keygen, ssh-agent, sftp) and the Podman client for the interop tests,
+# and clang with zlib for a Native AOT publish.
+FROM mcr.microsoft.com/dotnet/sdk:10.0-alpine3.24
+RUN apk add --no-cache openssh openssh-keygen openssh-client-default openssh-client-common \
+        podman-remote clang build-base zlib-dev tar \
+ && ln -s /usr/bin/podman-remote /usr/local/bin/podman
+ENV DOTNET_NOLOGO=1 \
+    DOTNET_CLI_TELEMETRY_OPTOUT=1 \
+    DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1

@@ -7,14 +7,16 @@ using Xunit;
 namespace Zorg.Ssh.InteropTests;
 
 /// <summary>
-/// Finds the real peers. A missing peer skips a local run but fails in CI, because an interop
-/// test that passes by skipping proves nothing.
+/// Finds the real peers. A missing peer skips a local run. It fails when <c>CI=true</c> or
+/// <c>ZORG_REQUIRE_PEERS=1</c>, because an interop test that passes by skipping proves nothing.
 /// </summary>
 internal static class PeerTools
 {
     public const string SshClientVariable = "ZORG_SSH_CLIENT";
 
-    private static bool InCi => Environment.GetEnvironmentVariable("CI") == "true";
+    /// <summary>True when a missing peer must fail the test instead of skipping it.</summary>
+    public static bool PeersRequired =>
+        Environment.GetEnvironmentVariable("CI") == "true" || Environment.GetEnvironmentVariable("ZORG_REQUIRE_PEERS") == "1";
 
     public static string PeersPath { get; } = typeof(PeerTools).Assembly
         .GetCustomAttributes<AssemblyMetadataAttribute>()
@@ -42,9 +44,9 @@ internal static class PeerTools
 
     private static T Missing<T>(string what)
     {
-        if (InCi)
+        if (PeersRequired)
         {
-            throw new InvalidOperationException($"CI must have {what}.");
+            throw new InvalidOperationException($"CI and ZORG_REQUIRE_PEERS=1 need {what}.");
         }
 
         Assert.Skip($"Needs {what}.");

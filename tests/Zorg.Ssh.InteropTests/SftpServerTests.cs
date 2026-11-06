@@ -103,9 +103,9 @@ public sealed class SftpServerTests : IDisposable
             return sftp;
         }
 
-        if (Environment.GetEnvironmentVariable("CI") == "true")
+        if (PeerTools.PeersRequired)
         {
-            throw new InvalidOperationException("CI must have an OpenSSH sftp client.");
+            throw new InvalidOperationException("CI and ZORG_REQUIRE_PEERS=1 need an OpenSSH sftp client.");
         }
 
         Assert.Skip("Needs an OpenSSH sftp client.");
