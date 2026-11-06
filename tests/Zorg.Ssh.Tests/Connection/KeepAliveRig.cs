@@ -381,6 +381,16 @@ internal sealed class KeepAliveRig : IAsyncDisposable
         return Peer.SendAsync(payload, _token).AsTask();
     }
 
+    /// <summary>
+    /// Waits until everything the peer sent so far has been handled. Packets arrive in order, and the clock moves
+    /// first, so the timestamp can only match once the last one is through.
+    /// </summary>
+    public async Task SyncAsync()
+    {
+        await ElapseAsync(TimeSpan.FromMilliseconds(1));
+        await PeerSpeaksAsync();
+    }
+
     /// <summary>Sends an IGNORE, and waits for it to reach the connection, so the clock can't run ahead of it.</summary>
     public async Task PeerSpeaksAsync()
     {

@@ -252,7 +252,7 @@ public class KeepAliveTests
         await rig.UnimplementedAsync(sequence + 1);
         await rig.UnimplementedAsync(sequence - 1);
         await rig.UnimplementedAsync(uint.MaxValue);
-        await rig.PeerSpeaksAsync();
+        await rig.SyncAsync();
 
         Assert.False(reply.IsCompleted);
         Assert.Equal(1, rig.Connection.PendingGlobalRequests);
@@ -275,7 +275,7 @@ public class KeepAliveTests
             await rig.UnimplementedAsync(sequence + i);
         }
 
-        await rig.PeerSpeaksAsync();
+        await rig.SyncAsync();
         Assert.False(reply.IsCompleted);
         Assert.False(rig.Ended);
         Assert.Equal(1, rig.Connection.PendingGlobalRequests);
@@ -284,7 +284,7 @@ public class KeepAliveTests
         await rig.UnimplementedAsync(sequence);
         await rig.UnimplementedAsync(sequence);
         Assert.Null(await reply.WaitAsync(Limit, Ct));
-        await rig.PeerSpeaksAsync();
+        await rig.SyncAsync();
         Assert.False(rig.Ended);
         Assert.Equal(0, rig.Connection.PendingGlobalRequests);
     }
@@ -304,7 +304,7 @@ public class KeepAliveTests
         }
 
         await rig.UnimplementedAsync(uint.MaxValue);
-        await rig.PeerSpeaksAsync();
+        await rig.SyncAsync();
         Assert.False(reply.IsCompleted);
 
         rig.Link.Open();
@@ -371,7 +371,7 @@ public class KeepAliveTests
         Assert.Equal("tcpip-forward", await rig.NextGlobalRequestAsync());
 
         await rig.AnswerAsync(MessageNumber.Unimplemented, 0, 0);
-        await rig.PeerSpeaksAsync();
+        await rig.SyncAsync();
 
         Assert.False(rig.Ended);
         Assert.False(reply.IsCompleted);
