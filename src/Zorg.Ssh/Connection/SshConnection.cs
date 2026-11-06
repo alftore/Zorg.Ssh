@@ -44,9 +44,9 @@ internal sealed class SshConnection : IAsyncDisposable
     private readonly SemaphoreSlim _globalRequestOrder = new(1, 1);
 #pragma warning restore CA2213
 
-    // Unbounded in type only: a channel has a few entries at most, a credit, a close, and a close that timed out.
-    private readonly Channel<(SshChannel Channel, bool Close)> _deferred =
-        System.Threading.Channels.Channel.CreateUnbounded<(SshChannel, bool)>(new UnboundedChannelOptions { SingleReader = true });
+    // Unbounded in type only: a channel waits here once at most for each kind, and channels are limited.
+    private readonly Channel<(SshChannel Channel, DeferredSend Send)> _deferred =
+        System.Threading.Channels.Channel.CreateUnbounded<(SshChannel, DeferredSend)>();
     private readonly Channel<IncomingChannelOpen> _incoming =
         System.Threading.Channels.Channel.CreateBounded<IncomingChannelOpen>(MaxPendingOpens);
     private readonly CancellationTokenSource _stop = new();
@@ -88,6 +88,9 @@ internal sealed class SshConnection : IAsyncDisposable
 
     /// <summary>Gets a task that completes when the connection ends. It never faults.</summary>
     public Task Ended => _ended.Task;
+
+    /// <summary>Gets how many deferred sends are waiting for the sender loop.</summary>
+    internal int DeferredCount => _deferred.Reader.Count;
 
     /// <summary>Gets the transport.</summary>
     public SshTransport Transport => _transport;
@@ -345,10 +348,25 @@ internal sealed class SshConnection : IAsyncDisposable
         _transport.SendAsync(payload, cancellationToken);
 
     /// <summary>Asks for a channel's pending credit to be sent. Called at most once until it's taken.</summary>
-    public void QueueWindowAdjust(SshChannel channel) => _deferred.Writer.TryWrite((channel, false));
+    public void QueueWindowAdjust(SshChannel channel) => _deferred.Writer.TryWrite((channel, DeferredSend.Credit));
+
+    /// <summary>Asks for a channel's owed EOF to be sent, for a caller that can't wait for room in the send queue.</summary>
+    public void QueueEof(SshChannel channel)
+    {
+        if (channel.ClaimDeferredEof())
+        {
+            _deferred.Writer.TryWrite((channel, DeferredSend.Eof));
+        }
+    }
 
     /// <summary>Asks for a CLOSE, which goes behind anything queued for the channel. The receive loop can't wait for that itself.</summary>
-    public void QueueClose(SshChannel channel) => _deferred.Writer.TryWrite((channel, true));
+    public void QueueClose(SshChannel channel)
+    {
+        if (channel.ClaimDeferredClose())
+        {
+            _deferred.Writer.TryWrite((channel, DeferredSend.Close));
+        }
+    }
 
     /// <summary>Frees a session slot taken when the peer opened a channel. Called when the whole session is over.</summary>
     public void ReleaseIncomingSession()
@@ -432,15 +450,19 @@ internal sealed class SshConnection : IAsyncDisposable
     {
         try
         {
-            await foreach ((SshChannel channel, bool close) in _deferred.Reader.ReadAllAsync(_stop.Token).ConfigureAwait(false))
+            await foreach ((SshChannel channel, DeferredSend send) in _deferred.Reader.ReadAllAsync(_stop.Token).ConfigureAwait(false))
             {
-                if (close)
+                switch (send)
                 {
-                    await channel.CloseAsync(_stop.Token).ConfigureAwait(false);
-                }
-                else
-                {
-                    await channel.GrantCreditAsync(_stop.Token).ConfigureAwait(false);
+                    case DeferredSend.Eof:
+                        await channel.SendDeferredEofAsync(_stop.Token).ConfigureAwait(false);
+                        break;
+                    case DeferredSend.Close:
+                        await channel.SendDeferredCloseAsync(_stop.Token).ConfigureAwait(false);
+                        break;
+                    default:
+                        await channel.GrantCreditAsync(_stop.Token).ConfigureAwait(false);
+                        break;
                 }
             }
         }
@@ -903,6 +925,14 @@ internal sealed class SshConnection : IAsyncDisposable
 
         throw new SshProtocolException("The peer sent a message for a channel that isn't open.");
     }
+}
+
+/// <summary>What the sender loop does for a channel.</summary>
+internal enum DeferredSend
+{
+    Credit,
+    Eof,
+    Close,
 }
 
 /// <summary>A channel the peer opened. <paramref name="Extra"/> is what its type adds to the message.</summary>

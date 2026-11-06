@@ -242,6 +242,8 @@ Console.WriteLine($"Exit code {process.ExitCode}");
 
 Read `StandardOutput` and `StandardError` together. They share a flow-control window, so if you read only one, a server writing to the other stalls when the window fills.
 
+Disposing `StandardInput` doesn't wait. EOF goes out behind everything already written, including a write still running, and it reaches the server when the connection has room. A write that starts after the dispose fails.
+
 To follow output as it comes:
 
 ```csharp

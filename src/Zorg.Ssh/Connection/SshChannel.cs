@@ -22,6 +22,11 @@ internal sealed record IncomingChannelRequest(string Type, bool WantReply, byte[
 /// OpenSSH ends the whole connection over a message for a channel it has closed, so one stray packet here
 /// would take every other session with it.
 /// </para>
+/// <para>
+/// The peer waits for EOF and CLOSE, so neither is lost when a send is given up: each is recorded as owed, and the
+/// connection's sender loop finishes it. EOF goes after every write that started before it, and CLOSE sends an owed
+/// EOF first. Both of those happen under <see cref="_sendLock"/>, so nothing can pass the CLOSE.
+/// </para>
 /// </summary>
 internal sealed class SshChannel : IAsyncDisposable
 {
@@ -54,13 +59,23 @@ internal sealed class SshChannel : IAsyncDisposable
     private bool _creditQueued;
     private TaskCompletionSource? _windowWaiter;
     private TaskCompletionSource<bool>? _requestReply;
-    private bool _eofSent;
+    private bool _inputClosed;
+
+    // Set while _inputClosed is true but the EOF isn't queued yet. It never outlives the CLOSE, and the peer's CLOSE clears it.
+    private bool _eofOwed;
+
+    // Writes that started before the input closed. An owed EOF waits for them, so it can't pass their data.
+    private int _writers;
     private bool _eofReceived;
     private bool _closeSent;
 
     // Set while _closeSent is true but the CLOSE isn't queued yet. The channel is shut for everything except that CLOSE.
     private bool _closeOwed;
     private bool _closeReceived;
+
+    // Set while the sender loop has an entry waiting for this channel, so asking again adds nothing.
+    private bool _eofDeferred;
+    private bool _closeDeferred;
     private Exception? _failure;
 
     public SshChannel(SshConnection connection, uint localId)
@@ -98,6 +113,18 @@ internal sealed class SshChannel : IAsyncDisposable
     /// <summary>Gets a task that completes when both sides have closed. It never faults.</summary>
     public Task Closed => _closed.Task;
 
+    /// <summary>Gets whether an EOF is still to be queued.</summary>
+    public bool EofOwed
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _eofOwed;
+            }
+        }
+    }
+
     /// <summary>Gets the failure, if the connection was lost rather than the channel closing normally.</summary>
     public Exception? ConnectionFailure { get; private set; }
 
@@ -123,33 +150,117 @@ internal sealed class SshChannel : IAsyncDisposable
     /// <summary>Sends data, waiting for window as needed, in packets the peer accepts.</summary>
     public async ValueTask WriteAsync(ReadOnlyMemory<byte> data, CancellationToken cancellationToken, uint? extendedType = null)
     {
-        while (!data.IsEmpty)
+        if (data.IsEmpty)
         {
-            int chunk = await ReserveWindowAsync(data.Length, cancellationToken).ConfigureAwait(false);
-            await SendDataAsync(data[..chunk], extendedType, cancellationToken).ConfigureAwait(false);
-            data = data[chunk..];
+            return;
         }
-    }
 
-    /// <summary>Sends EOF. Safe to call more than once.</summary>
-    public async ValueTask SendEofAsync(CancellationToken cancellationToken)
-    {
         lock (_gate)
         {
-            if (_eofSent)
+            ThrowIfUnusable();
+            if (_inputClosed)
             {
-                return;
+                throw new SshConnectionException("The channel's input is closed.");
             }
 
-            _eofSent = true;
+            _writers++;
         }
 
-        await SendOrderedAsync(SimpleMessage(MessageNumber.ChannelEof), cancellationToken).ConfigureAwait(false);
+        try
+        {
+            while (!data.IsEmpty)
+            {
+                int chunk = await ReserveWindowAsync(data.Length, cancellationToken).ConfigureAwait(false);
+                await SendDataAsync(data[..chunk], extendedType, cancellationToken).ConfigureAwait(false);
+                data = data[chunk..];
+            }
+        }
+        finally
+        {
+            bool eofNext;
+            lock (_gate)
+            {
+                _writers--;
+                eofNext = _writers == 0 && _eofOwed;
+            }
+
+            if (eofNext)
+            {
+                _connection.QueueEof(this);
+            }
+        }
     }
 
     /// <summary>
-    /// Sends CLOSE, after anything already queued for this channel. Safe to call more than once. Cancelling gives up
-    /// the wait, not the close: the peer holds resources until it hears, so the connection's sender loop finishes it.
+    /// Sends EOF, after any write still running. Safe to call more than once. Cancelling gives up the wait, not the
+    /// EOF: the peer may wait for ever without it, so the connection's sender loop finishes it.
+    /// </summary>
+    public async ValueTask SendEofAsync(CancellationToken cancellationToken)
+    {
+        if (CloseInput())
+        {
+            await SendOwedEofAsync(cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>Hands EOF to the connection's sender loop without waiting, so a peer that has stopped reading can't hold up the caller.</summary>
+    public void QueueEof()
+    {
+        if (CloseInput())
+        {
+            _connection.QueueEof(this);
+        }
+    }
+
+    /// <summary>Claims the sender loop's entry for EOF. Returns false if one is waiting already.</summary>
+    public bool ClaimDeferredEof()
+    {
+        lock (_gate)
+        {
+            bool claimed = !_eofDeferred;
+            _eofDeferred = true;
+            return claimed;
+        }
+    }
+
+    /// <summary>Claims the sender loop's entry for CLOSE. Returns false if one is waiting already.</summary>
+    public bool ClaimDeferredClose()
+    {
+        lock (_gate)
+        {
+            bool claimed = !_closeDeferred;
+            _closeDeferred = true;
+            return claimed;
+        }
+    }
+
+    /// <summary>Runs the sender loop's entry for EOF.</summary>
+    public ValueTask SendDeferredEofAsync(CancellationToken cancellationToken)
+    {
+        lock (_gate)
+        {
+            _eofDeferred = false;
+        }
+
+        return SendOwedEofAsync(cancellationToken);
+    }
+
+    /// <summary>Runs the sender loop's entry for CLOSE.</summary>
+    public ValueTask SendDeferredCloseAsync(CancellationToken cancellationToken)
+    {
+        lock (_gate)
+        {
+            _closeDeferred = false;
+        }
+
+        return CloseAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// Sends CLOSE, after anything already queued for this channel and any EOF still owed. A write still running
+    /// fails instead of holding this up, because it may never get window. Safe to call more than once. Cancelling
+    /// gives up the wait, not the close: the peer holds resources until it hears, so the connection's sender loop
+    /// finishes it.
     /// </summary>
     public async ValueTask CloseAsync(CancellationToken cancellationToken)
     {
@@ -158,6 +269,7 @@ internal sealed class SshChannel : IAsyncDisposable
             await _sendLock.WaitAsync(cancellationToken).ConfigureAwait(false);
             try
             {
+                bool eof;
                 lock (_gate)
                 {
                     if (_closeSent && !_closeOwed)
@@ -167,6 +279,12 @@ internal sealed class SshChannel : IAsyncDisposable
 
                     _closeSent = true;
                     _closeOwed = true;
+                    eof = _eofOwed;
+                }
+
+                if (eof)
+                {
+                    await SendEofNowAsync(cancellationToken).ConfigureAwait(false);
                 }
 
                 await _connection.SendAsync(SimpleMessage(MessageNumber.ChannelClose), cancellationToken).ConfigureAwait(false);
@@ -309,6 +427,9 @@ internal sealed class SshChannel : IAsyncDisposable
             }
 
             _closeReceived = true;
+
+            // The peer has finished with the channel, so it's no longer waiting to hear this.
+            _eofOwed = false;
             reply = !_closeSent;
             window = _windowWaiter;
             _windowWaiter = null;
@@ -383,6 +504,7 @@ internal sealed class SshChannel : IAsyncDisposable
             ConnectionFailure = _closeReceived && _closeSent ? null : failure;
             _closeSent = true;
             _closeOwed = false;
+            _eofOwed = false;
             _closeReceived = true;
         }
 
@@ -449,7 +571,7 @@ internal sealed class SshChannel : IAsyncDisposable
         }
         catch (Exception ex) when (ex is SshException or OperationCanceledException)
         {
-            // The channel can't be closed politely, because the connection has gone.
+            // The connection has gone, or the sender loop finishes the close once the queue has room.
         }
 
         await Output.DisposeAsync().ConfigureAwait(false);
@@ -459,6 +581,66 @@ internal sealed class SshChannel : IAsyncDisposable
     }
 
     private static Pipe NewPipe() => new(new PipeOptions(pauseWriterThreshold: 0, useSynchronizationContext: false));
+
+    /// <summary>
+    /// Refuses further writes, and records that EOF is owed unless the channel is closing anyway. Returns true if the
+    /// caller is to see it sent. Otherwise the last write still running does that, or nothing is owed.
+    /// </summary>
+    private bool CloseInput()
+    {
+        lock (_gate)
+        {
+            if (_inputClosed)
+            {
+                return false;
+            }
+
+            _inputClosed = true;
+            _eofOwed = !_closeSent && !_closeReceived;
+            return _eofOwed && _writers == 0;
+        }
+    }
+
+    /// <summary>Sends the EOF that's owed, if it still is. Only called once no write is running.</summary>
+    private async ValueTask SendOwedEofAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            await _sendLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                bool owed;
+                lock (_gate)
+                {
+                    owed = _eofOwed;
+                }
+
+                if (owed)
+                {
+                    await SendEofNowAsync(cancellationToken).ConfigureAwait(false);
+                }
+            }
+            finally
+            {
+                _sendLock.Release();
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            _connection.QueueEof(this);
+            throw;
+        }
+    }
+
+    /// <summary>Queues the owed EOF. The caller holds <see cref="_sendLock"/>. If this is cancelled, the EOF stays owed.</summary>
+    private async ValueTask SendEofNowAsync(CancellationToken cancellationToken)
+    {
+        await _connection.SendAsync(SimpleMessage(MessageNumber.ChannelEof), cancellationToken).ConfigureAwait(false);
+        lock (_gate)
+        {
+            _eofOwed = false;
+        }
+    }
 
     private void FinishIfClosed()
     {
@@ -514,11 +696,6 @@ internal sealed class SshChannel : IAsyncDisposable
             lock (_gate)
             {
                 ThrowIfUnusable();
-                if (_eofSent)
-                {
-                    throw new SshConnectionException("The channel's input is closed.");
-                }
-
                 if (_sendWindow > 0)
                 {
                     int chunk = (int)Math.Min(Math.Min(_sendWindow, _remoteMaxPacket), wanted);
