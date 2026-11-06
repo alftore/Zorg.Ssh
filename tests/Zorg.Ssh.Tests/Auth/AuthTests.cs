@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Xunit;
@@ -174,6 +175,137 @@ public class AuthTests
             ReadOnlyMemory<byte> reply = await client.ReceiveAsync(Ct);
             Assert.Equal(MessageNumber.UserAuthFailure, reply.Span[0]);
             Assert.False(auth.IsCompleted);
+        });
+
+    /// <summary>A publickey request with a real signature over this session.</summary>
+    private static byte[] SignedKeyRequest(SshTransport client, SshPrivateKey key)
+    {
+        byte[] blob = key.PublicKey.Blob.ToArray();
+        SshWriter signed = new(512);
+        byte[] data;
+        try
+        {
+            signed.WriteBinary(client.SessionId.Span);
+            signed.WriteByte(MessageNumber.UserAuthRequest);
+            signed.WriteUtf8String("alice");
+            signed.WriteUtf8String("ssh-connection");
+            signed.WriteUtf8String("publickey");
+            signed.WriteBoolean(true);
+            signed.WriteUtf8String("ssh-ed25519");
+            signed.WriteBinary(blob);
+            data = signed.ToArray();
+        }
+        finally
+        {
+            signed.Dispose();
+        }
+
+        byte[] signature = key.Sign("ssh-ed25519", data);
+        return Request("alice", "ssh-connection", "publickey", w =>
+        {
+            w.Bool(true);
+            w.String("ssh-ed25519");
+            w.Bytes(blob);
+            w.Bytes(signature);
+        });
+    }
+
+    private static byte[] PasswordRequest() => Request("alice", "ssh-connection", "password", w =>
+    {
+        w.Bool(false);
+        w.String("pw");
+    });
+
+    /// <summary>Reads the server's answer to a request, and returns whether it said the login is only partly done.</summary>
+    private static async Task<bool> ExpectFailureAsync(SshTransport client)
+    {
+        ReadOnlyMemory<byte> reply = await client.ReceiveAsync(Ct);
+        Assert.Equal(MessageNumber.UserAuthFailure, reply.Span[0]);
+        SshReader reader = new(reply.Span);
+        reader.ReadByte();
+        reader.ReadNameList();
+        return reader.ReadBoolean();
+    }
+
+    private static ServerAuthOptions KeyThenPassword() => new()
+    {
+        PublicKey = (_, _, _) => ValueTask.FromResult(AuthDecision.Accept),
+        Password = (_, _, _) => ValueTask.FromResult(AuthDecision.Accept),
+        RequiredMethods = ["publickey", "password"],
+        MaxAttempts = 100,
+    };
+
+    // R18: the second key used to overwrite the first on the record, though only the first step counted.
+    [Fact]
+    public Task Every_key_proven_in_a_partial_login_stays_on_the_record() => WithRawClient(
+        KeyThenPassword(),
+        async (client, auth) =>
+        {
+            using SshPrivateKey first = SshPrivateKey.GenerateEd25519();
+            using SshPrivateKey second = SshPrivateKey.GenerateEd25519();
+
+            await client.SendAsync(SignedKeyRequest(client, first), Ct);
+            Assert.True(await ExpectFailureAsync(client));
+
+            // Go CVE-2026-39828: a second key can't stand in for the second required method.
+            await client.SendAsync(SignedKeyRequest(client, second), Ct);
+            Assert.False(await ExpectFailureAsync(client));
+            Assert.False(auth.IsCompleted);
+
+            await client.SendAsync(PasswordRequest(), Ct);
+            AuthenticatedUser user = await auth.WaitAsync(TimeSpan.FromSeconds(20), Ct);
+
+            Assert.Equal(["publickey", "password"], user.Methods);
+            Assert.Equal(2, user.ProvenKeys.Count);
+            Assert.True(user.ProvenKeys[0].Blob.Span.SequenceEqual(first.PublicKey.Blob.Span));
+            Assert.True(user.ProvenKeys[1].Blob.Span.SequenceEqual(second.PublicKey.Blob.Span));
+            Assert.True(user.Key!.Blob.Span.SequenceEqual(second.PublicKey.Blob.Span));
+        });
+
+    [Fact]
+    public Task The_same_key_offered_twice_is_recorded_once() => WithRawClient(
+        KeyThenPassword(),
+        async (client, auth) =>
+        {
+            using SshPrivateKey key = SshPrivateKey.GenerateEd25519();
+            await client.SendAsync(SignedKeyRequest(client, key), Ct);
+            Assert.True(await ExpectFailureAsync(client));
+            await client.SendAsync(SignedKeyRequest(client, key), Ct);
+            Assert.False(await ExpectFailureAsync(client));
+            await client.SendAsync(PasswordRequest(), Ct);
+
+            AuthenticatedUser user = await auth.WaitAsync(TimeSpan.FromSeconds(20), Ct);
+            Assert.Single(user.ProvenKeys);
+        });
+
+    [Fact]
+    public Task The_list_of_proven_keys_is_bounded_and_a_key_over_the_limit_is_refused() => WithRawClient(
+        KeyThenPassword(),
+        async (client, auth) =>
+        {
+            SshPrivateKey[] keys = [.. Enumerable.Range(0, 9).Select(static _ => SshPrivateKey.GenerateEd25519())];
+            try
+            {
+                for (int i = 0; i < keys.Length; i++)
+                {
+                    await client.SendAsync(SignedKeyRequest(client, keys[i]), Ct);
+                    Assert.Equal(i == 0, await ExpectFailureAsync(client));
+                }
+
+                await client.SendAsync(PasswordRequest(), Ct);
+                AuthenticatedUser user = await auth.WaitAsync(TimeSpan.FromSeconds(20), Ct);
+
+                // The ninth key was refused, so it is on no record: the principal never claims a key it did not keep.
+                Assert.Equal(8, user.ProvenKeys.Count);
+                Assert.True(user.Key!.Blob.Span.SequenceEqual(keys[7].PublicKey.Blob.Span));
+            }
+            finally
+            {
+                foreach (SshPrivateKey key in keys)
+                {
+                    key.Dispose();
+                }
+            }
         });
 
     // AsyncSSH CVE-2023-46446 shape: a server can't skip the client's auth by sending success early.

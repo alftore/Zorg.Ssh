@@ -36,8 +36,11 @@ internal sealed class ServerAuthOptions
     public string? Banner { get; init; }
 }
 
-/// <summary>Who logged in, and with which methods. Every method in a multi-step login stays on the record.</summary>
-internal sealed record AuthenticatedUser(string Name, IReadOnlyList<string> Methods, SshPublicKey? Key);
+/// <summary>
+/// Who logged in, and with which methods. Every method in a multi-step login stays on the record, and so does
+/// every key the client proved it holds, in order. <paramref name="Key"/> is the last of them.
+/// </summary>
+internal sealed record AuthenticatedUser(string Name, IReadOnlyList<string> Methods, SshPublicKey? Key, IReadOnlyList<SshPublicKey> ProvenKeys);
 
 /// <summary>
 /// Server side of RFC 4252. Nothing past this class runs until it returns: the permission table keeps
@@ -50,7 +53,11 @@ internal sealed class ServerAuthenticator(SshTransport transport, ServerAuthOpti
     private const byte PublicKeyOk = 60;
     private const int MaxKeyQueries = 64;
 
+    /// <summary>Most keys one login may prove. A client with more is not a login, and none goes unrecorded.</summary>
+    private const int MaxProvenKeys = 8;
+
     private readonly List<string> _succeeded = [];
+    private readonly List<SshPublicKey> _provenKeys = [];
     private string? _user;
     private SshPublicKey? _provenKey;
     private int _attempts;
@@ -98,7 +105,7 @@ internal sealed class ServerAuthenticator(SshTransport transport, ServerAuthOpti
                     {
                         await transport.SendAsync([MessageNumber.UserAuthSuccess], cancellationToken).ConfigureAwait(false);
                         transport.SetPhase(TransportPhase.Connected);
-                        return new AuthenticatedUser(_user, [.. _succeeded], _provenKey);
+                        return new AuthenticatedUser(_user, [.. _succeeded], _provenKey, [.. _provenKeys]);
                     }
 
                     await SendFailureAsync(partial: true, cancellationToken).ConfigureAwait(false);
@@ -311,6 +318,18 @@ internal sealed class ServerAuthenticator(SshTransport transport, ServerAuthOpti
         if (!key.Verify(parsed.Algorithm, signed, parsed.Signature))
         {
             return AuthDecision.Reject;
+        }
+
+        // Every proven key stays on the record, also one whose step the method rule then refuses as a repeat.
+        // A key that would be the ninth is refused, so no proven key is ever left off.
+        if (!_provenKeys.Exists(k => k.Blob.Span.SequenceEqual(key.Blob.Span)))
+        {
+            if (_provenKeys.Count >= MaxProvenKeys)
+            {
+                return AuthDecision.Reject;
+            }
+
+            _provenKeys.Add(key);
         }
 
         _provenKey = key;

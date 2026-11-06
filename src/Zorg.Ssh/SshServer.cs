@@ -323,7 +323,10 @@ public sealed partial class SshServer : IAsyncDisposable
             SshPrincipal principal = new(
                 user.Name,
                 user.Methods,
-                user.Key is null ? null : HostKeyPolicy.ComputeFingerprint(user.Key.Blob.Span));
+                user.Key is null ? null : HostKeyPolicy.ComputeFingerprint(user.Key.Blob.Span))
+            {
+                KeyFingerprints = [.. user.ProvenKeys.Select(static k => HostKeyPolicy.ComputeFingerprint(k.Blob.Span))],
+            };
 
             SshConnection connection = new(transport, _options.MaxSessionsPerConnection)
             {

@@ -93,7 +93,7 @@ public sealed record SshPublicKeyRequest(string UserName, string KeyType, string
 /// <summary>Who logged in.</summary>
 /// <param name="UserName">The authenticated user.</param>
 /// <param name="Methods">Every method that passed, in order.</param>
-/// <param name="KeyFingerprint">The fingerprint of the key that was proven, if one was.</param>
+/// <param name="KeyFingerprint">The fingerprint of the last key that was proven, if one was. With several keys, see <see cref="KeyFingerprints"/>.</param>
 /// <example>
 /// <code>
 /// if (!session.Principal.Methods.Contains("publickey"))
@@ -102,7 +102,24 @@ public sealed record SshPublicKeyRequest(string UserName, string KeyType, string
 /// }
 /// </code>
 /// </example>
-public sealed record SshPrincipal(string UserName, IReadOnlyList<string> Methods, string? KeyFingerprint);
+public sealed record SshPrincipal(string UserName, IReadOnlyList<string> Methods, string? KeyFingerprint)
+{
+    /// <summary>
+    /// Gets the fingerprint of every key the client proved it holds during login, in the order it proved them.
+    /// It is empty if no key was used. A key counts once, however often it was offered, and a login can prove
+    /// only a few. A key listed here may belong to a step that <see cref="Methods"/> doesn't count, because a
+    /// method passes once however many keys the client proves.
+    /// </summary>
+    /// <example>
+    /// <code>
+    /// if (!session.Principal.KeyFingerprints.Contains(adminFingerprint))
+    /// {
+    ///     return 1;
+    /// }
+    /// </code>
+    /// </example>
+    public IReadOnlyList<string> KeyFingerprints { get; init; } = [];
+}
 
 /// <summary>Why a session started.</summary>
 public enum SshSessionKind

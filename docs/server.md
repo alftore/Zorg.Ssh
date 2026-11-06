@@ -95,7 +95,7 @@ SshServerOptions options = new()
 };
 ```
 
-A client can pass them in either order, and a password alone gets no further. `Principal.Methods` lists every method that passed, in order.
+A client can pass them in either order, and a password alone gets no further. `Principal.Methods` lists every method that passed, in order. `Principal.KeyFingerprints` lists every key the client proved, in order, and `KeyFingerprint` is the last. A method passes once, so a second key never counts as the second method. A login can prove at most eight keys.
 
 ## Sessions
 
@@ -129,7 +129,7 @@ private static async Task<int> RunSessionAsync(SshServerSession session, Cancell
 
 | `SshServerSession` | Meaning |
 |---|---|
-| `Principal` | Who logged in: `UserName`, the `Methods` that passed, and `KeyFingerprint` if a key was proven. |
+| `Principal` | Who logged in: `UserName`, the `Methods` that passed, and `KeyFingerprint` (the last key proven) and `KeyFingerprints` (all of them). |
 | `Kind` | `Exec`, `Shell` or `Subsystem`. |
 | `Command` | The command line or subsystem name. Null for a shell. |
 | `Pty` | The terminal the client asked for, if any. |

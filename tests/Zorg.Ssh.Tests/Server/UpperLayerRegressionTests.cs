@@ -300,6 +300,36 @@ public sealed class UpperLayerRegressionTests : IDisposable
         Assert.Equal(2, (await client.ExecuteAsync("x", Ct)).ExitCode);
     }
 
+    // R18: the principal a session sees lists the proven key, and still reports the last one as before.
+    [Fact]
+    public async Task R18_the_principal_lists_the_proven_keys()
+    {
+        using SshPrivateKey key = SshPrivateKey.GenerateEd25519();
+        string expected = HostKeyPolicy.ComputeFingerprint(key.PublicKey.Blob.Span);
+        await using SshServer server = await SshServer.StartAsync(
+            new SshServerOptions
+            {
+                HostKeys = [_hostKey],
+                RequiredAuthMethods = ["publickey", "password"],
+                PublicKeyHandler = (_, _) => ValueTask.FromResult(SshAuthDecision.Accept),
+                PasswordHandler = (_, _) => ValueTask.FromResult(SshAuthDecision.Accept),
+                SessionHandler = (s, _) => Task.FromResult(
+                    s.Principal.KeyFingerprints is [var only] && only == expected && s.Principal.KeyFingerprint == expected ? 0 : 1),
+            },
+            Ct);
+
+        SshClientOptions options = new()
+        {
+            Host = "127.0.0.1",
+            Port = server.LocalEndPoint.Port,
+            UserName = "alice",
+            Credentials = [new PrivateKeyCredential(() => key, ownsKey: false), SshCredential.FromPassword("pw")],
+            HostKeyPolicy = HostKeyPolicy.Fingerprint(_hostKey.Sha256Fingerprint),
+        };
+        await using SshClient client = await SshClient.ConnectAsync(options, Ct);
+        Assert.Equal(0, (await client.ExecuteAsync("x", Ct)).ExitCode);
+    }
+
     // R13: a cancelled open used to leak its slot, and 256 of them ended the client.
     [Fact]
     public async Task R13_cancelled_opens_do_not_use_up_channels()

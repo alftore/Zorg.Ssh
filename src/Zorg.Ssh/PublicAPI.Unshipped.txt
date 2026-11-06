@@ -327,6 +327,8 @@ Zorg.Ssh.SshPrincipal.Deconstruct(out string! UserName, out System.Collections.G
 Zorg.Ssh.SshPrincipal.Equals(Zorg.Ssh.SshPrincipal? other) -> bool
 Zorg.Ssh.SshPrincipal.KeyFingerprint.get -> string?
 Zorg.Ssh.SshPrincipal.KeyFingerprint.init -> void
+Zorg.Ssh.SshPrincipal.KeyFingerprints.get -> System.Collections.Generic.IReadOnlyList<string!>!
+Zorg.Ssh.SshPrincipal.KeyFingerprints.init -> void
 Zorg.Ssh.SshPrincipal.Methods.get -> System.Collections.Generic.IReadOnlyList<string!>!
 Zorg.Ssh.SshPrincipal.Methods.init -> void
 Zorg.Ssh.SshPrincipal.SshPrincipal(string! UserName, System.Collections.Generic.IReadOnlyList<string!>! Methods, string? KeyFingerprint) -> void
