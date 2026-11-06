@@ -361,18 +361,10 @@ public sealed class ForwardingReviewRegressionTests
                 }),
                 Ct);
 
-            // The client answers a CLOSE with its own once its channel has closed. Credit is only sent when the relay
-            // has read half the window, so none before that answer means most of the data is still in the channel,
-            // unread, while the channel is closed. That is the case where the relay has to drain.
-            while (true)
-            {
-                byte number = (await server.NextAsync(Ct))[0];
-                Assert.NotEqual(MessageNumber.ChannelWindowAdjust, number);
-                if (number == MessageNumber.ChannelClose)
-                {
-                    break;
-                }
-            }
+            // The client answers a CLOSE with its own once its channel has closed. The local side hasn't closed its
+            // socket, and won't until it is released below, so the relay's upward half is still running when the
+            // channel closes. The relay can only finish by draining after the close, whatever the socket buffers hold.
+            await server.ExpectAsync(MessageNumber.ChannelClose, Ct);
 
             release.SetResult();
             Assert.Equal((long)Chunks * ChunkSize, await total.Task.WaitAsync(Limit, Ct));
