@@ -115,10 +115,18 @@ internal static class ClientExamples
     public static IReadOnlyList<HostKeyPolicy> UnsafePolicies()
     {
         // doc:host-key-unsafe
-        HostKeyPolicy trustOnFirstUse = HostKeyPolicy.KnownHostsFile(addUnknownHostsUnsafe: true);
+        HostKeyPolicy trustOnFirstUse = HostKeyPolicy.KnownHostsFileAcceptNewUnsafe();
         HostKeyPolicy noCheckAtAll = HostKeyPolicy.AcceptAnyUnsafe();
         // end-doc
         return [trustOnFirstUse, noCheckAtAll];
+    }
+
+    public static SshClientOptions ConfigAcceptNew()
+    {
+        // doc:config-accept-new
+        SshClientOptions options = SshClientOptions.FromConfig("lab-router", acceptNewHostKeysUnsafe: true);
+        // end-doc
+        return options;
     }
 
     public static async Task Execute(SshClient client, CancellationToken cancellationToken)

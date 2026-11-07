@@ -539,7 +539,8 @@ override Zorg.Ssh.SshServerOptions.ToString() -> string!
 static Zorg.Ssh.HostKeyPolicy.AcceptAnyUnsafe() -> Zorg.Ssh.HostKeyPolicy!
 static Zorg.Ssh.HostKeyPolicy.Custom(System.Func<Zorg.Ssh.SshHostKeyInfo!, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask<bool>>! check) -> Zorg.Ssh.HostKeyPolicy!
 static Zorg.Ssh.HostKeyPolicy.Fingerprint(string! sha256Fingerprint) -> Zorg.Ssh.HostKeyPolicy!
-static Zorg.Ssh.HostKeyPolicy.KnownHostsFile(string! path = "~/.ssh/known_hosts", bool addUnknownHostsUnsafe = false, System.TimeProvider? timeProvider = null, System.Collections.Generic.IReadOnlyList<string!>? globalPaths = null) -> Zorg.Ssh.HostKeyPolicy!
+static Zorg.Ssh.HostKeyPolicy.KnownHostsFile(string! path = "~/.ssh/known_hosts", System.Collections.Generic.IReadOnlyList<string!>? globalPaths = null, System.TimeProvider? timeProvider = null) -> Zorg.Ssh.HostKeyPolicy!
+static Zorg.Ssh.HostKeyPolicy.KnownHostsFileAcceptNewUnsafe(string! path = "~/.ssh/known_hosts", System.Collections.Generic.IReadOnlyList<string!>? globalPaths = null, System.TimeProvider? timeProvider = null) -> Zorg.Ssh.HostKeyPolicy!
 static Zorg.Ssh.Sftp.SftpAttributes.operator !=(Zorg.Ssh.Sftp.SftpAttributes? left, Zorg.Ssh.Sftp.SftpAttributes? right) -> bool
 static Zorg.Ssh.Sftp.SftpAttributes.operator ==(Zorg.Ssh.Sftp.SftpAttributes? left, Zorg.Ssh.Sftp.SftpAttributes? right) -> bool
 static Zorg.Ssh.Sftp.SftpEntry.operator !=(Zorg.Ssh.Sftp.SftpEntry? left, Zorg.Ssh.Sftp.SftpEntry? right) -> bool
@@ -553,7 +554,7 @@ static Zorg.Ssh.SshAlgorithms.operator !=(Zorg.Ssh.SshAlgorithms? left, Zorg.Ssh
 static Zorg.Ssh.SshAlgorithms.operator ==(Zorg.Ssh.SshAlgorithms? left, Zorg.Ssh.SshAlgorithms? right) -> bool
 static Zorg.Ssh.SshClient.ConnectAsync(Zorg.Ssh.SshClientOptions! options, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Zorg.Ssh.SshClient!>!
 static Zorg.Ssh.SshClient.ConnectOverStreamAsync(System.IO.Stream! stream, Zorg.Ssh.SshClientOptions! options, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Zorg.Ssh.SshClient!>!
-static Zorg.Ssh.SshClientOptions.FromConfig(string! hostAlias, Zorg.Ssh.SshConfig? config = null, Zorg.Ssh.HostKeyPolicy? hostKeyPolicy = null, System.Collections.Generic.IReadOnlyList<Zorg.Ssh.SshCredential!>? credentials = null, Microsoft.Extensions.Logging.ILoggerFactory? loggerFactory = null) -> Zorg.Ssh.SshClientOptions!
+static Zorg.Ssh.SshClientOptions.FromConfig(string! hostAlias, Zorg.Ssh.SshConfig? config = null, Zorg.Ssh.HostKeyPolicy? hostKeyPolicy = null, System.Collections.Generic.IReadOnlyList<Zorg.Ssh.SshCredential!>? credentials = null, Microsoft.Extensions.Logging.ILoggerFactory? loggerFactory = null, bool acceptNewHostKeysUnsafe = false) -> Zorg.Ssh.SshClientOptions!
 static Zorg.Ssh.SshClientOptions.operator !=(Zorg.Ssh.SshClientOptions? left, Zorg.Ssh.SshClientOptions? right) -> bool
 static Zorg.Ssh.SshClientOptions.operator ==(Zorg.Ssh.SshClientOptions? left, Zorg.Ssh.SshClientOptions? right) -> bool
 static Zorg.Ssh.SshCommandResult.operator !=(Zorg.Ssh.SshCommandResult? left, Zorg.Ssh.SshCommandResult? right) -> bool

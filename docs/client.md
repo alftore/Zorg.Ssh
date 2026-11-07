@@ -176,11 +176,11 @@ Return false to refuse the key. Don't throw from the check: an exception from it
 Two choices weaken the check, so they carry `Unsafe` in their names.
 
 ```csharp
-HostKeyPolicy trustOnFirstUse = HostKeyPolicy.KnownHostsFile(addUnknownHostsUnsafe: true);
+HostKeyPolicy trustOnFirstUse = HostKeyPolicy.KnownHostsFileAcceptNewUnsafe();
 HostKeyPolicy noCheckAtAll = HostKeyPolicy.AcceptAnyUnsafe();
 ```
 
-`addUnknownHostsUnsafe` trusts a host the first time it's seen and records it, as `ssh -o StrictHostKeyChecking=accept-new` does. A first connection can be intercepted without anyone noticing, but a changed key is still refused. A host that a `@cert-authority` line covers is never recorded, so offering a plain key can't step around the CA, and a file that can't keep what is written to it (`/dev/null`, `NUL`) makes the connection fail. `AcceptAnyUnsafe` removes the protection entirely. Use it only in tests against a machine you control.
+`KnownHostsFileAcceptNewUnsafe` trusts a host the first time it's seen and records it, as `ssh -o StrictHostKeyChecking=accept-new` does. A first connection can be intercepted without anyone noticing, but a changed key is still refused. A host that a `@cert-authority` line covers is never recorded, so offering a plain key can't step around the CA, and a file that can't keep what is written to it (`/dev/null`, `NUL`) makes the connection fail. `AcceptAnyUnsafe` removes the protection entirely. Use it only in tests against a machine you control.
 
 ## Running a command
 
@@ -349,7 +349,8 @@ Output from a shell with a terminal holds prompts and control sequences. To run 
 | In the config | What `FromConfig` does |
 |---|---|
 | `StrictHostKeyChecking no` | Throws, unless you pass your own `HostKeyPolicy`. |
-| `StrictHostKeyChecking accept-new` with a first known hosts file that isn't a regular file (`/dev/null`, `NUL`, a directory) | Throws: nothing could be recorded, so every connection would trust any key. |
+| `StrictHostKeyChecking accept-new` | Throws, unless you pass `acceptNewHostKeysUnsafe: true` or your own `HostKeyPolicy`. With the opt-in, a new host is trusted and recorded in the first known hosts file, as `ssh` does. |
+| `StrictHostKeyChecking accept-new` with a first known hosts file that isn't a regular file (`/dev/null`, `NUL`, a directory) | Throws, even with the opt-in: nothing could be recorded, so every connection would trust any key. |
 | `ProxyJump`, `ProxyCommand` (other than `none`) | Throws. Connect through the bastion yourself with `SshClientOptions.JumpHost`. |
 | `RevokedHostKeys`, `KnownHostsCommand`, `HostKeyAlias` | Throws, unless you pass your own `HostKeyPolicy`: ignoring them would change who is trusted. |
 | A `Match` block that could apply to the host and sets `StrictHostKeyChecking`, `UserKnownHostsFile`, `GlobalKnownHostsFile`, `HostKeyAlias`, `RevokedHostKeys`, `KnownHostsCommand`, `ProxyCommand`, `ProxyJump`, `HostKeyAlgorithms`, `CASignatureAlgorithms`, `HostName`, `Port`, `IdentitiesOnly`, `IdentityFile`, `IdentityAgent`, `CertificateFile` or `PubkeyAuthentication` | Throws: `Match` isn't supported for those keywords. Move the setting into a `Host` block. |
@@ -360,6 +361,12 @@ Output from a shell with a terminal holds prompts and control sequences. To run 
 | `ServerAliveInterval N`, `ServerAliveCountMax N` | Become `KeepAliveInterval` (in seconds; `0` turns keepalive off, as in OpenSSH) and `KeepAliveCountMax`. A value that isn't a number throws. When the config is silent, the library's defaults stay. |
 | `ConnectTimeout N` | Becomes `ConnectTimeout` in seconds. It covers connecting, key exchange and login together. `0` keeps the library's 30 seconds. |
 | Any other keyword | Ignored. |
+
+Trust on first use is a weaker check, so a config file can't choose it alone:
+
+```csharp
+SshClientOptions options = SshClientOptions.FromConfig("lab-router", acceptNewHostKeysUnsafe: true);
+```
 
 `HostKeyPolicy.KnownHostsFile` takes `globalPaths` for the same read-only files. It reads none by default, so its result depends only on the files you name.
 

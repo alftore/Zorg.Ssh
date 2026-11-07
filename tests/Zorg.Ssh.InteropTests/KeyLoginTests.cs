@@ -151,7 +151,7 @@ public sealed class KeyLoginTests : IDisposable
         Assert.Contains("SHA256:", unknown.Message);
 
         // Accept-new records it, then the strict policy trusts it.
-        await (await SshClient.ConnectAsync(Options(HostKeyPolicy.KnownHostsFile(knownHosts, addUnknownHostsUnsafe: true)), Ct)).DisposeAsync();
+        await (await SshClient.ConnectAsync(Options(HostKeyPolicy.KnownHostsFileAcceptNewUnsafe(knownHosts)), Ct)).DisposeAsync();
         await using (SshClient trusted = await SshClient.ConnectAsync(Options(HostKeyPolicy.KnownHostsFile(knownHosts)), Ct))
         {
             Assert.Equal("zorg\n", (await trusted.ExecuteAsync("whoami", Ct)).StandardOutput);
@@ -162,7 +162,7 @@ public sealed class KeyLoginTests : IDisposable
         string changedFile = Path.Combine(_directory, "known_hosts_changed");
         KnownHosts.KnownHostsFile.Append(changedFile, container.Host, container.Port, impostor.PublicKey);
         SshHostKeyException changed = await Assert.ThrowsAsync<SshHostKeyException>(
-            () => SshClient.ConnectAsync(Options(HostKeyPolicy.KnownHostsFile(changedFile, addUnknownHostsUnsafe: true)), Ct));
+            () => SshClient.ConnectAsync(Options(HostKeyPolicy.KnownHostsFileAcceptNewUnsafe(changedFile)), Ct));
         Assert.Contains("attack", changed.Message);
     }
 }

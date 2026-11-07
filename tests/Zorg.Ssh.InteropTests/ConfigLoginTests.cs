@@ -48,7 +48,7 @@ public sealed class ConfigLoginTests : IDisposable
         {
             for (int i = 0; i < 2; i++)
             {
-                await using SshClient client = await SshClient.ConnectAsync(SshClientOptions.FromConfig("peer", config), Ct);
+                await using SshClient client = await SshClient.ConnectAsync(SshClientOptions.FromConfig("peer", config, acceptNewHostKeysUnsafe: true), Ct);
                 Assert.Equal("zorg\n", (await client.ExecuteAsync("whoami", Ct)).StandardOutput);
             }
 

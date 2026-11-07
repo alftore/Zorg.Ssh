@@ -7,7 +7,7 @@
 These are the rules the library is built around. Each has tests, and a change that weakens one needs a design decision. They're goals backed by tests, not proofs.
 
 1. **No message is acted on in a state that doesn't allow it.** One table, `Transport/MessagePolicy`, decides which message may arrive when. The default is deny. A connection message before login ends the connection.
-2. **Nothing proceeds on an unverified host key or unauthenticated user.** There's no default host key policy. Anything that weakens a check has `Unsafe` in its name: `HostKeyPolicy.AcceptAnyUnsafe`, the `addUnknownHostsUnsafe` argument, and `SshAlgorithms.LegacyUnsafe`, the only way to reach a legacy algorithm. On the server, a public key handler's answer counts only once the client's signature has been verified.
+2. **Nothing proceeds on an unverified host key or unauthenticated user.** There's no default host key policy. Anything that weakens a check has `Unsafe` in its name: `HostKeyPolicy.AcceptAnyUnsafe`, `HostKeyPolicy.KnownHostsFileAcceptNewUnsafe` (trust on first use), the `acceptNewHostKeysUnsafe` argument of `SshClientOptions.FromConfig` (which `StrictHostKeyChecking accept-new` needs), and `SshAlgorithms.LegacyUnsafe`, the only way to reach a legacy algorithm. On the server, a public key handler's answer counts only once the client's signature has been verified.
 3. **A hostile peer can't cause unbounded memory, a hang or an unhandled exception type.** Buffers, queues and counts have limits, and waits can be cancelled. Failures a peer causes reach you as `SshException` or a derived type.
 4. **Secrets never reach logs or exception messages, and are zeroed after use.** See the limits on this under [Secrets](#secrets).
 

@@ -104,7 +104,8 @@ A private key file couldn't be loaded. It stops the login at that credential, so
 
 | Message says | What to do |
 |---|---|
-| `StrictHostKeyChecking no` | Use `yes` or `accept-new`, or pass `HostKeyPolicy.AcceptAnyUnsafe()` to `FromConfig` if you mean it. |
+| `StrictHostKeyChecking no` | Use `yes`, or pass `HostKeyPolicy.AcceptAnyUnsafe()` to `FromConfig` if you mean it. |
+| `StrictHostKeyChecking accept-new` | It trusts a host the first time it's seen. Use `yes` and add the host to known_hosts, or pass `acceptNewHostKeysUnsafe: true` to `FromConfig` if you mean it. |
 | `accept-new` with a known hosts file that isn't a regular file | Name an ordinary file in `UserKnownHostsFile`, or use `StrictHostKeyChecking yes`. |
 | Uses `ProxyJump` or `ProxyCommand` | Connect to the jump host yourself and set `SshClientOptions.JumpHost`. |
 | Sets `RevokedHostKeys`, `KnownHostsCommand` or `HostKeyAlias` | Remove it, or pass your own `HostKeyPolicy` to `FromConfig`. |

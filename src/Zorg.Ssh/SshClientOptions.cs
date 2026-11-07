@@ -128,7 +128,9 @@ public sealed record SshClientOptions
     /// An agent that isn't there and an identity file that can't be used, such as an encrypted one, are passed over.
     /// <c>StrictHostKeyChecking no</c> throws <see cref="SshConfigException"/> unless
     /// <paramref name="hostKeyPolicy"/> is given, because a config file mustn't silently weaken security. The check
-    /// can be dropped only by passing <see cref="HostKeyPolicy.AcceptAnyUnsafe"/> here.
+    /// can be dropped only by passing <see cref="HostKeyPolicy.AcceptAnyUnsafe"/> here. For the same reason
+    /// <c>StrictHostKeyChecking accept-new</c>, which trusts a host the first time it's seen, throws unless
+    /// <paramref name="acceptNewHostKeysUnsafe"/> is true or <paramref name="hostKeyPolicy"/> is given.
     /// A host with <c>ProxyJump</c> or <c>ProxyCommand</c> throws <see cref="SshConfigException"/>: this method can't follow
     /// it, and going direct could bypass a required bastion. Whatever the config leaves unsaid, anything it says that this
     /// method can't honour and that decides who is trusted throws too, and never weakens the check silently:
@@ -147,6 +149,11 @@ public sealed record SshClientOptions
     /// <param name="hostKeyPolicy">A policy to use in place of what the config says.</param>
     /// <param name="credentials">More credentials to try after those from the config, such as a key with a passphrase.</param>
     /// <param name="loggerFactory">The logger factory for the options, and for notes about the config.</param>
+    /// <param name="acceptNewHostKeysUnsafe">
+    /// Lets <c>StrictHostKeyChecking accept-new</c> in the config take effect: a host seen for the first time is trusted
+    /// and recorded, as <c>ssh</c> does. <b>A first connection can then be intercepted without anyone noticing.</b>
+    /// It changes nothing for a host the config doesn't set that for.
+    /// </param>
     /// <returns>The options.</returns>
     /// <exception cref="SshConfigException">The config can't be used.</exception>
     /// <example>
@@ -160,7 +167,8 @@ public sealed record SshClientOptions
         SshConfig? config = null,
         HostKeyPolicy? hostKeyPolicy = null,
         IReadOnlyList<SshCredential>? credentials = null,
-        ILoggerFactory? loggerFactory = null)
+        ILoggerFactory? loggerFactory = null,
+        bool acceptNewHostKeysUnsafe = false)
     {
         ArgumentException.ThrowIfNullOrEmpty(hostAlias);
         ILogger? logger = loggerFactory?.CreateLogger<SshConfig>();
@@ -202,6 +210,12 @@ public sealed record SshClientOptions
                 if (host.UserKnownHostsFiles.Count > 0 && LocalFile.GetKind(host.UserKnownHostsFiles[0]) == LocalFileKind.Other)
                 {
                     throw new SshConfigException($"The config says StrictHostKeyChecking accept-new for {hostAlias} with UserKnownHostsFile {host.UserKnownHostsFiles[0]}, which isn't a regular file, so no key could be recorded and every connection would trust any key. Name an ordinary file, or use StrictHostKeyChecking yes.");
+                }
+
+                // Guarantee 2: trust on first use is a weaker check, so a config file can't choose it alone.
+                if (!acceptNewHostKeysUnsafe)
+                {
+                    throw new SshConfigException($"The config says StrictHostKeyChecking accept-new for {hostAlias}, which trusts a host the first time it's seen, so a first connection could be intercepted without anyone noticing. Pass acceptNewHostKeysUnsafe: true to FromConfig if you mean it, or use StrictHostKeyChecking yes.");
                 }
             }
         }
