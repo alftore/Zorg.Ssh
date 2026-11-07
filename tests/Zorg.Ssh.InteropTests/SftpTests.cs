@@ -270,6 +270,110 @@ public class SftpTests
 
     [InteropTheory]
     [MemberData(nameof(Peers))]
+    public async Task A_listing_reports_links_special_files_and_whole_second_times_without_a_stat_per_file(string peer)
+    {
+        await using SshPeerContainer container = await StartAsync(peer);
+        await using SshClient client = await ConnectAsync(container);
+        await using SftpClient sftp = await client.OpenSftpAsync(Ct);
+
+        await sftp.CreateDirectoryAsync("kinds", Ct);
+        SshCommandResult made = await client.ExecuteAsync(
+            "cd kinds && printf 12345 > file && mkdir dir && ln -s dir linkdir && ln -s file linkfile && ln -s nowhere dangling && mkfifo fifo && touch -t 202001020304.05 file",
+            Ct);
+        Assert.Equal(0, made.ExitCode);
+
+        Dictionary<string, SftpEntry> entries = (await sftp.ListDirectoryAsync("kinds", Ct).ToArrayAsync(Ct)).ToDictionary(e => e.Name);
+        Assert.True(entries.ContainsKey(".") && entries.ContainsKey(".."));
+        Assert.True(entries["file"].Attributes.IsRegularFile);
+        Assert.Equal(5, entries["file"].Attributes.Size);
+        Assert.Equal(new DateTimeOffset(2020, 1, 2, 3, 4, 5, TimeSpan.Zero), entries["file"].Attributes.ModifiedTime);
+        Assert.True(entries["dir"].Attributes.IsDirectory);
+        Assert.All(new[] { "linkdir", "linkfile", "dangling" }, name =>
+        {
+            Assert.True(entries[name].Attributes.IsSymbolicLink, name);
+            Assert.False(entries[name].Attributes.IsDirectory, name);
+            Assert.False(entries[name].Attributes.IsRegularFile, name);
+        });
+        Assert.False(entries["fifo"].Attributes.IsRegularFile);
+        Assert.False(entries["fifo"].Attributes.IsDirectory);
+    }
+
+    [InteropTheory]
+    [MemberData(nameof(Peers))]
+    public async Task Cancelling_the_open_of_a_fifo_returns_and_a_new_session_works(string peer)
+    {
+        await using SshPeerContainer container = await StartAsync(peer);
+        await using SshClient client = await ConnectAsync(container);
+        SshCommandResult made = await client.ExecuteAsync("mkfifo pipe", Ct);
+        Assert.Equal(0, made.ExitCode);
+
+        SftpClient blocked = await client.OpenSftpAsync(Ct);
+        try
+        {
+            using CancellationTokenSource timeout = CancellationTokenSource.CreateLinkedTokenSource(Ct);
+            timeout.CancelAfter(TimeSpan.FromSeconds(2));
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => blocked.OpenAsync("pipe", FileMode.Open, FileAccess.Read, timeout.Token));
+        }
+        finally
+        {
+            // The old session may never answer again, so don't wait for it.
+            _ = blocked.DisposeAsync().AsTask().ContinueWith(static _ => { }, TaskScheduler.Default);
+        }
+
+        await using SftpClient fresh = await client.OpenSftpAsync(Ct);
+        Assert.False((await fresh.GetAttributesAsync("pipe", Ct)).IsRegularFile);
+        await fresh.WriteAllBytesAsync("after.txt", "ok"u8.ToArray(), Ct);
+        Assert.Equal("ok", Encoding.UTF8.GetString(await fresh.ReadAllBytesAsync("after.txt", Ct)));
+    }
+
+    [InteropTheory]
+    [MemberData(nameof(Peers))]
+    public async Task Only_one_of_two_clients_claims_a_file_by_renaming_it(string peer)
+    {
+        await using SshPeerContainer container = await StartAsync(peer);
+        await using SshClient first = await ConnectAsync(container);
+        await using SshClient second = await ConnectAsync(container);
+        await using SftpClient sftpA = await first.OpenSftpAsync(Ct);
+        await using SftpClient sftpB = await second.OpenSftpAsync(Ct);
+
+        await sftpA.CreateDirectoryAsync("inbox", Ct);
+        await sftpA.CreateDirectoryAsync("work", Ct);
+        const int Files = 150;
+        for (int i = 0; i < Files; i++)
+        {
+            await sftpA.WriteAllBytesAsync($"inbox/{i}.csv", new[] { (byte)i }, Ct);
+        }
+
+        async Task<List<int>> ClaimAsync(SftpClient sftp, string owner)
+        {
+            List<int> won = [];
+            for (int i = 0; i < Files; i++)
+            {
+                try
+                {
+                    await sftp.RenameAsync($"inbox/{i}.csv", $"work/{i}.csv.{owner}", overwrite: false, Ct);
+                    won.Add(i);
+                }
+                catch (SftpException ex) when (ex.StatusCode is SftpStatusCode.Failure or SftpStatusCode.NoSuchFile)
+                {
+                }
+            }
+
+            return won;
+        }
+
+        Task<List<int>> a = Task.Run(() => ClaimAsync(sftpA, "a"), Ct);
+        Task<List<int>> b = Task.Run(() => ClaimAsync(sftpB, "b"), Ct);
+        List<int>[] results = await Task.WhenAll(a, b);
+
+        Assert.Empty(results[0].Intersect(results[1]));
+        Assert.Equal(Files, results[0].Count + results[1].Count);
+        Assert.Empty(await sftpA.ListDirectoryAsync("inbox", Ct).Where(e => e.Name.EndsWith(".csv", StringComparison.Ordinal)).ToArrayAsync(Ct));
+        Assert.Equal(Files, await sftpA.ListDirectoryAsync("work", Ct).CountAsync(e => e.Name.Contains(".csv.", StringComparison.Ordinal), Ct));
+    }
+
+    [InteropTheory]
+    [MemberData(nameof(Peers))]
     public async Task Failures_are_typed(string peer)
     {
         await using SshPeerContainer container = await StartAsync(peer);

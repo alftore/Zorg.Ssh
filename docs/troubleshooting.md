@@ -201,6 +201,8 @@ Limits reached in the library also arrive as `SftpException`: raise `MaxReadAllB
 
 `CreateDirectoryAsync` on an existing directory usually gives `Failure`. Use `CreateDirectoryAsync(path, recursive: true)`, which accepts a directory that is already there and also makes the missing parents.
 
+A `RenameAsync` with `overwrite: false` and a `CreateDirectoryAsync` both report a taken target as `Failure` too, because version 3 has no "already exists" status. Call `ExistsAsync` or `GetAttributesAsync` afterwards to see why. To let one of several clients take a file, have each rename it to a name of its own: see [Claiming a file by renaming it](sftp.md#claiming-a-file-by-renaming-it).
+
 ## SftpUnsafeNameException
 
 During `DownloadDirectoryAsync`, a name from the server couldn't safely become a local path, or collided with something already in the destination. `EntryName` holds the name.
@@ -215,6 +217,7 @@ During `DownloadDirectoryAsync`, a name from the server couldn't safely become a
 
 ## Calls that seem to hang
 
+- **An SFTP open or download never returns.** The path may be a FIFO or a device, whose `open()` waits inside the server. Cancel the call, then dispose the SFTP session and open a new one, because OpenSSH handles a session's requests in order and may stay blocked. Check `Attributes.IsRegularFile` from the listing first. See [Special files](sftp.md#special-files).
 - **A process makes no progress.** You may be reading only one of `StandardOutput` and `StandardError`. They share a window, so read both at once.
 - **A process doesn't exit.** Many commands wait for the end of stdin. Dispose `StandardInput` to send EOF. EOF follows the data, so a write that is still waiting for the server delays it, and so does a server that has stopped reading.
 - **`ExecuteAsync` never returns.** The command is still running, or a background process it started kept stdout open. Pass a token with a timeout. `ExecuteAsync` closes stdin for you.

@@ -64,6 +64,15 @@ await foreach (SftpEntry entry in sftp.ListDirectoryAsync("reports", cancellatio
 
 Names come back exactly as the server sent them, including `.` and `..`, and they can be hostile. Check `IsSafeName` before you build a local path from one. A listing that passes `SftpClientOptions.MaxDirectoryEntries`, by default 1,000,000, fails with `SftpException`.
 
+What a listing gives you:
+
+- OpenSSH includes `.` and `..` as entries. Skip them (`IsSafeName` is false for both), and don't count them as files.
+- The order is the server's. OpenSSH sends the directory order of its file system, which isn't sorted and can change. Sort the entries yourself if the order matters.
+- Each entry carries the attributes from the listing: `Size`, the type (`IsRegularFile`, `IsDirectory`, `IsSymbolicLink`), permissions and `ModifiedTime`. You don't need a `GetAttributesAsync` call per file. `ModifiedTime` has a resolution of one second.
+- A symbolic link is reported as a link, with the link's own attributes, not those of its target. A link to a directory has `IsSymbolicLink` true and `IsDirectory` false.
+- The `longname` text that servers send for `ls -l` is ignored. Use the attributes.
+- Anything that isn't a regular file or a directory, such as a FIFO or a device, is listed too. Check `Attributes.IsRegularFile` before you open it: see [Special files](#special-files).
+
 ### Name encodings
 
 SFTP version 3 doesn't say how a name is encoded. OpenSSH sends the raw bytes the file system holds, so a name made on a Latin-1 system isn't valid UTF-8.
@@ -73,6 +82,13 @@ SFTP version 3 doesn't say how a name is encoded. OpenSSH sends the raw bytes th
 - A name that holds a real U+FFFD character is valid, and has `HasValidName` true.
 - `DownloadDirectoryAsync` treats a name with `HasValidName` false like any other unsafe name: it stops with `SftpUnsafeNameException`.
 - A path you pass in is encoded as UTF-8. A string with an unpaired surrogate can't be, so it throws `ArgumentException` instead of being sent as U+FFFD.
+
+## Special files
+
+Opening or downloading a FIFO (a named pipe) or a device can block inside the server's `open()`, because the open waits for a writer that never comes. Cancelling the token returns your call, but it doesn't stop the server. OpenSSH's `sftp-server` handles the requests of a session one at a time, so the blocked open holds up everything behind it, and that session can stay unresponsive.
+
+- Check `Attributes.IsRegularFile` from the listing before you open or download a path. `DownloadDirectoryAsync` already skips everything that isn't a regular file or a directory.
+- After you cancel such an open, don't reuse the session. Dispose it and call `OpenSftpAsync` again. The `SshClient` can stay connected.
 
 ## Downloading a tree
 
@@ -143,7 +159,26 @@ await sftp.DeleteFileAsync("reports/old.txt", cancellationToken);
 - `CreateSymbolicLinkAsync` takes the link first, then the target. OpenSSH reverses the arguments on the wire compared with the draft, and Zorg.Ssh handles that.
 - `DeleteDirectoryAsync` removes an empty directory. `CreateDirectoryAsync` needs the parent to exist, unless you pass `recursive: true`.
 - `CreateDirectoryAsync(path, recursive: true)` creates the missing parents too. It succeeds if the directory is already there, and it throws `SftpException` if the path or one of its parents exists and isn't a directory. A symbolic link to a directory counts as one. If another client makes the same directories at the same moment, a create that fails is checked again, and it succeeds if a directory is now there. Directories already made stay if you cancel or a later one fails.
+- SFTP version 3 has no "already exists" status. A `RenameAsync` with `overwrite: false` that finds the target taken fails with `SftpStatusCode.Failure`, and so does a `CreateDirectoryAsync` on an existing path. To tell why, ask afterwards with `ExistsAsync` or `GetAttributesAsync`. `CreateDirectoryAsync(path, recursive: true)` does this for you.
 - `ExistsAsync` counts a symbolic link as existing, even if its target is missing. It throws `SftpPermissionDeniedException` if the account can't look there, because the answer is then unknown.
+
+### Claiming a file by renaming it
+
+When several clients take files from one folder, each can claim a file by renaming it to a name of its own. The file leaves the folder, so only one client's rename of it succeeds. The others fail, with `SftpFileNotFoundException` or `SftpStatusCode.Failure` depending on the server and the timing. Use `overwrite: false`, so that a claim can never replace a file that is already at the target.
+
+```csharp
+try
+{
+    await sftp.RenameAsync("inbox/0001.csv", "work/0001.csv.7f3a", overwrite: false, cancellationToken);
+    // This client owns the file now.
+}
+catch (SftpException ex) when (ex.StatusCode is SftpStatusCode.Failure or SftpStatusCode.NoSuchFile)
+{
+    // Another client took it first, or it is gone. Look at the next file.
+}
+```
+
+Give each client a target name that only it would pick, such as one with a unique suffix, so that a failure can't be someone else's claim. On OpenSSH the rename of a regular file is a hard link followed by removing the old name, and the link is undone if the removal fails, so two clients can't both win. Another server may check and rename in two steps, so test the one you use before you rely on this.
 
 ## Server extensions
 
