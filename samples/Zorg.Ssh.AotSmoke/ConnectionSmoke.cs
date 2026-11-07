@@ -62,6 +62,20 @@ internal static class ConnectionSmoke
                 await sftp.WriteAllBytesAsync("/smoke.txt", contents, ct);
                 byte[] back = await sftp.ReadAllBytesAsync("/smoke.txt", ct);
                 check("connection sftp", back.AsSpan().SequenceEqual(contents) && File.Exists(Path.Combine(root, "smoke.txt")));
+
+                // A listing, and a directory moved up the tree, which scans it for links: on Linux both read the
+                // directory through the server's own native calls.
+                await sftp.CreateDirectoryAsync("/a/b/c", recursive: true, ct);
+                await sftp.WriteAllBytesAsync("/a/b/c/f.txt", contents, ct);
+                await sftp.RenameAsync("/a/b", "/b", cancellationToken: ct);
+                List<string> names = [];
+                await foreach (SftpEntry entry in sftp.ListDirectoryAsync("/", ct))
+                {
+                    names.Add(entry.Name + (entry.Attributes.IsDirectory ? "/" : string.Empty) + (entry.Attributes.IsRegularFile ? entry.Attributes.Size?.ToString(System.Globalization.CultureInfo.InvariantCulture) : string.Empty));
+                }
+
+                names.Sort(StringComparer.Ordinal);
+                check($"connection sftp listing ({string.Join(",", names)})", string.Join(",", names) == "../,./,a/,b/,smoke.txt15");
             }
 
             await serving.WaitAsync(ct);
