@@ -583,7 +583,7 @@ internal sealed class ServerRig : IDisposable
             root.EnsureNothingEscaped();
         }
 
-        if (_inputs % 20 == 0)
+        if (FuzzSettings.UnobservedTaskCheck && _inputs % 20 == 0)
         {
             foreach (Exception unobserved in UnobservedTasks.Drain())
             {

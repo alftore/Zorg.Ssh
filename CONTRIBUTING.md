@@ -78,7 +78,7 @@ What each input is checked for:
 - **Memory.** After the probe, a live connection must hold at most its limits: channels, pending opens, pending global requests, deferred sends, queued requests, and a receive window between zero and its size. `StatefulMemoryTests` also runs thousands of messages on one connection and requires that the live heap doesn't grow.
 - **Guarantees 1 and 2.** The server rigs refuse every complete login. A handler that runs, a `USERAUTH_SUCCESS` that goes out, or a message the peer's own policy refuses because the SUT sent it in the wrong phase is reported as `GUARANTEE 1` or `GUARANTEE 2 BREACH`. Stop and tell the maintainer before fixing one.
 - **Guarantee 4.** The password and the private key of the setup must not appear in any log entry or exception, and the server must not send the password back.
-- **Unobserved tasks.** A task that faulted and was never awaited is reported once it is collected, with the type of the task.
+- **Unobserved tasks.** A task that faulted and was never awaited is reported once it is collected, with the type of the task. The event is process-wide, so this check runs only in a fuzz run (`ZORG_FUZZ_MINUTES` or `ZORG_FUZZ_TARGET` set): in a normal pass it would blame these targets for tasks that tests running beside them leave behind.
 
 ```
 ZORG_FUZZ_TARGET="Stateful" dotnet test --project tests/Zorg.Ssh.Tests --no-build --filter-class "*FuzzTests"      # only these targets, the short run

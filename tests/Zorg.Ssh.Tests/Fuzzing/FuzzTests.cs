@@ -68,7 +68,7 @@ public sealed class FuzzTests
         }
 
         Assert.True(report.Findings.Count == 0, report.Describe());
-        if (name.StartsWith("Stateful", StringComparison.Ordinal))
+        if (FuzzSettings.UnobservedTaskCheck && name.StartsWith("Stateful", StringComparison.Ordinal))
         {
             // A background loop that lost its failure shows up once its task is collected. Anything seen since the last check is reported here.
             List<Exception> unobserved = Stateful.UnobservedTasks.Drain();

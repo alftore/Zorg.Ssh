@@ -69,6 +69,13 @@ internal static class FuzzSettings
     /// <summary>Gets the seed of the single input to replay, or null.</summary>
     public static ulong? ReplaySeed => ulong.TryParse(Environment.GetEnvironmentVariable("ZORG_FUZZ_SEED"), NumberStyles.None, CultureInfo.InvariantCulture, out ulong seed) ? seed : null;
 
+    /// <summary>
+    /// Gets whether the stateful targets check for tasks that faulted unobserved. The event is process-wide, so in a normal test pass it would
+    /// blame these targets for tasks that other tests running beside them leave behind. A fuzz run (a long run, or a chosen target) is the
+    /// place to look, and a regression test pins each source that has been found.
+    /// </summary>
+    public static bool UnobservedTaskCheck => LongRun is not null || TargetFilter is not null;
+
     public static string? TargetFilter => Environment.GetEnvironmentVariable("ZORG_FUZZ_TARGET") is { Length: > 0 } filter ? filter : null;
 
     /// <summary>Gets the longest one input may run before it counts as a hang.</summary>

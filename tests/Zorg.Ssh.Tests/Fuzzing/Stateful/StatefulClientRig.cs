@@ -226,7 +226,7 @@ internal sealed class ClientRig(Depth depth = Depth.Channel) : IDisposable
             throw new StatefulFindingException("Memory bound", memory + " " + description);
         }
 
-        if (_inputs % 20 == 0)
+        if (FuzzSettings.UnobservedTaskCheck && _inputs % 20 == 0)
         {
             foreach (Exception unobserved in UnobservedTasks.Drain())
             {

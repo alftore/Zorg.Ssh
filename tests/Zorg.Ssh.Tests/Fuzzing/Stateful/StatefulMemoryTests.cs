@@ -12,6 +12,8 @@ namespace Zorg.Ssh.Tests.Fuzzing.Stateful;
 /// thousands of messages of every kind that costs the SUT something on one connection, measure it at intervals while it is busy, and
 /// insist that what it holds stays within its limits and does not grow.
 /// </summary>
+// Serial: the live heap is process-wide, and tests running beside this one would move it.
+[Collection(Zorg.Ssh.Tests.Sftp.SftpSerialTests.Name)]
 public sealed class StatefulMemoryTests
 {
     private const int Rounds = 40;
