@@ -39,6 +39,23 @@ internal enum OpKind : byte
 
     /// <summary>Waits for the SUT to catch up (a probe message and its answer), then runs the probe the test set. For tests that measure a connection mid-sequence.</summary>
     Probe = 10,
+
+    /// <summary>
+    /// Queues the payload past the peer's parked queue (SshTransport.SendIgnoringKexForTests), so it goes out in the middle of the peer's key
+    /// exchange, behind whatever key exchange messages are already queued. Body: yields (1), payload. The yields are Task.Yield calls first, which
+    /// moves the injection later in the exchange.
+    /// </summary>
+    KexInject = 11,
+
+    /// <summary>
+    /// Starts a rekey from the peer and, in the same breath, queues a message that policy forbids during a key exchange behind the peer's KEXINIT: a
+    /// channel open with an id nothing else uses. It is injected only if the rekey really started, so it is always in the window. The SUT must end
+    /// the connection and must not answer it. Body: which message (1).
+    /// </summary>
+    KexCanary = 12,
+
+    /// <summary>Makes the SUT start a rekey itself, so the peer is the answering side, and its own traffic parks.</summary>
+    SutRekey = 13,
 }
 
 /// <summary>One step. A whole input is a header byte and a list of these.</summary>
@@ -51,6 +68,10 @@ internal readonly record struct FuzzOp(OpKind Kind, byte[] Body)
     public static FuzzOp Of(OpKind kind) => new(kind, []);
 
     public static FuzzOp App(byte action) => new(OpKind.App, [action]);
+
+    public static FuzzOp Inject(byte yields, byte[] payload) => new(OpKind.KexInject, [yields, .. payload]);
+
+    public static FuzzOp Canary(byte which) => new(OpKind.KexCanary, [which]);
 
     public static FuzzOp Data(uint channel, byte[] bytes, bool swapHandles = false, bool extended = false)
     {
@@ -100,6 +121,7 @@ internal static class FuzzOpCodec
                 OpKind.Send or OpKind.SignedAuth => op.Body.Length == 0 ? "(empty)" : StatefulLimits.Name(op.Body[0]) + " " + Hex(op.Body, 56),
                 OpKind.Data => op.Body.Length < 5 ? "(short)" : $"channel {BinaryPrimitives.ReadUInt32BigEndian(op.Body.AsSpan(1))} flags {op.Body[0]} {op.Body.Length - 5} bytes {Hex(op.Body.AsSpan(5).ToArray(), 24)}",
                 OpKind.Await => op.Body.Length == 0 ? string.Empty : StatefulLimits.Name(op.Body[0]),
+                OpKind.KexInject => op.Body.Length == 0 ? "(empty)" : $"after {op.Body[0]} yields: {StatefulLimits.Name(op.Body.Length > 1 ? op.Body[1] : (byte)0)} {Hex(op.Body.AsSpan(1).ToArray(), 40)}",
                 _ => Hex(op.Body, 24),
             };
             text.Append("  ").Append(i).Append(' ').Append(op.Kind).Append(' ').AppendLine(detail);

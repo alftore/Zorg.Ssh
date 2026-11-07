@@ -92,7 +92,10 @@ internal sealed class ClientRig(Depth depth = Depth.Channel) : IDisposable
 
             notes.Milliseconds["handshake"] = watch.Elapsed.TotalMilliseconds;
             watch.Restart();
-            executor = new SequenceExecutor(peer, action => StartAppAsync(connect, action, apps, appFailures), Probe is null ? null : async () => await Probe(connect.IsCompletedSuccessfully ? await connect.ConfigureAwait(false) : null).ConfigureAwait(false));
+            executor = new SequenceExecutor(peer, action => StartAppAsync(connect, action, apps, appFailures), Probe is null ? null : async () => await Probe(connect.IsCompletedSuccessfully ? await connect.ConfigureAwait(false) : null).ConfigureAwait(false))
+            {
+                SutRekey = async () => (await connect.WaitAsync(StatefulLimits.AwaitLimit * 2).ConfigureAwait(false)).RequestRekey(),
+            };
             await executor.RunAsync(ops).ConfigureAwait(false);
             survived = await executor.BarrierAsync().ConfigureAwait(false);
             if (survived && connect.IsCompletedSuccessfully)
@@ -101,6 +104,7 @@ internal sealed class ClientRig(Depth depth = Depth.Channel) : IDisposable
             }
 
             notes.Record(peer, survived);
+            notes.RecordKex(executor, peer);
             notes.Milliseconds["ops and barrier"] = watch.Elapsed.TotalMilliseconds;
             watch.Restart();
         }
@@ -166,8 +170,16 @@ internal sealed class ClientRig(Depth depth = Depth.Channel) : IDisposable
         string? peerEnd = peer.EndedBy?.Message;
         bool clientSentConnectionMessageBeforeAuth = !authenticated && peer.Snapshot().Any(m => m.Number is >= 80 and <= 127);
         bool stalled = peer.SendStalled;
+        List<PeerMessage> received = peer.Snapshot();
         bool openedChannel = peer.Snapshot().Any(m => m.Number == MessageNumber.ChannelOpen);
         await peer.DisposeAsync().ConfigureAwait(false);
+
+        // A message that policy forbids during the peer's key exchange was queued right behind its KEXINIT. The SUT must end the connection over it. An
+        // answer that names it (a confirmation or a refusal of the open) means it was acted on, which is the first guarantee broken.
+        if (executor is not null && received.FirstOrDefault(m => m.Number is MessageNumber.ChannelOpenConfirmation or MessageNumber.ChannelOpenFailure && m.Payload.Length >= 5 && executor.Canaries.Contains(System.Buffers.Binary.BinaryPrimitives.ReadUInt32BigEndian(m.Payload.AsSpan(1)))) is { } answered)
+        {
+            throw new StatefulFindingException("GUARANTEE 1 BREACH", $"The SUT answered ({StatefulLimits.Name(answered.Number)}) a message that was sent in the middle of the peer's key exchange, which policy forbids. It acted on it. {description}");
+        }
 
         if (clientSentConnectionMessageBeforeAuth)
         {

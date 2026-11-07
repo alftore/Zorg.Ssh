@@ -295,6 +295,7 @@ internal sealed class SequenceExecutor
     private readonly StatefulPeer _peer;
     private readonly Func<byte, Task>? _app;
     private readonly Func<Task>? _probe;
+    private readonly HashSet<uint> _canaries = [];
     private readonly SftpPeerServer _sftpServer = new();
     private readonly SftpPeerClientView _sftpView = new();
     private int _awaitCursor;
@@ -314,6 +315,18 @@ internal sealed class SequenceExecutor
     public int OpsRun { get; private set; }
 
     public int AwaitMisses { get; private set; }
+
+    /// <summary>Gets or sets what starts a rekey from the SUT's side.</summary>
+    public Func<Task>? SutRekey { get; set; }
+
+    /// <summary>Gets the channel ids of the messages injected into a peer key exchange that policy forbids. An answer naming one is a breach.</summary>
+    public IReadOnlyCollection<uint> Canaries => _canaries;
+
+    /// <summary>Gets how many injections went out in the middle of the peer's key exchange.</summary>
+    public int Injections { get; private set; }
+
+    /// <summary>Gets how many rekeys the SUT was asked to start.</summary>
+    public int SutRekeys { get; private set; }
 
     public SftpPeerServer SftpServer => _sftpServer;
 
@@ -372,6 +385,27 @@ internal sealed class SequenceExecutor
                     break;
                 case OpKind.Pause:
                     await Task.Delay(2).ConfigureAwait(false);
+                    break;
+                case OpKind.KexInject:
+                    await InjectAsync(op.Body).ConfigureAwait(false);
+                    break;
+                case OpKind.KexCanary:
+                    await CanaryAsync(op.Body.Length > 0 ? op.Body[0] : (byte)0).ConfigureAwait(false);
+                    break;
+                case OpKind.SutRekey:
+                    if (SutRekey is not null)
+                    {
+                        SutRekeys++;
+                        try
+                        {
+                            await SutRekey().ConfigureAwait(false);
+                        }
+                        catch (Exception ex) when (ex is SshException or TimeoutException or ObjectDisposedException or InvalidOperationException)
+                        {
+                            // The connection is over, or not yet logged in.
+                        }
+                    }
+
                     break;
                 case OpKind.Probe:
                     if (_probe is not null && await BarrierAsync().ConfigureAwait(false))
@@ -435,6 +469,79 @@ internal sealed class SequenceExecutor
         if (_replySender is { } sender)
         {
             await Task.WhenAny(sender, Task.Delay(TimeSpan.FromSeconds(2))).ConfigureAwait(false);
+        }
+    }
+
+    private async Task InjectAsync(byte[] body)
+    {
+        if (body.Length < 2)
+        {
+            return;
+        }
+
+        for (int i = 0; i < body[0]; i++)
+        {
+            await Task.Yield();
+        }
+
+        if (_peer.Transport.KeyExchangeRunning)
+        {
+            Injections++;
+        }
+
+        QueueIgnoringKex(body[1..]);
+    }
+
+    private async Task CanaryAsync(byte which)
+    {
+        if (_peer.Transport.KeyExchangeRunning || _peer.HasEnded)
+        {
+            return;
+        }
+
+        try
+        {
+            _peer.Transport.RequestRekey();
+        }
+        catch (SshException)
+        {
+            return;
+        }
+
+        // Nothing awaits between the rekey and the injection, so the peer's receive loop can't have answered the SUT's KEXINIT (which it has not yet
+        // been sent): the canary sits right behind the peer's KEXINIT, before its ECDH_INIT and NEWKEYS. Only if a rekey really began is it in the window.
+        if (!_peer.Transport.KeyExchangeRunning)
+        {
+            return;
+        }
+
+        uint id = 777u + which;
+        byte[] message = which switch
+        {
+            0 => Wire.ChannelOpen("session", id),
+            1 => Wire.ChannelOpen("direct-tcpip", id, Wire.DirectTcpExtra("127.0.0.1", 9)),
+            _ => Wire.ChannelOpen("forwarded-tcpip", id, Wire.ForwardedTcpExtra("127.0.0.1", 9)),
+        };
+        _canaries.Add(id);
+        Injections++;
+        QueueIgnoringKex(message);
+        await Task.CompletedTask.ConfigureAwait(false);
+    }
+
+    private void QueueIgnoringKex(byte[] payload)
+    {
+        if (payload.Length == 0 || payload.Length > 32 * 1024)
+        {
+            return;
+        }
+
+        try
+        {
+            _peer.Transport.SendIgnoringKexForTests(payload);
+        }
+        catch (Exception ex) when (ex is SshException or ObjectDisposedException or InvalidOperationException)
+        {
+            // The connection is over, or the key exchange queue is full.
         }
     }
 

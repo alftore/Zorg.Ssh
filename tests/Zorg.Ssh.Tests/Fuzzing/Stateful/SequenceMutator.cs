@@ -82,7 +82,7 @@ internal static class SequenceMutator
     private static void ByteMutate(FuzzRandom random, List<FuzzOp> ops, int index)
     {
         FuzzOp op = ops[index];
-        if (op.Kind is OpKind.Await or OpKind.Rekey or OpKind.Pause or OpKind.Disconnect || op.Body.Length == 0)
+        if (op.Kind is OpKind.Await or OpKind.Rekey or OpKind.Pause or OpKind.Disconnect or OpKind.KexCanary or OpKind.SutRekey || op.Body.Length == 0)
         {
             return;
         }

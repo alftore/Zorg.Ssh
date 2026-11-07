@@ -49,8 +49,8 @@ internal static class StatefulTargets
         Make(ClientConnection, ClientConnectionSeeds(), ClientConnectionPool(), input => ClientConnectionRigLazy.Value.Run(input), variants: 1, iterations: 12),
         Make(ServerSftp, ServerSftpSeeds(), ServerConnectionPool(), input => SftpRig.Value.Run(input, sftp: true), variants: 1, iterations: 12),
         Make(ClientSftp, ClientSftpSeeds(), ClientConnectionPool(), input => ClientSftpRig.Value.Run(input), variants: 1, iterations: 10, minReasons: 1),
-        Make(ServerRekey, ServerRekeySeeds(), ServerConnectionPool(), input => RekeyRig.Value.Run(input, sftp: true), variants: 1, iterations: 14),
-        Make(ClientRekey, ClientRekeySeeds(), ClientConnectionPool(), input => ClientRekeyRig.Value.Run(input), variants: 1, iterations: 10),
+        Make(ServerRekey, ServerRekeySeeds(), RekeyPool(ServerConnectionPool()), input => RekeyRig.Value.Run(input, sftp: true), variants: 1, iterations: 14),
+        Make(ClientRekey, ClientRekeySeeds(), RekeyPool(ClientConnectionPool()), input => ClientRekeyRig.Value.Run(input), variants: 1, iterations: 10),
     ]);
 
     private static List<FuzzTarget> InstallWatchers(List<FuzzTarget> targets)
@@ -367,6 +367,30 @@ internal static class StatefulTargets
 
     // Rekey and order.
 
+    /// <summary>The pool of the rekey targets: what the others have, and messages injected into the peer's key exchange, and rekeys from the SUT's side.</summary>
+    private static IReadOnlyList<FuzzOp> RekeyPool(IReadOnlyList<FuzzOp> pool) =>
+    [
+        .. pool,
+        FuzzOp.Inject(0, Wire.ChannelOpen("session", 100)),
+        FuzzOp.Inject(0, Wire.KeepAlive()),
+        FuzzOp.Inject(1, Wire.ChannelData(0, new byte[100])),
+        FuzzOp.Inject(2, Wire.Exec(0, "injected")),
+        FuzzOp.Inject(3, Wire.WindowAdjust(0, 10)),
+        FuzzOp.Inject(0, Wire.ChannelOpen("forwarded-tcpip", 120, Wire.ForwardedTcpExtra("127.0.0.1", 2200))),
+        FuzzOp.Inject(0, Wire.AuthSuccess()),
+        FuzzOp.Inject(0, Wire.ServiceRequest()),
+        FuzzOp.Inject(1, Wire.Ignore("kex")),
+        FuzzOp.Inject(2, Wire.Debug("kex")),
+        FuzzOp.Inject(0, Wire.KexInit(SshRole.Client)),
+        FuzzOp.Inject(1, Wire.KexNewKeys()),
+        FuzzOp.Inject(2, Wire.KexEcdhInit(KexPoint)),
+        FuzzOp.Canary(0),
+        FuzzOp.Canary(1),
+        FuzzOp.Canary(2),
+        FuzzOp.Of(OpKind.SutRekey),
+        FuzzOp.Of(OpKind.SutRekey),
+    ];
+
     private static IReadOnlyList<(string, List<FuzzOp>)> ServerRekeySeeds()
     {
         List<FuzzOp> With(params FuzzOp[] rest) => [.. ServerLogin(), .. rest];
@@ -377,6 +401,11 @@ internal static class StatefulTargets
             ("kex messages after the exchange", With(FuzzOp.Of(OpKind.Rekey), FuzzOp.Send(Wire.Ignore()), FuzzOp.Send(Wire.KexNewKeys()), FuzzOp.Send(Wire.KexEcdhInit(KexPoint)), FuzzOp.Send(Wire.KexInit(SshRole.Client)), FuzzOp.Send(Wire.KexEcdhReply([1], [2], [3])))),
             ("rekey with channels open", With([.. Session(), FuzzOp.Send(Wire.ChannelOpen("session", 101)), FuzzOp.Of(OpKind.Rekey), FuzzOp.Send(Wire.WindowAdjust(0, 1000)), FuzzOp.Send(Wire.ChannelOpen("direct-tcpip", 102, Wire.DirectTcpExtra("127.0.0.1", (uint)SharedSink.Port))), FuzzOp.Of(OpKind.Rekey), FuzzOp.Send(Wire.KeepAlive()), FuzzOp.Await(MessageNumber.RequestFailure)])),
             ("replayed login and service", With(FuzzOp.Of(OpKind.Rekey), FuzzOp.Send(Wire.ServiceRequest()), FuzzOp.Send(Wire.AuthPassword(Wire.Secret)), FuzzOp.Send(Wire.ExtInfo(("server-sig-algs", "ssh-ed25519"))))),
+            ("injected behind the peer's KEXINIT", With([.. Session(), FuzzOp.Of(OpKind.Rekey), FuzzOp.Inject(0, Wire.ChannelOpen("session", 100)), FuzzOp.Inject(0, Wire.Ignore("kex")), FuzzOp.Inject(2, Wire.KeepAlive()), FuzzOp.Inject(4, Wire.ChannelData(0, new byte[50])), FuzzOp.Send(Wire.KeepAlive())])),
+            ("canary: a channel open during the peer's exchange", With(FuzzOp.Canary(0), FuzzOp.Canary(1))),
+            ("kex messages injected in the exchange", With(FuzzOp.Of(OpKind.Rekey), FuzzOp.Inject(0, Wire.KexInit(SshRole.Client)), FuzzOp.Inject(1, Wire.KexNewKeys()), FuzzOp.Inject(0, Wire.KexEcdhInit(KexPoint)), FuzzOp.Inject(3, Wire.Debug("kex")), FuzzOp.Inject(0, Wire.ServiceRequest()), FuzzOp.Inject(0, Wire.AuthSuccess()))),
+            ("the SUT rekeys, and its replies park", With([.. Session(), FuzzOp.Of(OpKind.SutRekey), FuzzOp.Send(Wire.KeepAlive()), FuzzOp.Send(Wire.KeepAlive()), FuzzOp.Send(Wire.ChannelOpen("session", 101)), FuzzOp.Data(0, new byte[500]), FuzzOp.Send(Wire.KeepAlive()), FuzzOp.Await(MessageNumber.RequestFailure), FuzzOp.Send(Wire.ChannelClose(0))])),
+            ("the SUT rekeys and the peer injects", With([.. Session(), FuzzOp.Of(OpKind.SutRekey), FuzzOp.Inject(0, Wire.KeepAlive()), FuzzOp.Inject(5, Wire.ChannelOpen("session", 102)), FuzzOp.Send(Wire.KeepAlive()), FuzzOp.Await(MessageNumber.RequestFailure)])),
             ("out of order connection", With(FuzzOp.Send(Wire.ChannelClose(0)), FuzzOp.Send(Wire.ChannelData(0, [1])), FuzzOp.Send(Wire.ChannelOpen("session", 100)), FuzzOp.Send(Wire.ChannelOpen("session", 100)), FuzzOp.Send(Wire.ChannelEof(0)), FuzzOp.Send(Wire.ChannelData(0, [1])), FuzzOp.Send(Wire.ChannelClose(0)), FuzzOp.Send(Wire.ChannelClose(0)))),
         ];
     }
@@ -389,6 +418,11 @@ internal static class StatefulTargets
             ("rekey between data", ClientWith(0, [.. Exec(), FuzzOp.Send(Wire.ChannelData(0, new byte[2000])), FuzzOp.Of(OpKind.Rekey), FuzzOp.Send(Wire.ChannelData(0, new byte[2000])), FuzzOp.Of(OpKind.Rekey), FuzzOp.Send(Wire.ExitStatus(0, 0)), FuzzOp.Send(Wire.ChannelEof(0)), FuzzOp.Send(Wire.ChannelClose(0)), FuzzOp.Await(MessageNumber.ChannelClose)])),
             ("kex messages after the exchange", ClientWith(1, FuzzOp.Of(OpKind.Rekey), FuzzOp.Send(Wire.Ignore()), FuzzOp.Send(Wire.KexNewKeys()), FuzzOp.Send(Wire.KexEcdhReply([1], [2], [3])), FuzzOp.Send(Wire.KexInit(SshRole.Server)), FuzzOp.Send(Wire.KexEcdhInit(KexPoint)))),
             ("rekey with channels open", ClientWith(0, [.. Exec(), FuzzOp.App(3), FuzzOp.Of(OpKind.Rekey), FuzzOp.Await(MessageNumber.GlobalRequest), FuzzOp.Send(Wire.RequestSuccessPort(2200)), FuzzOp.Of(OpKind.Rekey), FuzzOp.Send(Wire.ChannelOpen("forwarded-tcpip", 101, Wire.ForwardedTcpExtra("127.0.0.1", 2200))), FuzzOp.Send(Wire.ChannelClose(0))])),
+            ("injected behind the peer's KEXINIT", ClientWith(0, [.. Exec(), FuzzOp.Of(OpKind.Rekey), FuzzOp.Inject(0, Wire.ChannelOpen("forwarded-tcpip", 120, Wire.ForwardedTcpExtra("127.0.0.1", 2200))), FuzzOp.Inject(0, Wire.GlobalRequest("hostkeys-00@openssh.com", true)), FuzzOp.Inject(2, Wire.ChannelData(0, new byte[50])), FuzzOp.Inject(3, Wire.Ignore("kex")), FuzzOp.Send(Wire.ExitStatus(0, 0))])),
+            ("canary: a channel open during the peer's exchange", ClientWith(1, FuzzOp.Canary(0), FuzzOp.Canary(2))),
+            ("kex messages injected in the exchange", ClientWith(2, FuzzOp.Of(OpKind.Rekey), FuzzOp.Inject(0, Wire.KexInit(SshRole.Server)), FuzzOp.Inject(1, Wire.KexNewKeys()), FuzzOp.Inject(0, Wire.KexEcdhReply([1], [2], [3])), FuzzOp.Inject(3, Wire.Debug("kex")), FuzzOp.Inject(0, Wire.ServiceAccept()), FuzzOp.Inject(0, Wire.AuthSuccess()))),
+            ("the SUT rekeys, and its traffic parks", ClientWith(0, [.. Exec(), FuzzOp.Of(OpKind.SutRekey), FuzzOp.App(7), FuzzOp.Send(Wire.GlobalRequest("hostkeys-00@openssh.com", true)), FuzzOp.Send(Wire.ChannelData(0, new byte[500])), FuzzOp.Send(Wire.GlobalRequest("keepalive@openssh.com", true)), FuzzOp.Await(MessageNumber.ChannelOpen)])),
+            ("the SUT rekeys and the peer injects", ClientWith(1, [.. Exec(), FuzzOp.Of(OpKind.SutRekey), FuzzOp.Inject(0, Wire.GlobalRequest("keepalive@openssh.com", true)), FuzzOp.Inject(5, Wire.ChannelOpen("session", 102)), FuzzOp.Send(Wire.GlobalRequest("keepalive@openssh.com", true))])),
             ("replayed login", ClientWith(2, FuzzOp.Of(OpKind.Rekey), FuzzOp.Send(Wire.ServiceAccept()), FuzzOp.Send(Wire.AuthSuccess()), FuzzOp.Send(Wire.ExtInfo(("server-sig-algs", "ssh-ed25519"))), FuzzOp.Send(Wire.AuthBanner("late")))),
         ];
     }

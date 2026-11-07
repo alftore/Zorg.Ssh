@@ -232,6 +232,30 @@ internal sealed class StatefulNotes
 
     public void Reached(string stage) => _stages.Add(stage);
 
+    /// <summary>Reports the key exchange paths an input took: injections into the peer's exchange, canaries, rekeys the SUT started.</summary>
+    public void RecordKex(SequenceExecutor executor, StatefulPeer peer)
+    {
+        if (executor.Injections > 0)
+        {
+            Reached("kex: a message was injected in the middle of the peer's key exchange");
+        }
+
+        if (executor.Canaries.Count > 0)
+        {
+            Reached("kex: a forbidden canary was injected behind the peer's KEXINIT");
+            Reached(peer.HasEnded ? "kex: the SUT ended the connection over the canary" : "kex: the connection survived a canary");
+        }
+
+        if (executor.SutRekeys > 0)
+        {
+            Reached("kex: the SUT was asked to start a rekey");
+            if (peer.Transport.CompletedKeyExchanges >= 2)
+            {
+                Reached("kex: a rekey the SUT may have started completed");
+            }
+        }
+    }
+
     /// <summary>Reports what the peer saw of the SUT, and which of the peer's messages the SUT handled.</summary>
     public void Record(StatefulPeer peer, bool survived)
     {
@@ -339,6 +363,12 @@ internal sealed class ServerRig : IDisposable
                 notes.Flush();
             }
         }
+    }
+
+    private Task StartRekeyAsync()
+    {
+        Connection?.Transport.RequestRekey();
+        return Task.CompletedTask;
     }
 
     private static string FingerprintOfPeerKey() => HostKeyPolicy.ComputeFingerprint(FuzzSecrets.PeerKey.PublicKey.Blob.Span);
@@ -474,7 +504,7 @@ internal sealed class ServerRig : IDisposable
 
             notes.Milliseconds["handshake"] = watch.Elapsed.TotalMilliseconds;
             watch.Restart();
-            executor = new SequenceExecutor(peer, app: null, Probe);
+            executor = new SequenceExecutor(peer, app: null, Probe) { SutRekey = StartRekeyAsync };
             await executor.RunAsync(ops).ConfigureAwait(false);
             survived = await executor.BarrierAsync().ConfigureAwait(false);
             if (survived)
@@ -483,6 +513,7 @@ internal sealed class ServerRig : IDisposable
             }
 
             notes.Record(peer, survived);
+            notes.RecordKex(executor, peer);
             notes.Milliseconds["ops and barrier"] = watch.Elapsed.TotalMilliseconds;
             watch.Restart();
         }
@@ -527,6 +558,13 @@ internal sealed class ServerRig : IDisposable
         await peer.DisposeAsync().ConfigureAwait(false);
 
         // The verdicts, most serious first.
+
+        // A message that policy forbids during the peer's key exchange was queued right behind its KEXINIT. The SUT must end the connection over it. An
+        // answer that names it (a confirmation or a refusal of the open) means it was acted on, which is the first guarantee broken.
+        if (executor is not null && received.FirstOrDefault(m => m.Number is MessageNumber.ChannelOpenConfirmation or MessageNumber.ChannelOpenFailure && m.Payload.Length >= 5 && executor.Canaries.Contains(System.Buffers.Binary.BinaryPrimitives.ReadUInt32BigEndian(m.Payload.AsSpan(1)))) is { } answered)
+        {
+            throw new StatefulFindingException("GUARANTEE 1 BREACH", $"The SUT answered ({StatefulLimits.Name(answered.Number)}) a message that was sent in the middle of the peer's key exchange, which policy forbids. It acted on it. {description}");
+        }
         if (PreAuth)
         {
             if (SessionCalls != sessionsBefore || DirectTcpCalls != directBefore)

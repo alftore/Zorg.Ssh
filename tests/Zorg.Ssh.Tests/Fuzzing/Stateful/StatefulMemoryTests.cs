@@ -19,6 +19,21 @@ public sealed class StatefulMemoryTests
     private const int Rounds = 40;
     private const long AllowedGrowth = 24L * 1024 * 1024;
 
+    // Not a finding: the guarantee the key exchange injection checks, pinned with fixed inputs. A channel open is queued behind the peer's KEXINIT, where policy
+    // forbids every connection message. The rig throws "GUARANTEE 1 BREACH" if the SUT answers it, and the SUT must end the connection instead.
+    [Fact]
+    public void A_channel_open_sent_in_the_middle_of_the_peers_key_exchange_is_refused_by_both_roles_and_never_answered()
+    {
+        using ServerRig server = new(preAuth: false, Depth.Authenticated);
+        server.Run(
+            FuzzOpCodec.Encode(0, [FuzzOp.Send(Wire.ServiceRequest()), FuzzOp.Await(MessageNumber.ServiceAccept), FuzzOp.Send(Wire.AuthPassword(Wire.Secret)), FuzzOp.Await(MessageNumber.UserAuthSuccess), FuzzOp.Canary(0), FuzzOp.Canary(1)]),
+            sftp: false);
+        Assert.Contains("ended by", server.LastDescription, StringComparison.Ordinal);
+
+        using ClientRig client = new(Depth.Authenticated);
+        client.Run(FuzzOpCodec.Encode(0, [FuzzOp.Await(MessageNumber.ServiceRequest), FuzzOp.Send(Wire.ServiceAccept()), FuzzOp.Await(MessageNumber.UserAuthRequest), FuzzOp.Send(Wire.AuthFailure(false, "password")), FuzzOp.Await(MessageNumber.UserAuthRequest), FuzzOp.Send(Wire.AuthSuccess()), FuzzOp.Canary(0), FuzzOp.Canary(2)]));
+    }
+
     [Fact]
     public void A_long_sequence_on_one_server_connection_holds_no_more_than_its_limits_and_its_memory_does_not_grow()
     {
