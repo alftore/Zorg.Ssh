@@ -28,7 +28,7 @@ internal sealed class SshConnection : IAsyncDisposable
     private const int MaxPendingOpens = 16;
     private const int MaxPendingGlobalRequests = 32;
 
-    private static readonly TimeSpan Grace = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan DefaultGrace = TimeSpan.FromSeconds(5);
 
     private readonly SshTransport _transport;
     private readonly int _maxChannels;
@@ -57,7 +57,8 @@ internal sealed class SshConnection : IAsyncDisposable
     private Task? _loop;
     private Task? _senderLoop;
     private Task? _keepAliveLoop;
-    private Exception? _failure;
+    private SshException? _failure;
+    private bool _ending;
 
     /// <summary>
     /// Marks a task's failure as seen. The end of a connection fails every waiter it holds, and a waiter whose caller has already left
@@ -95,8 +96,14 @@ internal sealed class SshConnection : IAsyncDisposable
     /// </summary>
     public ChannelReader<IncomingChannelOpen> IncomingChannels => _incoming.Reader;
 
-    /// <summary>Gets a task that completes when the connection ends. It never faults.</summary>
+    /// <summary>
+    /// Gets a task that completes when the connection ends, once every channel, open and global request it held has
+    /// failed. It never faults. <see cref="DisposeAsync"/> completes it even when the receive loop is stuck.
+    /// </summary>
     public Task Ended => _ended.Task;
+
+    /// <summary>Gets how long dispose waits for each loop. Tests shorten it.</summary>
+    internal TimeSpan Grace { get; init; } = DefaultGrace;
 
     /// <summary>Gets how many deferred sends are waiting for the sender loop.</summary>
     internal int DeferredCount => _deferred.Reader.Count;
@@ -483,11 +490,20 @@ internal sealed class SshConnection : IAsyncDisposable
         await WaitForAsync(_loop).ConfigureAwait(false);
         await WaitForAsync(_senderLoop).ConfigureAwait(false);
         await WaitForAsync(_keepAliveLoop).ConfigureAwait(false);
+
+        // A receive loop stuck in a stream that ignores cancellation and closing never gets to end the connection, and
+        // everything waiting on it (channels, opens, global requests, forwards, Ended) would wait for ever (guarantee 3).
+        // So the end happens here instead. The cause is the one the transport recorded: a failure that came first, or this close.
+        if (!_ended.Task.IsCompleted)
+        {
+            await EndAsync(_transport.RecordedFailure ?? new SshConnectionException("The connection was closed by this side. Connect again to continue.")).ConfigureAwait(false);
+        }
+
         await _transport.DisposeAsync().ConfigureAwait(false);
         _stop.Dispose();
     }
 
-    private static async Task WaitForAsync(Task? task)
+    private async Task WaitForAsync(Task? task)
     {
         if (task is null)
         {
@@ -562,7 +578,7 @@ internal sealed class SshConnection : IAsyncDisposable
 
     private async Task ReceiveLoopAsync()
     {
-        Exception failure;
+        SshException failure;
         try
         {
             while (true)
@@ -589,14 +605,21 @@ internal sealed class SshConnection : IAsyncDisposable
         await EndAsync(failure).ConfigureAwait(false);
     }
 
-    private async ValueTask EndAsync(Exception failure)
+    /// <summary>
+    /// Ends the connection: fails everything it holds, then completes <see cref="Ended"/>. The receive loop calls it, and so
+    /// does dispose when that loop is stuck. A second caller waits for the first, which has nothing left to wait for.
+    /// </summary>
+    private async ValueTask EndAsync(SshException failure)
     {
         SshChannel[] channels;
         TaskCompletionSource<SshChannel>[] opening;
         PendingGlobalRequest[] requests;
+        bool first;
         lock (_gate)
         {
             _failure ??= failure;
+            first = !_ending;
+            _ending = true;
             channels = [.. _channels.Values];
             opening = [.. _opening.Values];
             requests = [.. _globalRequests];
@@ -621,6 +644,13 @@ internal sealed class SshConnection : IAsyncDisposable
         }
 
         _incoming.Writer.TryComplete();
+        if (!first)
+        {
+            // The first caller is failing what it took, with no wait in between, and completes Ended after that.
+            await _ended.Task.ConfigureAwait(false);
+            return;
+        }
+
         _ended.TrySetResult();
 
         // Tells the peer if we can, and closes the socket, so a failure can't leave a half-open connection.

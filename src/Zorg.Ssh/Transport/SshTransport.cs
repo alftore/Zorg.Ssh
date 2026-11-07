@@ -167,6 +167,9 @@ internal sealed partial class SshTransport : IAsyncDisposable
 
     private Exception? Failure => Volatile.Read(ref _failureSlot);
 
+    /// <summary>Gets the first failure, as a new exception of its own, or null while the transport hasn't failed or closed.</summary>
+    internal SshException? RecordedFailure => Failure is { } failure ? Wrap(failure) : null;
+
     /// <summary>
     /// Runs the version exchange and the first key exchange over a connected stream. The stream belongs to
     /// the transport from here on, including on failure.
