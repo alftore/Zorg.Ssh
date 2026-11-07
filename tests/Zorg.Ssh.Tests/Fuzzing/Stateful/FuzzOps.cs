@@ -36,6 +36,9 @@ internal enum OpKind : byte
 
     /// <summary>Closes the stream abruptly.</summary>
     Disconnect = 9,
+
+    /// <summary>Waits for the SUT to catch up (a probe message and its answer), then runs the probe the test set. For tests that measure a connection mid-sequence.</summary>
+    Probe = 10,
 }
 
 /// <summary>One step. A whole input is a header byte and a list of these.</summary>
@@ -63,6 +66,9 @@ internal readonly record struct FuzzOp(OpKind Kind, byte[] Body)
 internal static class FuzzOpCodec
 {
     public const int MaxOps = 600;
+
+    /// <summary>Gets how many ops a decoder reads. The mutator keeps to <see cref="MaxOps"/>; a test that floods one connection builds more.</summary>
+    public const int MaxDecodedOps = 200_000;
     public const int MaxBody = 60000;
 
     public static byte[] Encode(byte variant, IReadOnlyList<FuzzOp> ops)
@@ -113,7 +119,7 @@ internal static class FuzzOpCodec
         }
 
         int at = 1;
-        while (at + 3 <= input.Length && ops.Count < MaxOps)
+        while (at + 3 <= input.Length && ops.Count < MaxDecodedOps)
         {
             OpKind kind = (OpKind)input[at];
             int length = (input[at + 1] << 8) | input[at + 2];

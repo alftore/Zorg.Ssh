@@ -261,7 +261,7 @@ internal sealed class StatefulNotes
     {
         StringBuilder text = new();
         text.Append(CultureInfo.InvariantCulture, $"peer received {peer.ReceivedCount} messages ({string.Join(", ", peer.Snapshot().Select(m => StatefulLimits.Name(m.Number)).Take(24))}); peer ended by: ");
-        text.Append(peer.EndedBy is null ? "(still connected)" : peer.EndedBy.GetType().Name + ": " + peer.EndedBy.Message);
+        text.Append(peer.EndedBy is null ? "(still connected)" : peer.EndedBy.GetType().Name + ": " + peer.EndedBy.Message + (peer.EndedBy.InnerException is { } inner ? " <- " + inner.GetType().Name + ": " + inner.Message + " " + inner.StackTrace?.Split((char)10).FirstOrDefault() : string.Empty));
         return text.ToString();
     }
 }
@@ -293,6 +293,12 @@ internal sealed class ServerRig : IDisposable
     }
 
     public bool PreAuth { get; }
+
+    /// <summary>Gets what the peer saw at the end of the last input.</summary>
+    public string LastDescription { get; private set; } = string.Empty;
+
+    /// <summary>Gets or sets what a probe op runs. For tests that measure the connection while it is busy.</summary>
+    public Func<Task>? Probe { get; set; }
 
     public Depth Depth { get; }
 
@@ -468,7 +474,7 @@ internal sealed class ServerRig : IDisposable
 
             notes.Milliseconds["handshake"] = watch.Elapsed.TotalMilliseconds;
             watch.Restart();
-            executor = new SequenceExecutor(peer, app: null);
+            executor = new SequenceExecutor(peer, app: null, Probe);
             await executor.RunAsync(ops).ConfigureAwait(false);
             survived = await executor.BarrierAsync().ConfigureAwait(false);
             if (survived)
@@ -508,6 +514,7 @@ internal sealed class ServerRig : IDisposable
 
         string? peerEnd = peer?.EndedBy?.Message;
         string description = StatefulNotes.Describe(peer!);
+        LastDescription = description;
         bool authenticated = peer!.Snapshot().Any(m => m.Number == MessageNumber.UserAuthSuccess);
         bool confirmed = peer.Snapshot().Any(m => m.Number == MessageNumber.ChannelOpenConfirmation);
         bool failed = peer.Snapshot().Any(m => m.Number == MessageNumber.UserAuthFailure);
@@ -515,6 +522,7 @@ internal sealed class ServerRig : IDisposable
         bool sawService = peer.Snapshot().Any(m => m.Number == MessageNumber.ServiceAccept);
         string[] logs = Logs.Entries;
         Exception[] logged = Logs.Exceptions;
+        LastDescription += " | logged: " + string.Join("; ", logged.Select(e => e.GetType().Name + ": " + e.Message));
         List<PeerMessage> received = peer.Snapshot();
         await peer.DisposeAsync().ConfigureAwait(false);
 

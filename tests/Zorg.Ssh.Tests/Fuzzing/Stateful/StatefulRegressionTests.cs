@@ -12,6 +12,7 @@ using Zorg.Ssh.Connection;
 using Zorg.Ssh.Protocol;
 using Zorg.Ssh.Sftp;
 using Zorg.Ssh.Tests.Transport;
+using Zorg.Ssh.Transport;
 
 namespace Zorg.Ssh.Tests.Fuzzing.Stateful;
 
@@ -283,6 +284,34 @@ public sealed class StatefulRegressionTests
 
         public override ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default) =>
             ++_writes > 1 ? throw new IOException(Message) : ValueTask.CompletedTask;
+    }
+
+    // Found by the five minute run on Windows: every stateful target, seeds 3897823689837195934 and seven more. The unobserved-task check named a Task
+    // of SshChannel failing with "The connection ended while opening a channel." OpenChannelAsync registers the channel and its waiter, then calls
+    // SendAsync. When the transport has failed, SendAsync throws before it returns a task, and that call sat outside the try block that withdraws the
+    // registration. So the half-open channel stayed in the table, holding a slot, and when the connection's receive loop caught up and ended it,
+    // it failed the waiter that nobody was waiting on. The connection here has not been started, so its receive loop has noticed nothing yet.
+    [Fact]
+    public async Task A_channel_open_that_cannot_be_sent_leaves_no_channel_and_no_waiter_behind()
+    {
+        CancellationToken test = TestContext.Current.CancellationToken;
+        (SshTransport client, SshTransport server) = await TransportHarness.ConnectAsync(
+            TransportHarness.ClientOptions(kex: ["curve25519-sha256"]),
+            TransportHarness.ServerOptions(kex: ["curve25519-sha256"]),
+            test);
+        await using (client)
+        {
+            await using (server)
+            {
+                TransportHarness.MarkConnected(client, server);
+                SshConnection connection = new(client);
+                client.Abort(new SshConnectionException("The test ended the transport."));
+
+                await Assert.ThrowsAnyAsync<SshException>(() => connection.OpenChannelAsync("session", test));
+                Assert.Equal(0, connection.ChannelCount);
+                Assert.Equal(0, connection.OpeningCount);
+            }
+        }
     }
 
     private static async Task<SshProcess> StartAndAcceptAsync(SshClient client, StatefulPeer peer, CancellationToken test)

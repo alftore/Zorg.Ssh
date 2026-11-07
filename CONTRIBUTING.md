@@ -55,6 +55,43 @@ Every finding gets a fix in `src` and a named regression test with the input wri
 
 To add a target, write a corpus in `FuzzCorpus.cs`, add the target and its row in `FuzzAllowedExceptions` in `FuzzTargets.cs`, and say which stages it reaches with `FuzzNotes.Reached`. The tests insist that most seeds are accepted and that a share of mutated inputs get all the way through, so that a target can't quietly go shallow.
 
+## Stateful fuzzing
+
+The decoder targets can't reach anything that sits behind an encrypted handshake. `tests/Zorg.Ssh.Tests/Fuzzing/Stateful` can. Each of its eight targets runs a real in-memory SSH connection, key exchange and all, against a scripted hostile peer, and checks what comes out. The peer is a `SshTransport` in the other role, so it ran the key exchange itself, knows the session keys, and its fuzzed messages are encrypted and MACed correctly. They get past the transport and into the message policy, the auth code, the connection and channel code and SFTP. Nothing in `src` is weakened for this: the peer sends through the same `SendAsync` every upper layer uses. The only seams are read-only counts of what a connection and a channel hold, and a hook that hands a server its started connection.
+
+| Target | What it attacks |
+| --- | --- |
+| `Stateful server, before login` | The server's service and userauth handling: password, publickey (queried, signed, wrongly signed), keyboard-interactive, hostbased, `none`, and connection messages sent too early. Its handlers refuse every complete login, so nothing past auth may run. |
+| `Stateful server, after login` | Channel opens of every type, channel requests, window adjusts, data, EOF, close, global requests and `tcpip-forward`, on a logged-in server whose handlers really run. |
+| `Stateful client, during login` | Fuzzed replies to a client that tries a key, keyboard-interactive and a password: failures, `PK_OK`, prompts, banners, `EXT_INFO`. |
+| `Stateful client, after login` | Fuzzed channel and global traffic, including `forwarded-tcpip` opens, against a client application that runs commands, processes, shells, forwards and SFTP. |
+| `Stateful SFTP, server side` | The server's SFTP over a live channel, driven by the framed request runs of the SFTP server target. Handles from the server's replies fill later requests. |
+| `Stateful SFTP, client side` | A hostile SFTP server answering a real `SftpClient`, through `SftpSession`'s version exchange and read loop. The peer is an honest SFTP server whose next answer a fuzz op can replace, mutate or precede with a stray one. |
+| `Stateful server, rekey and order` and `Stateful client, rekey and order` | Rekeys started by the peer between the other messages, key exchange messages after the exchange, and replayed or reordered logins. |
+
+The input of a stateful target is a list of steps (`FuzzOps.cs`): send this payload, send this data on a channel, send this publickey request signed with the real session id, wait for a message, rekey, start an application call. The corpus is valid sequences. The mutator (`SequenceMutator.cs`) changes bytes inside a message with the same mutator as the decoder targets, and also reorders, replays, drops, retypes and floods whole messages, or slips in one from another phase. A failure prints the steps in words under the base64.
+
+What each input is checked for:
+
+- **Exceptions.** Only `SshException` types may leave the connection, and none may be the library's catch-all ("This is a bug in Zorg.Ssh") hiding another type. `FuzzAllowedExceptions` has no row for these targets, so any other exception is a finding. Logged exceptions are judged the same way.
+- **Hangs.** The peer vanishes, and then `ServeStreamAsync`, the connect call, every application call and the dispose must end with no token passed. A send that waits 8 seconds, or a probe message the SUT neither answers nor closes over, is a hang too.
+- **Memory.** After the probe, a live connection must hold at most its limits: channels, pending opens, pending global requests, deferred sends, queued requests, and a receive window between zero and its size. `StatefulMemoryTests` also runs thousands of messages on one connection and requires that the live heap doesn't grow.
+- **Guarantees 1 and 2.** The server rigs refuse every complete login. A handler that runs, a `USERAUTH_SUCCESS` that goes out, or a message the peer's own policy refuses because the SUT sent it in the wrong phase is reported as `GUARANTEE 1` or `GUARANTEE 2 BREACH`. Stop and tell the maintainer before fixing one.
+- **Guarantee 4.** The password and the private key of the setup must not appear in any log entry or exception, and the server must not send the password back.
+- **Unobserved tasks.** A task that faulted and was never awaited is reported once it is collected, with the type of the task.
+
+```
+ZORG_FUZZ_TARGET="Stateful" dotnet test --project tests/Zorg.Ssh.Tests --no-build --filter-class "*FuzzTests"      # only these targets, the short run
+ZORG_FUZZ_MINUTES=5 ZORG_FUZZ_TARGET="Stateful" dotnet test --project tests/Zorg.Ssh.Tests --no-build --filter-class "*FuzzTests"   # a long run
+ZORG_FUZZ_SEED=123 ZORG_FUZZ_TARGET="Stateful client, after login" dotnet test --project tests/Zorg.Ssh.Tests --no-build --filter-class "*FuzzTests"   # replay
+```
+
+A normal pass adds about five seconds. A handshake takes 2 to 3 ms, and a whole input 5 to 40 ms, so a target runs 25 to 100 inputs a second. Waits for a message the SUT should send are short (60 ms, 250 ms in a long run), because the cause is gone when a mutation removed it. Run a replay in a fresh process: a connection that hung is abandoned, and the application calls are racing a peer, so a replay of the same seed can differ by the timing of the SUT's answers. The seed rebuilds the input exactly.
+
+What it can't see. The peer is a transport, so it can send nothing while its own key exchange holds back its queue: a message injected in the middle of a key exchange, between the SUT's `KEXINIT` and `NEWKEYS`, isn't possible without a seam that lets a test write to the key exchange queue, and that would be a change to the real send path. The SUT never starts a rekey on its own in these runs. The ssh-agent client code, and anything that needs a real socket (`SshClient.ConnectAsync`, jump hosts, the listening loop), isn't reached. Time is real: no `TimeProvider` is faked, so idle and keepalive timeouts aren't exercised.
+
+To add a stateful target, write valid sequences in `StatefulTargets.cs`, add the target to `Build`, and say what counts as deep with a `Depth`. The tests insist that most seeds reach it.
+
 ## Coverage-guided fuzzing
 
 `tests/Zorg.Ssh.Fuzz` holds three libFuzzer targets for the wire decoders: `packet-reader` (identification line and packet framing), `kex-init` and `sftp-response`. SharpFuzz instruments `Zorg.Ssh.dll` in a container (Ubuntu, glibc), so nothing is installed on your machine.

@@ -192,36 +192,39 @@ internal sealed class SshConnection : IAsyncDisposable
             _opening.Add(channel.LocalId, confirmed);
         }
 
-        ValueTask send;
-        SshWriter writer = new(64 + (extra?.Length ?? 0));
         try
         {
-            writer.WriteByte(MessageNumber.ChannelOpen);
-            writer.WriteUtf8String(type);
-            writer.WriteUInt32(channel.LocalId);
-            writer.WriteUInt32(SshChannel.DefaultWindow);
-            writer.WriteUInt32(SshChannel.MaxPacket);
-            writer.WriteRaw(extra);
-            send = SendAsync(writer.Written, cancellationToken);
-        }
-        finally
-        {
-            writer.Dispose();
-        }
+            ValueTask send;
+            SshWriter writer = new(64 + (extra?.Length ?? 0));
+            try
+            {
+                writer.WriteByte(MessageNumber.ChannelOpen);
+                writer.WriteUtf8String(type);
+                writer.WriteUInt32(channel.LocalId);
+                writer.WriteUInt32(SshChannel.DefaultWindow);
+                writer.WriteUInt32(SshChannel.MaxPacket);
+                writer.WriteRaw(extra);
+                send = SendAsync(writer.Written, cancellationToken);
+            }
+            finally
+            {
+                writer.Dispose();
+            }
 
-        try
-        {
             await send.ConfigureAwait(false);
         }
         catch
         {
-            // The peer never heard of it, so there's nothing to wait for.
+            // The peer never heard of it, so there's nothing to wait for. A send that throws before it returns a task (the transport has
+            // failed) lands here too, and it used to leave the channel and its waiter registered.
             lock (_gate)
             {
                 _opening.Remove(channel.LocalId);
                 _channels.Remove(channel.LocalId);
             }
 
+            // The end of the connection may have taken the waiter and failed it already, or may do so a moment from now. Nobody awaits it.
+            _ = confirmed.Task.ContinueWith(static task => _ = task.Exception, CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
             throw;
         }
 

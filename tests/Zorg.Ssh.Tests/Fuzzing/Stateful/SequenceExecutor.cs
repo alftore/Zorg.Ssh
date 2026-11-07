@@ -294,16 +294,18 @@ internal sealed class SequenceExecutor
 
     private readonly StatefulPeer _peer;
     private readonly Func<byte, Task>? _app;
+    private readonly Func<Task>? _probe;
     private readonly SftpPeerServer _sftpServer = new();
     private readonly SftpPeerClientView _sftpView = new();
     private int _awaitCursor;
     private TimeSpan _awaitSpent;
     private readonly Task? _replySender;
 
-    public SequenceExecutor(StatefulPeer peer, Func<byte, Task>? app)
+    public SequenceExecutor(StatefulPeer peer, Func<byte, Task>? app, Func<Task>? probe = null)
     {
         _peer = peer;
         _app = app;
+        _probe = probe;
         peer.OnMessage = OnMessage;
         _replySender = Task.Run(SendRepliesAsync);
     }
@@ -370,6 +372,13 @@ internal sealed class SequenceExecutor
                     break;
                 case OpKind.Pause:
                     await Task.Delay(2).ConfigureAwait(false);
+                    break;
+                case OpKind.Probe:
+                    if (_probe is not null && await BarrierAsync().ConfigureAwait(false))
+                    {
+                        await _probe().ConfigureAwait(false);
+                    }
+
                     break;
                 case OpKind.Disconnect:
                     _peer.Vanish();

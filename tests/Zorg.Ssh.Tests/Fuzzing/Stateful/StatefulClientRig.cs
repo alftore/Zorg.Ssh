@@ -20,6 +20,12 @@ internal sealed class ClientRig(Depth depth = Depth.Channel) : IDisposable
     private readonly Lock _inputGate = new();
     private int _inputs;
 
+    /// <summary>Gets or sets what a probe op runs. For tests that measure the connection while it is busy.</summary>
+    public Func<SshClient?, Task>? Probe { get; set; }
+
+    /// <summary>Gets what the peer saw at the end of the last input.</summary>
+    public string LastDescription { get; private set; } = string.Empty;
+
     public void Dispose()
     {
     }
@@ -86,7 +92,7 @@ internal sealed class ClientRig(Depth depth = Depth.Channel) : IDisposable
 
             notes.Milliseconds["handshake"] = watch.Elapsed.TotalMilliseconds;
             watch.Restart();
-            executor = new SequenceExecutor(peer, action => StartAppAsync(connect, action, apps, appFailures));
+            executor = new SequenceExecutor(peer, action => StartAppAsync(connect, action, apps, appFailures), Probe is null ? null : async () => await Probe(connect.IsCompletedSuccessfully ? await connect.ConfigureAwait(false) : null).ConfigureAwait(false));
             await executor.RunAsync(ops).ConfigureAwait(false);
             survived = await executor.BarrierAsync().ConfigureAwait(false);
             if (survived && connect.IsCompletedSuccessfully)
@@ -106,6 +112,7 @@ internal sealed class ClientRig(Depth depth = Depth.Channel) : IDisposable
         // The peer has gone. The connect call, every application call and the dispose must now end by themselves, with no token.
         string? hang = null;
         string description = StatefulNotes.Describe(peer!);
+        LastDescription = description;
         Exception? connectFailure = null;
         SshClient? client = null;
         try
@@ -154,6 +161,7 @@ internal sealed class ClientRig(Depth depth = Depth.Channel) : IDisposable
         await executor!.StopAsync().ConfigureAwait(false);
         string[] entries = logs.Entries;
         Exception[] logged = logs.Exceptions;
+        LastDescription += " | logged: " + string.Join("; ", logged.Select(e => e.GetType().Name + ": " + e.Message));
         bool authenticated = peer!.SentAuthSuccess;
         string? peerEnd = peer.EndedBy?.Message;
         bool clientSentConnectionMessageBeforeAuth = !authenticated && peer.Snapshot().Any(m => m.Number is >= 80 and <= 127);
