@@ -710,6 +710,46 @@ public sealed class SftpServerProtocolTests : IDisposable
     }
 
     [Fact]
+    public async Task A_FIFO_is_listed_and_stated_as_a_FIFO_not_as_a_regular_file()
+    {
+        // .NET calls a FIFO a file. A client that checks IsRegularFile before it opens, as docs/sftp.md says to, would
+        // open it, and the open would block until OpenTimeout ended the session.
+        Assert.SkipUnless(OperatingSystem.IsLinux(), "FIFOs are a Unix thing, and only Linux has a call that tells their type.");
+        using (System.Diagnostics.Process mkfifo = System.Diagnostics.Process.Start("mkfifo", _sandbox.InRoot("fifo")))
+        {
+            await mkfifo.WaitForExitAsync(Ct);
+            Assert.Equal(0, mkfifo.ExitCode);
+        }
+
+        await File.WriteAllTextAsync(_sandbox.InRoot("file.txt"), "text", Ct);
+        File.CreateSymbolicLink(_sandbox.InRoot("to-fifo"), "fifo");
+        (SftpClient sftp, Task<int> serving) = await StartClientAsync();
+        await using (sftp)
+        {
+            Dictionary<string, SftpAttributes> listed = [];
+            await foreach (SftpEntry entry in sftp.ListDirectoryAsync("/", Ct))
+            {
+                listed[entry.Name] = entry.Attributes;
+            }
+
+            SftpAttributes fifo = listed["fifo"];
+            Assert.False(fifo.IsRegularFile);
+            Assert.False(fifo.IsDirectory);
+            Assert.False(fifo.IsSymbolicLink);
+            Assert.Equal(0, fifo.Size);
+            Assert.True(listed["file.txt"].IsRegularFile);
+            Assert.True(listed["to-fifo"].IsSymbolicLink);
+
+            Assert.False((await sftp.GetAttributesAsync("fifo", Ct)).IsRegularFile);
+            Assert.False((await sftp.GetLinkAttributesAsync("fifo", Ct)).IsRegularFile);
+            Assert.False((await sftp.GetAttributesAsync("to-fifo", Ct)).IsRegularFile);
+            Assert.True((await sftp.GetAttributesAsync("file.txt", Ct)).IsRegularFile);
+        }
+
+        Assert.Equal(0, await serving.WaitAsync(TimeSpan.FromSeconds(10), Ct));
+    }
+
+    [Fact]
     public async Task A_missing_root_or_bad_limit_is_a_clear_error_for_the_host()
     {
         (Stream client, Stream server) = DuplexStream.CreatePair();

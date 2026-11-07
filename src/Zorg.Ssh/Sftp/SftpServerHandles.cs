@@ -105,15 +105,25 @@ internal static class SftpServerAttributes
     private const UnixFileMode FileMode = (UnixFileMode)0x1A4;
     private const UnixFileMode ReadOnlyFileMode = (UnixFileMode)0x124;
 
-    /// <summary>Describes an entry without following it. On Windows the permission bits are made up from the attributes.</summary>
+    /// <summary>
+    /// Describes an entry without following it. On Windows the permission bits are made up from the attributes. .NET
+    /// calls a FIFO, socket or device a file, so on Linux its real type is read: a client that checks
+    /// <see cref="SftpAttributes.IsRegularFile"/> before opening must not be told a FIFO is one. Elsewhere on Unix there's
+    /// no way to tell, and such an entry is reported as a regular file.
+    /// </summary>
     public static SftpAttributes FromInfo(FileSystemInfo info)
     {
         FileAttributes attributes = info.Attributes;
         bool link = info.LinkTarget is not null;
         bool directory = !link && attributes.HasFlag(FileAttributes.Directory);
         UnixFileMode mode = OperatingSystem.IsWindows() ? WindowsMode(attributes) : info.UnixFileMode;
-        long size = !link && !directory && info is FileInfo file ? file.Length : 0;
         uint type = link ? SftpAttributes.TypeSymbolicLink : directory ? SftpAttributes.TypeDirectory : SftpAttributes.TypeRegular;
+        if (type == SftpAttributes.TypeRegular && LocalFile.GetLinuxFileType(info.FullName) is { } real && real != 0)
+        {
+            type = real;
+        }
+
+        long size = type == SftpAttributes.TypeRegular && info is FileInfo file ? file.Length : 0;
         return SftpAttributes.ForServer(size, mode, type, info.LastAccessTimeUtc, info.LastWriteTimeUtc);
     }
 

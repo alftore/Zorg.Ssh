@@ -25,6 +25,7 @@ internal enum LocalFileKind
 internal static partial class LocalFile
 {
     private const int AtFdCwd = -100;
+    private const int AtSymlinkNoFollow = 0x100;
     private const uint StatxType = 0x1;
     private const int StatxModeOffset = 28;
     private const int StatxSize = 256;
@@ -132,6 +133,34 @@ internal static partial class LocalFile
         byte[] result = buffer.AsSpan(0, used).ToArray();
         Array.Clear(buffer);
         return result;
+    }
+
+    /// <summary>
+    /// Reads the file type bits of a path (<c>st_mode &amp; S_IFMT</c>) without following a final link, on Linux. Null on
+    /// any other system, or if they can't be read. .NET reports a FIFO, a socket or a device as an ordinary file, and
+    /// this is what tells them apart.
+    /// </summary>
+    public static uint? GetLinuxFileType(string path)
+    {
+        if (!OperatingSystem.IsLinux())
+        {
+            return null;
+        }
+
+        byte[] buffer = new byte[StatxSize];
+        try
+        {
+            if (StatX(AtFdCwd, path, AtSymlinkNoFollow, StatxType, buffer) != 0)
+            {
+                return null;
+            }
+        }
+        catch (Exception ex) when (ex is EntryPointNotFoundException or DllNotFoundException or ArgumentException)
+        {
+            return null;
+        }
+
+        return BitConverter.ToUInt16(buffer, StatxModeOffset) & FileTypeMask;
     }
 
     private static LocalFileKind WindowsKind(string path)

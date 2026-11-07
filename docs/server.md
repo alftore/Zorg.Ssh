@@ -171,6 +171,10 @@ SshServerOptions options = new()
 
 The client sees `RootDirectory` as `/`, and paths and symlinks that lead out of it are refused. That check can't be airtight against another process on the same machine changing the directory at the same moment, because .NET has no `openat`. Don't share a root with anyone you don't trust to write to it. A new symlink is stored in one shape. An absolute target means the client's root, and is stored relative to the link. `..` may only lead the target, and no further than the root. After the first name the target only goes down, so `m/..` is cancelled when the link is made. A target that leads nowhere, such as `.` or the link's own directory, is refused. Whatever links are made later, every link made through the server then ends inside the root. A rename keeps this true: a link can't be moved to a directory too shallow for its `..`, and a directory moved to a shallower place is checked for such links below it. The check looks at up to 10,000 entries, and a larger directory can't be moved up the tree (the client sees a plain failure). Disk use isn't limited, and metadata requests run one at a time across the whole process.
 
+What a client sees comes from .NET's view of the directory, which differs from OpenSSH's in a few places:
+
+- On Linux, a FIFO, socket or device is reported with its real type, so `IsRegularFile` is false, as OpenSSH reports it. On other Unix systems .NET can't tell them from files, and they're reported as regular files. Opening one can block, so the session ends after the open has waited 10 seconds.
+
 ## Limits
 
 ```csharp
