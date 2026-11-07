@@ -76,7 +76,18 @@ internal static class HostCertificateCheck
             throw new SshHostKeyException($"{subject} names no principals, so nothing ties it to this host. Ask the CA to reissue it with ssh-keygen -n.");
         }
 
-        if (!certificate.Principals.Any(p => KnownHostsEntry.MatchesGlob(p, host)))
+        // As OpenSSH does: the host name is lower-cased (sshconnect.c, ssh_login), and each principal is a case-sensitive
+        // pattern of * and ? matched against it (sshkey.c sshkey_cert_check_authority calls match_pattern(name, principal)).
+        // A principal that has capitals can't match. Only host certificates are checked here: a user certificate's
+        // principals are for a server to check, by exact string, and this library's server refuses user certificates.
+        string lowerHost = string.Create(host.Length, host, static (span, source) =>
+        {
+            for (int i = 0; i < span.Length; i++)
+            {
+                span[i] = KnownHostsEntry.Fold(source[i]);
+            }
+        });
+        if (!certificate.Principals.Any(p => KnownHostsEntry.MatchesGlob(p, lowerHost, ignoreCase: false)))
         {
             string names = string.Join(", ", certificate.Principals.Take(MaxPrincipalsShown).Select(p => PeerText.Clean(p, MaxShownLength)));
             throw new SshHostKeyException($"{subject} isn't valid for this host name: it lists [{names}]. This can mean an attack. If it's the right server, connect by a name the certificate lists.");

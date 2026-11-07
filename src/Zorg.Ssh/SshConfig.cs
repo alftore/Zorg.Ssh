@@ -51,13 +51,46 @@ public sealed record SshHostConfig(
     bool IdentitiesOnly,
     IReadOnlyList<string> UserKnownHostsFiles,
     SshStrictHostKeyChecking StrictHostKeyChecking,
-    string? ProxyJump);
+    string? ProxyJump)
+{
+    /// <summary>Gets the files <c>GlobalKnownHostsFile</c> names, or OpenSSH's defaults. They're read and never written.</summary>
+    internal IReadOnlyList<string> GlobalKnownHostsFiles { get; init; } = [];
+
+    /// <summary>Gets the <c>ProxyCommand</c> value, if any and not <c>none</c>.</summary>
+    internal string? ProxyCommand { get; init; }
+
+    /// <summary>Gets the keywords set that decide who is trusted and that this library doesn't honour: they make <see cref="SshClientOptions.FromConfig"/> refuse.</summary>
+    internal IReadOnlyList<string> UnhonouredTrustKeywords { get; init; } = [];
+
+    /// <summary>Gets the security-relevant keywords that a <c>Match</c> block sets and that could apply to this host.</summary>
+    internal IReadOnlyList<string> MatchTrustKeywords { get; init; } = [];
+
+    /// <summary>Gets keywords that are set and ignored, and that a reader might expect to be honoured. They're warned about.</summary>
+    internal IReadOnlyList<string> IgnoredKeywords { get; init; } = [];
+
+    /// <summary>Gets whether <c>IdentityAgent none</c> says not to use an agent.</summary>
+    internal bool AgentDisabled { get; init; }
+
+    /// <summary>Gets <c>ServerAliveInterval</c> in seconds, if set. Zero turns keepalive off.</summary>
+    internal int? ServerAliveInterval { get; init; }
+
+    /// <summary>Gets <c>ServerAliveCountMax</c>, if set.</summary>
+    internal int? ServerAliveCountMax { get; init; }
+
+    /// <summary>Gets <c>ConnectTimeout</c> in seconds, if set. Zero means the library's own limit.</summary>
+    internal int? ConnectTimeout { get; init; }
+}
 
 /// <summary>
 /// A subset of OpenSSH's <c>ssh_config(5)</c>: <c>Host</c>, <c>Include</c>, <c>HostName</c>, <c>Port</c>, <c>User</c>,
-/// <c>IdentityFile</c>, <c>IdentitiesOnly</c>, <c>UserKnownHostsFile</c>, <c>StrictHostKeyChecking</c> and
-/// <c>ProxyJump</c>. Other keywords are ignored. <c>Match</c> blocks are skipped whole, with a logged note. As in
-/// <c>ssh</c>, the first value found for a keyword wins, except that <c>IdentityFile</c> adds up.
+/// <c>IdentityFile</c>, <c>IdentitiesOnly</c>, <c>UserKnownHostsFile</c>, <c>GlobalKnownHostsFile</c>,
+/// <c>StrictHostKeyChecking</c>, <c>ProxyJump</c>, <c>ServerAliveInterval</c>, <c>ServerAliveCountMax</c> and
+/// <c>ConnectTimeout</c>. Other keywords are ignored, except that <see cref="SshClientOptions.FromConfig"/> refuses a
+/// host that sets one that decides trust or the network path and that it can't honour (<c>ProxyCommand</c>,
+/// <c>RevokedHostKeys</c>, <c>KnownHostsCommand</c>, <c>HostKeyAlias</c>). <c>Match</c> blocks are never evaluated: one
+/// that sets a keyword which decides trust, such as <c>StrictHostKeyChecking</c>, makes <c>FromConfig</c> throw, and
+/// anything else in a <c>Match</c> block is skipped with a logged note. As in <c>ssh</c>, the first value found for a
+/// keyword wins, except that <c>IdentityFile</c> adds up.
 /// </summary>
 /// <example>
 /// <code>
@@ -78,7 +111,29 @@ public sealed partial class SshConfig
 
     private static readonly string[] DefaultIdentityNames = ["id_rsa", "id_ecdsa", "id_ed25519"];
 
+    /// <summary>Keywords that decide who is trusted, where a connection goes or how it logs in. A Match block that sets one can't be ignored.</summary>
+    private static readonly HashSet<string> TrustKeywords = new(StringComparer.Ordinal)
+    {
+        "STRICTHOSTKEYCHECKING", "USERKNOWNHOSTSFILE", "GLOBALKNOWNHOSTSFILE", "HOSTKEYALIAS", "REVOKEDHOSTKEYS",
+        "KNOWNHOSTSCOMMAND", "PROXYCOMMAND", "PROXYJUMP", "HOSTKEYALGORITHMS", "CASIGNATUREALGORITHMS", "HOSTNAME",
+        "PORT", "IDENTITIESONLY", "IDENTITYFILE", "IDENTITYAGENT", "CERTIFICATEFILE", "PUBKEYAUTHENTICATION",
+        "VERIFYHOSTKEYDNS", "CHECKHOSTIP", "UPDATEHOSTKEYS", "HOSTBASEDAUTHENTICATION",
+    };
+
+    /// <summary>Keywords that are noted and not honoured. Setting one still compiles, but a reader would expect it to count.</summary>
+    private static readonly HashSet<string> WarnedKeywords = new(StringComparer.Ordinal)
+    {
+        "IDENTITYAGENT", "CERTIFICATEFILE", "HOSTKEYALGORITHMS", "CASIGNATUREALGORITHMS", "PUBKEYAUTHENTICATION",
+    };
+
+    /// <summary>Keywords that decide who is trusted and that are not honoured: a host that sets one is refused by FromConfig.</summary>
+    private static readonly HashSet<string> RefusedKeywords = new(StringComparer.Ordinal)
+    {
+        "REVOKEDHOSTKEYS", "KNOWNHOSTSCOMMAND", "HOSTKEYALIAS",
+    };
+
     private readonly List<Directive> _directives = [];
+    private readonly List<Directive> _matchDirectives = [];
     private readonly string _home;
     private readonly ILogger _logger;
     private int _files;
@@ -216,6 +271,41 @@ public sealed partial class SshConfig
             knownHosts = [.. knownHostsDirective.Arguments.Select(a => ExpandPath(a, knownHostsDirective.Source))];
         }
 
+        string[] globalKnownHosts;
+        if (!first.TryGetValue("GLOBALKNOWNHOSTSFILE", out Directive? globalDirective))
+        {
+            globalKnownHosts = DefaultGlobalKnownHostsFiles();
+        }
+        else if (globalDirective.Arguments is [var only] && only.Equals("none", StringComparison.OrdinalIgnoreCase))
+        {
+            globalKnownHosts = [];
+        }
+        else
+        {
+            globalKnownHosts = [.. globalDirective.Arguments.Select(a => ExpandPath(a, globalDirective.Source))];
+        }
+
+        bool IsSetAndNotNone(string keyword) =>
+            first.TryGetValue(keyword, out Directive? d) && !(d.Arguments is [var v] && v.Equals("none", StringComparison.OrdinalIgnoreCase));
+
+        // ssh lets the first value win even when it is "none", which switches the keyword off.
+        // "none" switches KnownHostsCommand off. For the other two it would be a file name or an alias.
+        bool agentDisabled = first.TryGetValue("IDENTITYAGENT", out Directive? agent)
+            && agent.Arguments is [var agentValue] && agentValue.Equals("none", StringComparison.OrdinalIgnoreCase);
+        string[] refused = [.. RefusedKeywords
+            .Where(k => k == "KNOWNHOSTSCOMMAND" ? IsSetAndNotNone(k) : first.ContainsKey(k))
+            .Order(StringComparer.Ordinal)
+            .Select(KeywordName)];
+        string[] ignored = [.. WarnedKeywords
+            .Where(k => first.ContainsKey(k) && !(k == "IDENTITYAGENT" && agentDisabled))
+            .Order(StringComparer.Ordinal)
+            .Select(KeywordName)];
+        string[] matched = [.. _matchDirectives
+            .Where(d => d.Conditions.All(patterns => HostLineMatches(patterns, hostAlias)))
+            .Select(d => KeywordName(d.Keyword))
+            .Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal)];
+
         return new SshHostConfig(
             hostName,
             port,
@@ -224,8 +314,53 @@ public sealed partial class SshConfig
             first.ContainsKey("IDENTITIESONLY") && IsYes(Value("IDENTITIESONLY")),
             knownHosts,
             first.ContainsKey("STRICTHOSTKEYCHECKING") ? ParseStrict(Value("STRICTHOSTKEYCHECKING")) : SshStrictHostKeyChecking.Yes,
-            first.ContainsKey("PROXYJUMP") && !Value("PROXYJUMP").Equals("none", StringComparison.OrdinalIgnoreCase) ? Value("PROXYJUMP") : null);
+            first.ContainsKey("PROXYJUMP") && !Value("PROXYJUMP").Equals("none", StringComparison.OrdinalIgnoreCase) ? Value("PROXYJUMP") : null)
+        {
+            GlobalKnownHostsFiles = globalKnownHosts,
+            ProxyCommand = IsSetAndNotNone("PROXYCOMMAND") ? first["PROXYCOMMAND"].Arguments[0] : null,
+            UnhonouredTrustKeywords = refused,
+            MatchTrustKeywords = matched,
+            IgnoredKeywords = ignored,
+            AgentDisabled = agentDisabled,
+            ServerAliveInterval = IntValue("SERVERALIVEINTERVAL"),
+            ServerAliveCountMax = IntValue("SERVERALIVECOUNTMAX"),
+            ConnectTimeout = IntValue("CONNECTTIMEOUT"),
+        };
+
+        int? IntValue(string keyword) => first.ContainsKey(keyword) ? int.Parse(Value(keyword), CultureInfo.InvariantCulture) : null;
     }
+
+    /// <summary>Gets the name as users write it, for messages.</summary>
+    private static string KeywordName(string keyword) => keyword switch
+    {
+        "STRICTHOSTKEYCHECKING" => "StrictHostKeyChecking",
+        "USERKNOWNHOSTSFILE" => "UserKnownHostsFile",
+        "GLOBALKNOWNHOSTSFILE" => "GlobalKnownHostsFile",
+        "HOSTKEYALIAS" => "HostKeyAlias",
+        "REVOKEDHOSTKEYS" => "RevokedHostKeys",
+        "KNOWNHOSTSCOMMAND" => "KnownHostsCommand",
+        "PROXYCOMMAND" => "ProxyCommand",
+        "PROXYJUMP" => "ProxyJump",
+        "HOSTKEYALGORITHMS" => "HostKeyAlgorithms",
+        "CASIGNATUREALGORITHMS" => "CASignatureAlgorithms",
+        "HOSTNAME" => "HostName",
+        "PORT" => "Port",
+        "IDENTITIESONLY" => "IdentitiesOnly",
+        "IDENTITYFILE" => "IdentityFile",
+        "IDENTITYAGENT" => "IdentityAgent",
+        "CERTIFICATEFILE" => "CertificateFile",
+        "PUBKEYAUTHENTICATION" => "PubkeyAuthentication",
+        "VERIFYHOSTKEYDNS" => "VerifyHostKeyDNS",
+        "CHECKHOSTIP" => "CheckHostIP",
+        "UPDATEHOSTKEYS" => "UpdateHostKeys",
+        "HOSTBASEDAUTHENTICATION" => "HostbasedAuthentication",
+        _ => keyword,
+    };
+
+    /// <summary>OpenSSH's default <c>GlobalKnownHostsFile</c>: where an administrator puts <c>@revoked</c> and <c>@cert-authority</c> lines.</summary>
+    private static string[] DefaultGlobalKnownHostsFiles() => OperatingSystem.IsWindows()
+        ? [Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "ssh", "ssh_known_hosts")]
+        : ["/etc/ssh/ssh_known_hosts", "/etc/ssh/ssh_known_hosts2"];
 
     /// <summary>Reads a file, with the home directory given, so tests needn't touch the real one.</summary>
     internal static SshConfig Load(string? path, string home, ILogger? logger)
@@ -415,6 +550,12 @@ public sealed partial class SshConfig
         {
             case "PORT" when !int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out int port) || port is < 1 or > 65535:
                 throw new SshConfigException($"{source}: \"{value}\" isn't a port number.");
+            case "SERVERALIVEINTERVAL" when !int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out int interval) || interval > 86400:
+                throw new SshConfigException($"{source}: \"{value}\" isn't a number of seconds from 0 to 86400 for ServerAliveInterval. Use 0 to turn keepalive off.");
+            case "SERVERALIVECOUNTMAX" when !int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out int countMax) || countMax is < 1 or > 1000:
+                throw new SshConfigException($"{source}: \"{value}\" isn't a count from 1 to 1000 for ServerAliveCountMax.");
+            case "CONNECTTIMEOUT" when !int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out int timeout) || timeout > 86400:
+                throw new SshConfigException($"{source}: \"{value}\" isn't a number of seconds from 0 to 86400 for ConnectTimeout. Write whole seconds.");
             case "IDENTITIESONLY" when value.ToUpperInvariant() is not ("YES" or "NO" or "TRUE" or "FALSE"):
                 throw new SshConfigException($"{source}: IdentitiesOnly must be yes or no.");
             case "STRICTHOSTKEYCHECKING" when value.ToUpperInvariant() is not ("YES" or "NO" or "TRUE" or "FALSE" or "OFF" or "ASK" or "ACCEPT-NEW"):
@@ -422,7 +563,7 @@ public sealed partial class SshConfig
         }
     }
 
-    private void ReadFile(string path, IReadOnlyList<string[]> conditions, int depth)
+    private void ReadFile(string path, IReadOnlyList<string[]> conditions, int depth, bool matchContext = false)
     {
         if (depth > MaxIncludeDepth)
         {
@@ -437,25 +578,18 @@ public sealed partial class SshConfig
         string text;
         try
         {
-            using FileStream stream = new(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-            if (stream.Length > MaxFileLength)
-            {
-                throw new SshConfigException($"The config file {path} is over the limit of {MaxFileLength} bytes, so it wasn't read. Check that this is the right file.");
-            }
-
-            byte[] bytes = new byte[(int)stream.Length];
-            int read = stream.ReadAtLeast(bytes, bytes.Length, throwOnEndOfStream: false);
-            text = Encoding.UTF8.GetString(bytes, 0, read);
+            // Regular files only, and read with a limit: an Include can name a FIFO or /dev/zero.
+            text = Encoding.UTF8.GetString(LocalFile.ReadAllBytes(path, MaxFileLength));
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or ArgumentException)
         {
             throw new SshConfigException($"Couldn't read the config file {path}: {ex.Message}", ex);
         }
 
-        ReadText(text, path, conditions, depth);
+        ReadText(text, path, conditions, depth, matchContext);
     }
 
-    private void ReadText(string text, string name, IReadOnlyList<string[]> outer, int depth)
+    private void ReadText(string text, string name, IReadOnlyList<string[]> outer, int depth, bool matchContext = false)
     {
         if (text.Length > MaxFileLength)
         {
@@ -463,7 +597,7 @@ public sealed partial class SshConfig
         }
 
         IReadOnlyList<string[]> conditions = outer;
-        bool inMatch = false;
+        bool inMatch = matchContext;
         int lineNumber = 0;
         const char ByteOrderMark = (char)0xFEFF;
         ReadOnlySpan<char> body = text.AsSpan().TrimStart(ByteOrderMark);
@@ -494,35 +628,85 @@ public sealed partial class SshConfig
                     }
 
                     conditions = [.. outer, [.. patterns]];
-                    inMatch = false;
+                    inMatch = matchContext;
                     break;
                 case "MATCH":
+                    // Never evaluated. The block could apply to this host, and what it sets decides below whether that matters.
                     ConfigLog.MatchIgnored(_logger, name, lineNumber);
+                    conditions = outer;
                     inMatch = true;
                     break;
-                case "INCLUDE" when !inMatch:
+                case "INCLUDE":
+                    // Inside a Match block the file is read as part of it, so a trust keyword in it is noticed too.
                     foreach (string pattern in SplitArguments(rest, source))
                     {
                         foreach (string file in ExpandInclude(pattern, source))
                         {
-                            ReadFile(file, conditions, depth + 1);
+                            ReadFile(file, conditions, depth + 1, inMatch);
                         }
                     }
 
                     break;
-                case "HOSTNAME" or "PORT" or "USER" or "IDENTITYFILE" or "IDENTITIESONLY"
-                    or "USERKNOWNHOSTSFILE" or "STRICTHOSTKEYCHECKING" or "PROXYJUMP" when !inMatch:
-                    List<string> arguments = SplitArguments(rest, source);
-                    Validate(keyword, arguments, source);
-                    if (_directives.Count == MaxDirectives)
+                default:
+                    if (inMatch)
                     {
-                        throw new SshConfigException($"{source}: the config has more than {MaxDirectives} settings, which is the limit.");
+                        if (TrustKeywords.Contains(keyword))
+                        {
+                            AddDirective(_matchDirectives, new Directive(keyword, ArgumentsOrWhole(rest, source), conditions, source));
+                        }
+                    }
+                    else if (keyword is "HOSTNAME" or "PORT" or "USER" or "IDENTITYFILE" or "IDENTITIESONLY"
+                        or "USERKNOWNHOSTSFILE" or "STRICTHOSTKEYCHECKING" or "PROXYJUMP"
+                        or "SERVERALIVEINTERVAL" or "SERVERALIVECOUNTMAX" or "CONNECTTIMEOUT")
+                    {
+                        List<string> arguments = SplitArguments(rest, source);
+                        Validate(keyword, arguments, source);
+                        AddDirective(_directives, new Directive(keyword, arguments, conditions, source));
+                    }
+                    else if (keyword == "PROXYCOMMAND")
+                    {
+                        // The value is the rest of the line, quotes and all.
+                        AddDirective(_directives, new Directive(keyword, [rest.Trim(" \t").ToString()], conditions, source));
+                    }
+                    else if (keyword is "GLOBALKNOWNHOSTSFILE" or "REVOKEDHOSTKEYS" or "KNOWNHOSTSCOMMAND" or "HOSTKEYALIAS"
+                        or "IDENTITYAGENT" or "CERTIFICATEFILE" or "HOSTKEYALGORITHMS" or "CASIGNATUREALGORITHMS" or "PUBKEYAUTHENTICATION")
+                    {
+                        // Noted, not validated: FromConfig refuses or warns by what they say. A line that can't be split still counts as set.
+                        List<string> noted = ArgumentsOrWhole(rest, source);
+                        if (keyword == "GLOBALKNOWNHOSTSFILE" && noted[0].Length == 0)
+                        {
+                            throw new SshConfigException($"{source}: GlobalKnownHostsFile has no value. Name a file, or write none.");
+                        }
+
+                        AddDirective(_directives, new Directive(keyword, noted, conditions, source));
                     }
 
-                    _directives.Add(new Directive(keyword, arguments, conditions, source));
                     break;
             }
         }
+    }
+
+    private static List<string> ArgumentsOrWhole(ReadOnlySpan<char> rest, string source)
+    {
+        try
+        {
+            List<string> arguments = SplitArguments(rest, source);
+            return arguments.Count == 0 ? [string.Empty] : arguments;
+        }
+        catch (SshConfigException)
+        {
+            return [rest.ToString()];
+        }
+    }
+
+    private static void AddDirective(List<Directive> list, Directive directive)
+    {
+        if (list.Count == MaxDirectives)
+        {
+            throw new SshConfigException($"{directive.Source}: the config has more than {MaxDirectives} settings, which is the limit.");
+        }
+
+        list.Add(directive);
     }
 
     /// <summary>Turns an <c>Include</c> argument into files, sorted as <c>glob(3)</c> sorts them. No match is fine. There's no host yet, so only host-free tokens work.</summary>
@@ -596,4 +780,7 @@ internal static partial class ConfigLog
 {
     [LoggerMessage(Level = LogLevel.Information, Message = "Ignoring the Match block at {File} line {Line}: Match isn't supported")]
     public static partial void MatchIgnored(ILogger logger, string file, int line);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "The config sets {Keyword} for this host, and Zorg.Ssh doesn't honour it, so it has no effect")]
+    public static partial void KeywordIgnored(ILogger logger, string keyword);
 }
