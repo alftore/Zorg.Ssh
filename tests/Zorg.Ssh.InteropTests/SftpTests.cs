@@ -76,6 +76,49 @@ public class SftpTests
 
     [InteropTheory]
     [MemberData(nameof(Peers))]
+    public async Task Progress_reports_the_sizes_the_real_server_gives(string peer)
+    {
+        await using SshPeerContainer container = await StartAsync(peer);
+        await using SshClient client = await ConnectAsync(container);
+        await using SftpClient sftp = await client.OpenSftpAsync(Ct);
+        List<SftpTransferProgress> reports = [];
+        SftpTransferOptions options = new() { Progress = new SyncProgress(reports.Add) };
+
+        byte[] data = RandomNumberGenerator.GetBytes(3 * 1024 * 1024 + 7);
+        await sftp.CreateDirectoryAsync("progress/inner", recursive: true, Ct);
+        using (MemoryStream source = new(data))
+        {
+            await sftp.UploadFileAsync(source, "progress/inner/p.bin", options, Ct);
+        }
+
+        Assert.Equal(new SftpTransferProgress { RemotePath = "progress/inner/p.bin", BytesTransferred = data.Length, TotalBytes = data.Length, FilesCompleted = 1, OverallBytesTransferred = data.Length }, reports[^1]);
+        reports.Clear();
+
+        // The size comes from FSTAT on the open file.
+        await sftp.DownloadFileAsync("progress/inner/p.bin", Stream.Null, options, Ct);
+        Assert.Equal(new SftpTransferProgress { RemotePath = "progress/inner/p.bin", BytesTransferred = 0, TotalBytes = data.Length, FilesCompleted = 0, OverallBytesTransferred = 0 }, reports[0]);
+        Assert.Equal(data.Length, reports[^1].BytesTransferred);
+        reports.Clear();
+
+        // The size comes from the listing.
+        string destination = Path.Combine(Path.GetTempPath(), "zorg-progress-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            await sftp.DownloadDirectoryAsync("progress", destination, long.MaxValue, options, Ct);
+        }
+        finally
+        {
+            Directory.Delete(destination, recursive: true);
+        }
+
+        Assert.Equal(data.Length, reports[0].TotalBytes);
+        Assert.Equal(Path.Combine(destination, "inner", "p.bin"), reports[0].LocalPath);
+        Assert.Equal(1, reports[^1].FilesCompleted);
+        Assert.Equal(data.Length, reports[^1].OverallBytesTransferred);
+    }
+
+    [InteropTheory]
+    [MemberData(nameof(Peers))]
     public async Task ReadAllBytes_and_WriteAllBytes_round_trip(string peer)
     {
         await using SshPeerContainer container = await StartAsync(peer);
@@ -864,5 +907,11 @@ public class SftpTests
                 client.RequestRekey();
             }
         }
+    }
+
+    /// <summary>Records reports on the transfer's own flow, unlike <see cref="Progress{T}"/>, which posts them.</summary>
+    private sealed class SyncProgress(Action<SftpTransferProgress> report) : IProgress<SftpTransferProgress>
+    {
+        public void Report(SftpTransferProgress value) => report(value);
     }
 }

@@ -34,7 +34,7 @@ public sealed class SftpClientOptions
     }
 
     /// <summary>
-    /// Gets the most entries one <see cref="SftpClient.ListDirectoryAsync"/> or <see cref="SftpClient.DownloadDirectoryAsync"/>
+    /// Gets the most entries one <see cref="SftpClient.ListDirectoryAsync"/> or <see cref="SftpClient.DownloadDirectoryAsync(string, string, long, SftpTransferOptions, System.Threading.CancellationToken)"/>
     /// will take, which stops a server listing for ever. The default is 1,000,000.
     /// </summary>
     /// <exception cref="ArgumentOutOfRangeException">The value is negative.</exception>

@@ -77,7 +77,7 @@ public sealed class SftpClient : IAsyncDisposable
 
     private long MaxDirectoryEntries => Options.MaxDirectoryEntries;
 
-    /// <summary>Reads a whole file into memory. For large files use <see cref="DownloadFileAsync"/>.</summary>
+    /// <summary>Reads a whole file into memory. For large files use <see cref="DownloadFileAsync(string, Stream, SftpTransferOptions, CancellationToken)"/>.</summary>
     /// <param name="path">The remote path.</param>
     /// <param name="cancellationToken">Stops the transfer.</param>
     /// <returns>The file's contents.</returns>
@@ -123,10 +123,43 @@ public sealed class SftpClient : IAsyncDisposable
     /// await sftp.DownloadFileAsync("/srv/backup.tar", local, cancellationToken);
     /// </code>
     /// </example>
-    public Task DownloadFileAsync(string remotePath, Stream destination, CancellationToken cancellationToken = default)
+    public Task DownloadFileAsync(string remotePath, Stream destination, CancellationToken cancellationToken) =>
+        DownloadFileAsync(remotePath, destination, null, cancellationToken);
+
+    /// <summary>Copies a remote file into a stream, with many reads in flight, and reports progress.</summary>
+    /// <param name="remotePath">The remote path.</param>
+    /// <param name="destination">Where the bytes go, in order. It's left open.</param>
+    /// <param name="options">Progress reporting, or null for none. With <see cref="SftpTransferOptions.Progress"/> set, the server is asked for the file's size first.</param>
+    /// <param name="cancellationToken">Stops the transfer. There's no size limit, so use this to bound a transfer from a server you don't trust.</param>
+    /// <returns>A task that completes when the file has been copied.</returns>
+    /// <exception cref="SftpFileNotFoundException">The file doesn't exist.</exception>
+    /// <exception cref="SftpException">The server refused.</exception>
+    /// <example>
+    /// <code>
+    /// await using FileStream local = File.Create("backup.tar");
+    /// SftpTransferOptions options = new() { Progress = new Progress&lt;SftpTransferProgress&gt;(p => Console.WriteLine($"{p.BytesTransferred} of {p.TotalBytes}")) };
+    /// await sftp.DownloadFileAsync("/srv/backup.tar", local, options, cancellationToken);
+    /// </code>
+    /// </example>
+    public async Task DownloadFileAsync(string remotePath, Stream destination, SftpTransferOptions? options = null, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(destination);
-        return UseHandleAsync(remotePath, SftpOpenFlags.Read, handle => CopyFromHandleAsync(handle, remotePath, 0, destination, long.MaxValue, null, cancellationToken), cancellationToken);
+        SftpTransferReporter? reporter = SftpTransferReporter.For(options);
+        await UseHandleAsync(
+            remotePath,
+            SftpOpenFlags.Read,
+            async handle =>
+            {
+                if (reporter is not null)
+                {
+                    reporter.StartFile(remotePath, null, await TryGetSizeAsync(handle, remotePath, cancellationToken).ConfigureAwait(false));
+                }
+
+                await CopyFromHandleAsync(handle, remotePath, 0, destination, long.MaxValue, null, cancellationToken, reporter).ConfigureAwait(false);
+            },
+            cancellationToken).ConfigureAwait(false);
+        reporter?.EndFile();
+        reporter?.Complete();
     }
 
     /// <summary>Copies a stream to a remote file, with many writes in flight. The file is created, or replaced if it exists.</summary>
@@ -141,10 +174,38 @@ public sealed class SftpClient : IAsyncDisposable
     /// await sftp.UploadFileAsync(local, "/srv/backup.tar", cancellationToken);
     /// </code>
     /// </example>
-    public Task UploadFileAsync(Stream source, string remotePath, CancellationToken cancellationToken = default)
+    public Task UploadFileAsync(Stream source, string remotePath, CancellationToken cancellationToken) =>
+        UploadFileAsync(source, remotePath, null, cancellationToken);
+
+    /// <summary>Copies a stream to a remote file, with many writes in flight, and reports progress. The file is created, or replaced if it exists.</summary>
+    /// <param name="source">What to send, read to its end. It's left open. If it can seek, what's left of it is the total that progress reports.</param>
+    /// <param name="remotePath">The remote path.</param>
+    /// <param name="options">Progress reporting, or null for none.</param>
+    /// <param name="cancellationToken">Stops the transfer. The file may be left incomplete.</param>
+    /// <returns>A task that completes when the server has confirmed every write and closed the file.</returns>
+    /// <exception cref="SftpException">The server refused.</exception>
+    /// <example>
+    /// <code>
+    /// await using FileStream local = File.OpenRead("backup.tar");
+    /// SftpTransferOptions options = new() { Progress = new Progress&lt;SftpTransferProgress&gt;(p => Console.WriteLine($"{p.BytesTransferred} of {p.TotalBytes}")) };
+    /// await sftp.UploadFileAsync(local, "/srv/backup.tar", options, cancellationToken);
+    /// </code>
+    /// </example>
+    public async Task UploadFileAsync(Stream source, string remotePath, SftpTransferOptions? options = null, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(source);
-        return UseHandleAsync(remotePath, SftpOpenFlags.Write | SftpOpenFlags.Create | SftpOpenFlags.Truncate, handle => CopyToHandleAsync(source, handle, remotePath, cancellationToken), cancellationToken);
+        SftpTransferReporter? reporter = SftpTransferReporter.For(options);
+        await UseHandleAsync(
+            remotePath,
+            SftpOpenFlags.Write | SftpOpenFlags.Create | SftpOpenFlags.Truncate,
+            handle =>
+            {
+                reporter?.StartFile(remotePath, null, RemainingLength(source));
+                return CopyToHandleAsync(source, handle, remotePath, reporter, cancellationToken);
+            },
+            cancellationToken).ConfigureAwait(false);
+        reporter?.EndFile();
+        reporter?.Complete();
     }
 
     /// <summary>
@@ -169,7 +230,34 @@ public sealed class SftpClient : IAsyncDisposable
     /// await sftp.DownloadDirectoryAsync("/srv/site", @"C:\backup\site", 10L * 1024 * 1024 * 1024, cancellationToken);
     /// </code>
     /// </example>
-    public async Task DownloadDirectoryAsync(string remotePath, string localDirectory, long maxTotalBytes, CancellationToken cancellationToken = default)
+    public Task DownloadDirectoryAsync(string remotePath, string localDirectory, long maxTotalBytes, CancellationToken cancellationToken) =>
+        DownloadDirectoryAsync(remotePath, localDirectory, maxTotalBytes, null, cancellationToken);
+
+    /// <summary>
+    /// Copies a remote directory tree to a local directory, and reports progress. It copies and checks names as the
+    /// overload without options does.
+    /// </summary>
+    /// <remarks>
+    /// Each report names the file being copied, with its size from the listing when the server sent one.
+    /// <see cref="SftpTransferProgress.FilesCompleted"/> and <see cref="SftpTransferProgress.OverallBytesTransferred"/>
+    /// count across the whole tree. The tree is listed as it's copied, so there's no total for it in advance. A tree
+    /// with no regular files reports nothing.
+    /// </remarks>
+    /// <param name="remotePath">The remote directory.</param>
+    /// <param name="localDirectory">The local directory. It's created if needed.</param>
+    /// <param name="maxTotalBytes">The most bytes to accept across all files, which stops a server filling the disk.</param>
+    /// <param name="options">Progress reporting, or null for none.</param>
+    /// <param name="cancellationToken">Stops the transfer. Files already written stay.</param>
+    /// <returns>A task that completes when the tree has been copied.</returns>
+    /// <exception cref="SftpUnsafeNameException">The server sent a name that's unsafe, or that collides with something already there.</exception>
+    /// <exception cref="SftpException">The server refused, or a limit was reached.</exception>
+    /// <example>
+    /// <code>
+    /// SftpTransferOptions options = new() { Progress = new Progress&lt;SftpTransferProgress&gt;(p => Console.WriteLine($"{p.FilesCompleted} files, {p.OverallBytesTransferred} bytes")) };
+    /// await sftp.DownloadDirectoryAsync("/srv/site", @"C:\backup\site", 10L * 1024 * 1024 * 1024, options, cancellationToken);
+    /// </code>
+    /// </example>
+    public async Task DownloadDirectoryAsync(string remotePath, string localDirectory, long maxTotalBytes, SftpTransferOptions? options = null, CancellationToken cancellationToken = default)
     {
         ValidatePath(remotePath);
         ArgumentException.ThrowIfNullOrEmpty(localDirectory);
@@ -177,8 +265,9 @@ public sealed class SftpClient : IAsyncDisposable
 
         string root = Path.GetFullPath(localDirectory);
         Directory.CreateDirectory(root);
-        DownloadBudget budget = new(MaxDirectoryEntries, maxTotalBytes);
+        DownloadBudget budget = new(MaxDirectoryEntries, maxTotalBytes, SftpTransferReporter.For(options));
         await DownloadTreeAsync(remotePath, root, 0, budget, cancellationToken).ConfigureAwait(false);
+        budget.Reporter?.Complete();
     }
 
     /// <summary>Opens a remote file as a <see cref="Stream"/>, with the same meanings as <see cref="FileStream"/>.</summary>
@@ -699,7 +788,7 @@ public sealed class SftpClient : IAsyncDisposable
     /// file doesn't cost a full window of requests. Only EOF ends the copy: a short answer just means the rest of
     /// that range is asked for again, before anything later is written.
     /// </summary>
-    internal async Task<long> CopyFromHandleAsync(byte[] handle, string path, long offset, Stream destination, long maxBytes, string? limitName, CancellationToken cancellationToken)
+    internal async Task<long> CopyFromHandleAsync(byte[] handle, string path, long offset, Stream destination, long maxBytes, string? limitName, CancellationToken cancellationToken, SftpTransferReporter? reporter = null)
     {
         Queue<InFlightRead> inFlight = new();
         InFlightRead? head = null;
@@ -740,6 +829,7 @@ public sealed class SftpClient : IAsyncDisposable
 
                 await destination.WriteAsync(response.Slice(start, length), cancellationToken).ConfigureAwait(false);
                 written += length;
+                reporter?.Advance(length);
                 window = Math.Min(window * 2, _session.Limits.TransferDepth);
                 if (length < current.Length)
                 {
@@ -794,6 +884,32 @@ public sealed class SftpClient : IAsyncDisposable
         catch (Exception ex) when (ex is SshException or OperationCanceledException)
         {
             // The handle goes away with the session at worst.
+        }
+    }
+
+    /// <summary>Gets what's left of a stream that can seek, or null.</summary>
+    private static long? RemainingLength(Stream source)
+    {
+        try
+        {
+            return source.CanSeek ? Math.Max(0, source.Length - source.Position) : null;
+        }
+        catch (NotSupportedException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>Asks the server for an open file's size, for progress. A refusal or a missing size just means no total.</summary>
+    private async Task<long?> TryGetSizeAsync(byte[] handle, string path, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return (await GetHandleAttributesAsync(handle, path, cancellationToken).ConfigureAwait(false)).Size;
+        }
+        catch (SftpException)
+        {
+            return null;
         }
     }
 
@@ -1079,7 +1195,7 @@ public sealed class SftpClient : IAsyncDisposable
         }
     }
 
-    private async Task CopyToHandleAsync(Stream source, byte[] handle, string path, CancellationToken cancellationToken)
+    private async Task CopyToHandleAsync(Stream source, byte[] handle, string path, SftpTransferReporter? reporter, CancellationToken cancellationToken)
     {
         Queue<SftpPendingRequest> inFlight = new();
         int chunk = _writeChunk;
@@ -1097,6 +1213,7 @@ public sealed class SftpClient : IAsyncDisposable
 
                 await EnqueueWriteAsync(inFlight, handle, path, offset, buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
                 offset += read;
+                reporter?.Advance(read);
             }
 
             await DrainWritesAsync(inFlight, path, cancellationToken).ConfigureAwait(false);
@@ -1218,12 +1335,12 @@ public sealed class SftpClient : IAsyncDisposable
             }
             else if (attributes.IsRegularFile)
             {
-                await DownloadTreeFileAsync(remote, local, entry.Name, remoteDirectory, budget, cancellationToken).ConfigureAwait(false);
+                await DownloadTreeFileAsync(remote, local, entry.Name, attributes.Size, remoteDirectory, budget, cancellationToken).ConfigureAwait(false);
             }
         }
     }
 
-    private async Task DownloadTreeFileAsync(string remote, string local, string name, string remoteDirectory, DownloadBudget budget, CancellationToken cancellationToken)
+    private async Task DownloadTreeFileAsync(string remote, string local, string name, long? size, string remoteDirectory, DownloadBudget budget, CancellationToken cancellationToken)
     {
 #pragma warning disable CA2000 // Disposed below, once the using can't be skipped by the catch.
         FileStream file;
@@ -1245,10 +1362,15 @@ public sealed class SftpClient : IAsyncDisposable
                 await UseHandleAsync(
                     remote,
                     SftpOpenFlags.Read,
-                    async handle => budget.TakeBytes(await CopyFromHandleAsync(handle, remote, 0, file, budget.RemainingBytes, null, cancellationToken).ConfigureAwait(false)),
+                    async handle =>
+                    {
+                        budget.Reporter?.StartFile(remote, local, size);
+                        budget.TakeBytes(await CopyFromHandleAsync(handle, remote, 0, file, budget.RemainingBytes, null, cancellationToken, budget.Reporter).ConfigureAwait(false));
+                    },
                     cancellationToken).ConfigureAwait(false);
+                budget.Reporter?.EndFile();
             }
-            catch (IOException ex)
+            catch (IOException ex) when (budget.Reporter is not { CallbackFailed: true })
             {
                 // A server decides how much is written, so even a full disk counts as something it can cause.
                 throw new SftpException($"Couldn't write '{local}': {ex.Message} Free some space, or pass a lower maxTotalBytes.", ex);
@@ -1280,7 +1402,7 @@ public sealed class SftpClient : IAsyncDisposable
     private readonly record struct InFlightRead(SftpPendingRequest Request, long Offset, int Length);
 
     /// <summary>What's left of a recursive download's limits.</summary>
-    private sealed class DownloadBudget(long entries, long bytes)
+    private sealed class DownloadBudget(long entries, long bytes, SftpTransferReporter? reporter)
     {
         // A cap on names as well as entries: a hostile server can make each one long, and the tree is held in memory.
         private const long MaxPathCharacters = 32 * 1024 * 1024;
@@ -1289,6 +1411,8 @@ public sealed class SftpClient : IAsyncDisposable
         private long _pathCharacters;
 
         public long RemainingBytes { get; private set; } = bytes;
+
+        public SftpTransferReporter? Reporter => reporter;
 
         public void TakeEntry(string path)
         {

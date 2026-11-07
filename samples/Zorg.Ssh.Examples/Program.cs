@@ -77,6 +77,7 @@ static async Task<int> RunAgainstAsync(string host, int port, string user, strin
     await SftpExamples.Open(client, token);
     await using SftpClient sftp = await client.OpenSftpAsync(token);
     await SftpExamples.Transfer(sftp, token);
+    await SftpExamples.Progress(sftp, token);
     await SftpExamples.SmallFiles(client, sftp, token);
     await SftpExamples.List(sftp, token);
     await SftpExamples.Tree(sftp, token);

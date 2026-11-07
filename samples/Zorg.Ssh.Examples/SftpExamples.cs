@@ -35,6 +35,27 @@ internal static class SftpExamples
         // end-doc
     }
 
+    public static async Task Progress(SftpClient sftp, CancellationToken cancellationToken)
+    {
+        // doc:sftp-progress
+        SftpTransferOptions options = new()
+        {
+            Progress = new Progress<SftpTransferProgress>(p =>
+            {
+                string of = p.TotalBytes is long total ? $" of {total}" : string.Empty;
+                Console.WriteLine($"{p.RemotePath}: {p.BytesTransferred}{of} bytes, {p.FilesCompleted} files done");
+            }),
+        };
+
+        await using (FileStream source = File.OpenRead("report.pdf"))
+        {
+            await sftp.UploadFileAsync(source, "reports/report.pdf", options, cancellationToken);
+        }
+
+        await sftp.DownloadDirectoryAsync("reports", "progress-reports", maxTotalBytes: 10L * 1024 * 1024 * 1024, options, cancellationToken);
+        // end-doc
+    }
+
     public static async Task ClaimByRename(SftpClient sftp, CancellationToken cancellationToken)
     {
         // doc:sftp-claim

@@ -35,6 +35,36 @@ await using (FileStream destination = File.Create("copy.pdf"))
 - `DownloadFileAsync` has no size limit. To bound a transfer from a server you don't trust, cancel it, or count the bytes in the stream you pass.
 - There's no resume and no recursive upload.
 
+### Progress
+
+Each transfer method has an overload that takes `SftpTransferOptions`. Set `Progress` to see how far it has got.
+
+```csharp
+SftpTransferOptions options = new()
+{
+    Progress = new Progress<SftpTransferProgress>(p =>
+    {
+        string of = p.TotalBytes is long total ? $" of {total}" : string.Empty;
+        Console.WriteLine($"{p.RemotePath}: {p.BytesTransferred}{of} bytes, {p.FilesCompleted} files done");
+    }),
+};
+
+await using (FileStream source = File.OpenRead("report.pdf"))
+{
+    await sftp.UploadFileAsync(source, "reports/report.pdf", options, cancellationToken);
+}
+
+await sftp.DownloadDirectoryAsync("reports", "progress-reports", maxTotalBytes: 10L * 1024 * 1024 * 1024, options, cancellationToken);
+```
+
+- A call reports when its first file starts, with 0 bytes, and when it finishes, with the final counts. In between, a report goes out at most every 100 ms, so a fast transfer doesn't flood your handler.
+- `TotalBytes` is the file's size when it's known: the rest of a stream that can seek, for an upload, and the size the server gives for a download. It's null otherwise. The server's size is a claim, and a file that changes during the transfer can end above or below it.
+- An upload counts bytes as they're sent. Its last report comes after the server has confirmed every write and closed the file.
+- With progress on, `DownloadFileAsync` asks the server for the size first, which costs one round trip.
+- `DownloadDirectoryAsync` reports each file with its `LocalPath` and its size from the listing. `FilesCompleted` and `OverallBytesTransferred` count across the tree. There's no total for the tree, because it's listed as it's copied. A tree with no regular files reports nothing.
+- `Report` runs on the transfer's own flow, and the transfer waits for it. `Progress<T>` posts each report to the context it was made on, such as a UI thread, so its handler can run after the method returns, but no report is made after it.
+- If your handler throws, the transfer stops, the remote file is closed, and your exception comes out of the transfer method unchanged. The session stays usable.
+
 For small files:
 
 ```csharp
