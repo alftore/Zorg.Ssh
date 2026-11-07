@@ -30,6 +30,7 @@ internal static partial class LocalFile
     private const int StatxSize = 256;
     private const uint FileTypeMask = 0xF000;
     private const uint RegularFile = 0x8000;
+    private const uint DirectoryFile = 0x4000;
 
     /// <summary>Tells what a path names. Symbolic links are followed. Unreadable information counts as <see cref="LocalFileKind.Other"/>.</summary>
     public static LocalFileKind GetKind(string path)
@@ -61,6 +62,10 @@ internal static partial class LocalFile
             }
 
             return info.Exists ? (path.StartsWith("/dev/", StringComparison.Ordinal) ? LocalFileKind.Other : LocalFileKind.Regular) : LocalFileKind.Missing;
+        }
+        catch (SshException)
+        {
+            throw;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException
             or EntryPointNotFoundException or DllNotFoundException)
@@ -181,7 +186,8 @@ internal static partial class LocalFile
         int result;
         try
         {
-            result = Stat(path, buffer);
+            // x64 macOS exports the 64-bit-inode struct as stat$INODE64 and keeps a legacy 32-bit-inode layout under plain stat.
+            result = RuntimeInformation.ProcessArchitecture == Architecture.Arm64 ? Stat(path, buffer) : StatInode64(path, buffer);
         }
         catch (Exception ex) when (ex is EntryPointNotFoundException or DllNotFoundException)
         {
@@ -195,9 +201,20 @@ internal static partial class LocalFile
             return missing || errno != 0;
         }
 
-        // Both layouts of struct stat on macOS start with a 4-byte device number, then a 16-bit mode.
+        // The 64-bit-inode struct stat (Darwin sys/stat.h, __DARWIN_STRUCT_STAT64) begins with st_dev (dev_t, int32_t) and
+        // then st_mode (mode_t, uint16_t), so the mode is at offset 4. That is the layout of plain stat on arm64, and of
+        // stat$INODE64 on x64. The legacy struct behind plain stat on x64 has st_ino before st_mode, which is why it isn't used.
         uint mode = BitConverter.ToUInt16(buffer, 4);
         regular = (mode & FileTypeMask) == RegularFile;
+        bool directory = (mode & FileTypeMask) == DirectoryFile;
+
+        // This platform has never been run here, so the answer is checked against the runtime's own: a wrong layout would
+        // read some other field as the mode, and that must not be trusted.
+        if ((regular && !File.Exists(path)) || (directory && !Directory.Exists(path)))
+        {
+            throw new SshException("The file type of " + path + " could not be read reliably on this platform, so the file isn't used. Report this to the Zorg.Ssh maintainers, with your macOS version and architecture.");
+        }
+
         return true;
     }
 
@@ -208,4 +225,8 @@ internal static partial class LocalFile
     [DefaultDllImportSearchPaths(DllImportSearchPath.SafeDirectories)]
     [LibraryImport("libc", EntryPoint = "stat", StringMarshalling = StringMarshalling.Utf8, SetLastError = true)]
     private static partial int Stat(string path, [Out] byte[] buffer);
+
+    [DefaultDllImportSearchPaths(DllImportSearchPath.SafeDirectories)]
+    [LibraryImport("libc", EntryPoint = "stat$INODE64", StringMarshalling = StringMarshalling.Utf8, SetLastError = true)]
+    private static partial int StatInode64(string path, [Out] byte[] buffer);
 }
