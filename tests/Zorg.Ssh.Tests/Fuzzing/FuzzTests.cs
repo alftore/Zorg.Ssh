@@ -49,6 +49,11 @@ public sealed class FuzzTests
         }
 
         Console.WriteLine(report.Summary());
+        if (name.StartsWith("Stateful", StringComparison.Ordinal))
+        {
+            Console.WriteLine("    mean time per part: " + Stateful.StatefulTimings.Summary());
+        }
+
         if (Environment.GetEnvironmentVariable("ZORG_FUZZ_VERBOSE") is { Length: > 0 })
         {
             foreach (KeyValuePair<string, int> stage in report.Reached.OrderByDescending(r => r.Value).Take(16))
@@ -78,6 +83,11 @@ public sealed class FuzzTests
     public void Every_unmutated_seed_is_accepted_or_refused_with_an_allowed_exception(string name)
     {
         FuzzTarget target = FuzzTargets.Named(name);
+        if (FuzzSettings.TargetFilter is { } filter && !name.Contains(filter, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
         int accepted = 0;
         foreach (FuzzSeed seed in target.Corpus)
         {

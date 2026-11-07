@@ -103,7 +103,12 @@ internal sealed class ServerAuthenticator(SshTransport transport, ServerAuthOpti
                     _succeeded.Add(request.Method);
                     if (Remaining().Count == 0)
                     {
-                        await transport.SendAsync([MessageNumber.UserAuthSuccess], cancellationToken).ConfigureAwait(false);
+                        SentSequence success = new();
+                        await transport.SendAsync([MessageNumber.UserAuthSuccess], cancellationToken, success).ConfigureAwait(false);
+
+                        // The connection answers the peer's next messages without queueing, ahead of anything still queued. So the success must have
+                        // left the queue before the connection starts, or a channel open pipelined behind the login is confirmed before the login is.
+                        await success.Taken.WaitAsync(cancellationToken).ConfigureAwait(false);
                         transport.SetPhase(TransportPhase.Connected);
                         return new AuthenticatedUser(_user, [.. _succeeded], _provenKey, [.. _provenKeys]);
                     }

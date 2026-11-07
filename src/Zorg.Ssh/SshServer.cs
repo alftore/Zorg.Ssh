@@ -409,6 +409,7 @@ public sealed partial class SshServer : IAsyncDisposable
             await using (connection.ConfigureAwait(false))
             {
                 connection.Start();
+                _options.ConnectionStarted?.Invoke(connection);
                 await ServeChannelsAsync(connection, principal).ConfigureAwait(false);
             }
         }

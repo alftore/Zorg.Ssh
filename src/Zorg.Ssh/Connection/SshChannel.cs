@@ -113,6 +113,21 @@ internal sealed class SshChannel : IAsyncDisposable
     /// <summary>Gets a task that completes when both sides have closed. It never faults.</summary>
     public Task Closed => _closed.Task;
 
+    /// <summary>Gets how much more data the peer may send. For tests: it stays between zero and <see cref="DefaultWindow"/>.</summary>
+    internal long ReceiveWindowRemaining
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _receiveWindow;
+            }
+        }
+    }
+
+    /// <summary>Gets how many peer requests wait for the application. For tests: it is limited to the size of the queue.</summary>
+    internal int QueuedRequestCount => _requests.Reader.Count;
+
     /// <summary>Gets whether an EOF is still to be queued.</summary>
     public bool EofOwed
     {
@@ -375,9 +390,11 @@ internal sealed class SshChannel : IAsyncDisposable
     {
         lock (_gate)
         {
-            if (_eofReceived)
+            if (_eofReceived || _closeReceived)
             {
-                throw new SshProtocolException("The peer sent channel data after EOF.");
+                // After CLOSE the output pipes are completed, and the write below would throw InvalidOperationException from the pipe: not a
+                // protocol error the peer is told about, but a "bug in Zorg.Ssh" that ends the connection with the wrong reason.
+                throw new SshProtocolException("The peer sent channel data after EOF or CLOSE.");
             }
 
             if (data.Length > _receiveWindow)

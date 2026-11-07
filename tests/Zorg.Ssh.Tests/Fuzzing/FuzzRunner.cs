@@ -61,6 +61,18 @@ internal sealed class FuzzTarget
     /// <summary>Gets the fewest different stages (see <see cref="FuzzNotes"/>) a normal pass must reach. Zero means the target reports none.</summary>
     public int MinReachedStages { get; init; }
 
+    /// <summary>
+    /// Gets a generator that builds the input for a seed in place of the byte mutator. A stateful target uses it: its input is a
+    /// message sequence, and a whole message is moved, replayed or dropped as well as changed inside.
+    /// </summary>
+    public Func<ulong, byte[]>? Generate { get; init; }
+
+    /// <summary>
+    /// Gets a longer limit for one input than the global one, for a target that opens a connection and closes it again. Its own
+    /// oracles hold shorter limits for each wait, and name what stalled. This one only has to be longer than their sum.
+    /// </summary>
+    public TimeSpan? InputLimit { get; init; }
+
     public long AllocationBudget(int inputBytes) => AllocationSlack + ((long)AllocationPerByte * inputBytes);
 
     public override string ToString() => Name;
@@ -75,7 +87,20 @@ internal static class FuzzNotes
     [ThreadStatic]
     private static List<string>? _notes;
 
+    [ThreadStatic]
+    private static string? _refusal;
+
     public static void Reached(string stage) => (_notes ??= []).Add(stage);
+
+    /// <summary>Says why the input just run was refused without an exception, so the report can count the reasons.</summary>
+    public static void Refused(string reason) => _refusal = reason;
+
+    internal static string? TakeRefusal()
+    {
+        string? reason = _refusal;
+        _refusal = null;
+        return reason;
+    }
 
     internal static List<string> Drain()
     {
@@ -197,7 +222,7 @@ internal static class FuzzRunner
 
     /// <summary>Builds the input for a seed. The seed alone decides it.</summary>
     public static byte[] InputFor(FuzzTarget target, ulong seed) =>
-        FuzzMutator.Next(new FuzzRandom(seed), target.Corpus, target.Tokens, target.KnownLengthOffsets);
+        target.Generate is { } generate ? generate(seed) : FuzzMutator.Next(new FuzzRandom(seed), target.Corpus, target.Tokens, target.KnownLengthOffsets);
 
     public static FuzzReport Run(FuzzTarget target, FuzzRunOptions options)
     {
@@ -211,7 +236,8 @@ internal static class FuzzRunner
         while (!worker.Join(20))
         {
             long started = Volatile.Read(ref progress.StartedTicks);
-            if (started != 0 && Stopwatch.GetElapsedTime(started).TotalMilliseconds > options.InputLimit.TotalMilliseconds)
+            TimeSpan limit = target.InputLimit is { } own && own > options.InputLimit ? own : options.InputLimit;
+            if (started != 0 && Stopwatch.GetElapsedTime(started).TotalMilliseconds > limit.TotalMilliseconds)
             {
                 byte[] input = Volatile.Read(ref progress.Input) ?? [];
                 ulong seed = Volatile.Read(ref progress.Seed);
@@ -221,7 +247,7 @@ internal static class FuzzRunner
                         FuzzFindingKind.Hang,
                         target.Name,
                         seed,
-                        $"The input ran for more than {options.InputLimit.TotalSeconds:0.#} s and was abandoned. A hostile peer could hold a connection or a thread for ever with it.",
+                        $"The input ran for more than {limit.TotalSeconds:0.#} s and was abandoned. A hostile peer could hold a connection or a thread for ever with it.",
                         input,
                         IsText(target)));
                 }
@@ -376,7 +402,7 @@ internal static class FuzzRunner
             else
             {
                 report.Rejected++;
-                report.CountReason("(refused without an exception)");
+                report.CountReason(FuzzNotes.TakeRefusal() ?? "(refused without an exception)");
             }
 
             if (allocated > budget)
@@ -448,7 +474,7 @@ internal static class FuzzRunner
     private static string Trim(string text)
     {
         string[] lines = text.Split('\n');
-        return string.Join('\n', lines.Take(18).Select(line => line.TrimEnd('\r')));
+        return string.Join('\n', lines.Take(80).Select(line => line.TrimEnd('\r')));
     }
 
     private static FileStream? OpenMarker(FuzzTarget target)

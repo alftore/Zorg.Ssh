@@ -362,6 +362,9 @@ public sealed class SshServerOptions
     /// <summary>Gets the clock, for tests.</summary>
     internal TimeProvider TimeProvider { get; init; } = TimeProvider.System;
 
+    /// <summary>Gets a hook that sees each connection once it is authenticated and running. For tests that count what a connection holds; it changes nothing.</summary>
+    internal Action<Connection.SshConnection>? ConnectionStarted { get; init; }
+
     /// <summary>Gets the failed login attempts allowed per connection. The default is 6.</summary>
     public int MaxAuthAttempts { get; init; } = 6;
 

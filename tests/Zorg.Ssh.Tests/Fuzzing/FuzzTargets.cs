@@ -141,6 +141,7 @@ internal static class FuzzTargets
         AgentTarget(),
         SftpServerTarget(),
         PublicKeyRequestTarget(),
+        .. Stateful.StatefulTargets.Build(),
     ];
 
     private static FuzzTarget Make(string name, IReadOnlyList<FuzzSeed> corpus, Func<byte[], FuzzOutcome> execute, int iterations, Action<TargetTuning>? tune = null)

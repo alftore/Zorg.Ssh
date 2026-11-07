@@ -3,6 +3,7 @@ using System.Buffers;
 using System.Buffers.Binary;
 using System.Security.Cryptography;
 using System.Threading;
+using System.Threading.Tasks;
 using Zorg.Ssh.Crypto;
 
 namespace Zorg.Ssh.Transport;
@@ -87,6 +88,7 @@ internal readonly struct OutgoingPacket
     /// <summary>Drops a packet that never reached the wire, with any cipher it was carrying.</summary>
     public void Discard()
     {
+        Sent?.Dropped();
         NextCipher?.Dispose();
         Release();
     }
@@ -100,10 +102,24 @@ internal sealed class SentSequence
 {
     private const long NotWritten = -1;
 
+    private readonly TaskCompletionSource _taken = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private long _sequence = NotWritten;
 
+    /// <summary>
+    /// Gets a task that completes once the send loop has taken the packet off its queue, or dropped it. A reply that skips the
+    /// queue can't pass a packet in that state, so a caller that must be first on the wire waits for this.
+    /// </summary>
+    public Task Taken => _taken.Task;
+
     /// <summary>Notes the sequence number. Called by the send loop.</summary>
-    public void Record(uint sequence) => Volatile.Write(ref _sequence, sequence);
+    public void Record(uint sequence)
+    {
+        Volatile.Write(ref _sequence, sequence);
+        _taken.TrySetResult();
+    }
+
+    /// <summary>Says the packet has left the queue without being written. Called when it is dropped.</summary>
+    public void Dropped() => _taken.TrySetResult();
 
     /// <summary>Returns whether this packet has been written with <paramref name="sequence"/>.</summary>
     public bool Is(uint sequence) => Volatile.Read(ref _sequence) == sequence;

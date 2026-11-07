@@ -106,6 +106,54 @@ internal sealed class SshConnection : IAsyncDisposable
         }
     }
 
+    /// <summary>Gets how many channels the connection holds, open or closing. For tests: it is limited by the channel limit.</summary>
+    internal int ChannelCount
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _channels.Count;
+            }
+        }
+    }
+
+    /// <summary>Gets how many channels this side opened and the peer hasn't answered. For tests.</summary>
+    internal int OpeningCount
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _opening.Count;
+            }
+        }
+    }
+
+    /// <summary>Gets how many peer opens wait for the application. For tests: it is limited to the size of the queue.</summary>
+    internal int IncomingQueued => _incoming.Reader.Count;
+
+    /// <summary>Gets how many session slots the peer's opens hold. For tests.</summary>
+    internal int IncomingSessionCount
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _incomingSessions;
+            }
+        }
+    }
+
+    /// <summary>Gets the channels now held. For tests.</summary>
+    internal SshChannel[] ChannelSnapshot()
+    {
+        lock (_gate)
+        {
+            return [.. _channels.Values];
+        }
+    }
+
     /// <summary>Gets the keepalive monitor, or null if it's turned off.</summary>
     internal KeepAliveMonitor? KeepAlive { get; private set; }
 
@@ -900,8 +948,12 @@ internal sealed class SshConnection : IAsyncDisposable
         TaskCompletionSource<SshChannel>? waiter;
         lock (_gate)
         {
-            _opening.Remove(localId, out waiter);
-            _channels.Remove(localId);
+            // Only a channel still being opened leaves the table here. One that is open stays in it, so that ending the connection (which
+            // this refusal does) still fails everything waiting on it. Removing it first left its readers and writers waiting for ever.
+            if (_opening.Remove(localId, out waiter))
+            {
+                _channels.Remove(localId);
+            }
         }
 
         if (waiter is null)
