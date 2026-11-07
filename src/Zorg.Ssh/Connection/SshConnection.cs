@@ -59,6 +59,13 @@ internal sealed class SshConnection : IAsyncDisposable
     private Task? _keepAliveLoop;
     private Exception? _failure;
 
+    /// <summary>
+    /// Marks a task's failure as seen. The end of a connection fails every waiter it holds, and a waiter whose caller has already left
+    /// (a send that failed, a caller that never awaited) would otherwise leave an unobserved task exception behind.
+    /// </summary>
+    internal static void ObserveFailure(Task task) =>
+        _ = task.ContinueWith(static t => _ = t.Exception, CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+
     public SshConnection(SshTransport transport, int maxChannels = 256)
     {
         _transport = transport;
@@ -224,7 +231,7 @@ internal sealed class SshConnection : IAsyncDisposable
             }
 
             // The end of the connection may have taken the waiter and failed it already, or may do so a moment from now. Nobody awaits it.
-            _ = confirmed.Task.ContinueWith(static task => _ = task.Exception, CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+            ObserveFailure(confirmed.Task);
             throw;
         }
 
@@ -378,6 +385,9 @@ internal sealed class SshConnection : IAsyncDisposable
         }
 
         PendingGlobalRequest pending = new(onReply);
+
+        // The caller may never await the reply, as documented, or may leave on a failed send before it gets the task.
+        ObserveFailure(pending.Reply.Task);
 
         // Held across the send, so the order of the line is the order on the wire.
         await _globalRequestOrder.WaitAsync(cancellationToken).ConfigureAwait(false);

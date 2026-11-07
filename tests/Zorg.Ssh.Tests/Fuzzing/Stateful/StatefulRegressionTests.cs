@@ -314,6 +314,40 @@ public sealed class StatefulRegressionTests
         }
     }
 
+    // Found by the second five minute run on Windows: targets "Stateful server, before login" and "Stateful client, during login", seeds 13034043915641724288
+    // and 17464801061396297813. The unobserved-task check named a Task of byte[] failing with "The connection ended before the server answered": the
+    // reply of a global request. StartGlobalRequestAsync documents that a caller may never await the reply, but the end of the connection fails every
+    // reply still waiting, and a failed task nobody awaited is an unobserved exception. The same held for the reply of a channel request.
+    [Fact]
+    public async Task A_global_request_reply_that_nobody_awaits_leaves_no_unobserved_task_exception_when_the_connection_ends()
+    {
+        CancellationToken test = TestContext.Current.CancellationToken;
+        UnobservedTasks.Install();
+        UnobservedTasks.Drain();
+        (SshTransport client, SshTransport server) = await TransportHarness.ConnectAsync(
+            TransportHarness.ClientOptions(kex: ["curve25519-sha256"]),
+            TransportHarness.ServerOptions(kex: ["curve25519-sha256"]),
+            test);
+        TransportHarness.MarkConnected(client, server);
+        await using SshConnection connection = new(client);
+        connection.Start();
+        await using (server)
+        {
+            await StartAndForgetAsync(connection, test);
+            await server.CloseAsync();
+            await connection.Ended.WaitAsync(TimeSpan.FromSeconds(20), test);
+        }
+
+        List<Exception> unobserved = UnobservedTasks.Drain();
+        Exception? ours = unobserved.FirstOrDefault(e => e.ToString().Contains("before the server answered", StringComparison.Ordinal));
+        Assert.True(ours is null, $"A faulted {ours?.Data["task"]} was never observed: {ours}");
+    }
+
+    // Kept out of line, so that nothing in the test's own frame keeps the reply alive past the collection.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static async Task StartAndForgetAsync(SshConnection connection, CancellationToken test) =>
+        _ = await connection.StartGlobalRequestAsync("no-reply-awaited@example.com", [], null, test);
+
     private static async Task<SshProcess> StartAndAcceptAsync(SshClient client, StatefulPeer peer, CancellationToken test)
     {
         Task<SshProcess> starting = client.StartProcessAsync("cat", null, test);

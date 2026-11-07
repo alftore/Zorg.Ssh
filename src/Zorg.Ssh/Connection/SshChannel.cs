@@ -334,6 +334,9 @@ internal sealed class SshChannel : IAsyncDisposable
         try
         {
             TaskCompletionSource<bool> reply = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            // If the send fails, the end of the connection can still fail this reply, and nobody will be waiting for it.
+            SshConnection.ObserveFailure(reply.Task);
             lock (_gate)
             {
                 ThrowIfUnusable();

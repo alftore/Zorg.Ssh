@@ -198,6 +198,15 @@ public sealed class FuzzTests
             {
                 text.AppendLine(CultureInfo.InvariantCulture, $"    {reason.Value,9}  {reason.Key}");
             }
+
+            if (report.Target.StartsWith("Stateful", StringComparison.Ordinal))
+            {
+                // The evidence that the inputs reach code behind the handshake: what the SUT sent back, and what it handled without ending the connection.
+                foreach (KeyValuePair<string, int> stage in report.Reached.OrderBy(r => r.Key, StringComparer.Ordinal))
+                {
+                    text.AppendLine(CultureInfo.InvariantCulture, $"    reached {stage.Value,9}  {stage.Key}");
+                }
+            }
         }
 
         string path = Environment.GetEnvironmentVariable("ZORG_FUZZ_REPORT") is { Length: > 0 } custom ? custom : Path.Combine(Path.GetTempPath(), "zorg-fuzz-report.txt");
