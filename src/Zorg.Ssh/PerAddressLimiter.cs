@@ -12,6 +12,8 @@ namespace Zorg.Ssh;
 /// </summary>
 internal sealed class PerAddressLimiter
 {
+    private static readonly byte[] Nat64Prefix = [0x00, 0x64, 0xff, 0x9b, 0, 0, 0, 0, 0, 0, 0, 0];
+
     private readonly object _lock = new();
     private readonly Dictionary<IPAddress, int> _counts = [];
     private readonly int _limit;
@@ -34,8 +36,9 @@ internal sealed class PerAddressLimiter
     }
 
     /// <summary>
-    /// Maps an address to the key it is counted under: an IPv4-mapped IPv6 address becomes its IPv4 address, and
-    /// any other IPv6 address becomes its /64 prefix, because one host commonly owns a whole /64.
+    /// Maps an address to the key it is counted under: an IPv4-mapped (::ffff:0:0/96) or NAT64 (64:ff9b::/96) IPv6
+    /// address becomes the IPv4 address inside it, and any other IPv6 address becomes its /64 prefix, because one
+    /// host commonly owns a whole /64.
     /// </summary>
     public static IPAddress KeyFor(IPAddress address)
     {
@@ -49,6 +52,13 @@ internal sealed class PerAddressLimiter
 
             Span<byte> bytes = stackalloc byte[16];
             address.TryWriteBytes(bytes, out _);
+
+            // NAT64 (64:ff9b::/96): every IPv4 client arrives in one /64, so count by the IPv4 address inside.
+            if (bytes[..12].SequenceEqual(Nat64Prefix))
+            {
+                return new IPAddress(bytes[12..]);
+            }
+
             bytes[8..].Clear();
             return new IPAddress(bytes);
         }
