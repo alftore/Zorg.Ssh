@@ -49,13 +49,13 @@ jobs:
         shell: bash
         run: dotnet pack src/Zorg.Ssh/Zorg.Ssh.csproj -c Release --no-build -p:PackageOutputPath="$RUNNER_TEMP/packages"
 
-  # macOS minutes cost several times Linux ones on a private repository, so this runs on pushes to main and by hand,
-  # not on pull requests. Once the repository is public, standard runners are free: move macos-latest into the matrix
-  # above and delete this job. It's the only place the macOS code (lstat and stat layouts in LocalFile) runs.
+  # Manual only: Actions > CI > Run workflow. macOS minutes cost several times Linux ones on a private repository.
+  # Once the repository is public, standard runners are free: consider moving macos-latest into the matrix above and
+  # deleting this job. It's the only place the macOS code (lstat and stat layouts in LocalFile) runs.
   # The tests use macOS's own ssh and ssh-keygen. CI=true is set by GitHub, so a missing tool fails, as on the other runners.
   macos:
     name: Build and test (macos-latest)
-    if: github.event_name != 'pull_request'
+    if: github.event_name == 'workflow_dispatch'
     runs-on: macos-latest
     timeout-minutes: 25
     steps:
