@@ -80,6 +80,9 @@ internal sealed partial class SftpServerSession : IAsyncDisposable
 
     private byte[] ReplyBuffer => _reply!;
 
+    /// <summary>Gets the reply built for the last request, length field included. Only the fuzz tests read it.</summary>
+    internal ReadOnlyMemory<byte> LastReply => _reply.AsMemory(0, _replyLength);
+
     public async Task<int> RunAsync(CancellationToken cancellationToken)
     {
         try
@@ -247,7 +250,8 @@ internal sealed partial class SftpServerSession : IAsyncDisposable
         }
     }
 
-    private async ValueTask DispatchAsync(byte type, uint id, ReadOnlyMemory<byte> body, CancellationToken cancellationToken)
+    /// <summary>Runs one request body. Internal so the fuzz tests can see which exception escapes, which <see cref="ServeAsync"/> would turn into a plain failure.</summary>
+    internal async ValueTask DispatchAsync(byte type, uint id, ReadOnlyMemory<byte> body, CancellationToken cancellationToken)
     {
         switch (type)
         {

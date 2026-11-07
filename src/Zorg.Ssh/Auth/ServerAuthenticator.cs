@@ -163,7 +163,7 @@ internal sealed class ServerAuthenticator(SshTransport transport, ServerAuthOpti
         return password;
     }
 
-    private static PublicKeyRequest ParsePublicKey(ReadOnlySpan<byte> body)
+    internal static PublicKeyRequest ParsePublicKey(ReadOnlySpan<byte> body)
     {
         SshReader reader = new(body);
         bool hasSignature = reader.ReadBoolean();
@@ -363,5 +363,5 @@ internal sealed class ServerAuthenticator(SshTransport transport, ServerAuthOpti
         public bool Handled { get; set; }
     }
 
-    private sealed record PublicKeyRequest(string Algorithm, byte[] Blob, byte[]? Signature);
+    internal sealed record PublicKeyRequest(string Algorithm, byte[] Blob, byte[]? Signature);
 }

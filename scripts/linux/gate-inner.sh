@@ -59,6 +59,8 @@ while [ "$n" -lt "${ZORG_GATE_REPEAT:-1}" ]; do
   [ "${ZORG_GATE_REPEAT:-1}" -gt 1 ] && echo "run $n of ${ZORG_GATE_REPEAT}"
   run_tests tests/Zorg.Ssh.Tests 900 /tmp/unit.log
 done
+# A long fuzz run (ZORG_FUZZ_MINUTES) leaves its summary here: what each target ran, and how deep it got.
+if [ -f /tmp/zorg-fuzz-report.txt ]; then cat /tmp/zorg-fuzz-report.txt; fi
 
 if [ "${ZORG_GATE_INTEROP:-0}" = 1 ]; then
   step "Interop tests"

@@ -79,6 +79,10 @@ echo "image step: $((SECONDS - start)) s"
 
 socket_args=()
 env_args=(-e "ZORG_REQUIRE_PEERS=$peers" -e "ZORG_GATE_AOT=$aot" -e "ZORG_GATE_INTEROP=$interop" -e "ZORG_GATE_HIDE_SSH=$hide" -e "ZORG_GATE_TEST_ARGS=$testargs" -e "ZORG_GATE_REPEAT=$repeat")
+# The fuzz tests read these, so a long run or a replay can be done in the container: ZORG_FUZZ_MINUTES=2 scripts/test-linux.sh --args "--filter-class *FuzzTests"
+for fuzz_var in ZORG_FUZZ_MINUTES ZORG_FUZZ_SEED ZORG_FUZZ_TARGET ZORG_FUZZ_INPUT_SECONDS ZORG_FUZZ_VERBOSE; do
+  if [ -n "${!fuzz_var:-}" ]; then env_args+=(-e "$fuzz_var=${!fuzz_var}"); fi
+done
 if [ "$interop" = 1 ]; then
   # The socket path is the one inside the Podman machine, where the engine runs.
   sock="$(run_cli 60 info --format '{{.Host.RemoteSocket.Path}}' | tr -d '\r')"
