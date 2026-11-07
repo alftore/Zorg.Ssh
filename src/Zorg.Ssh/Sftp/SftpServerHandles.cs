@@ -171,9 +171,9 @@ internal static class SftpServerAttributes
 
     /// <summary>
     /// Describes an entry without following it. On Windows the permission bits are made up from the attributes. .NET
-    /// calls a FIFO, socket or device a file, so on Linux its real type is read: a client that checks
-    /// <see cref="SftpAttributes.IsRegularFile"/> before opening must not be told a FIFO is one. Elsewhere on Unix there's
-    /// no way to tell, and such an entry is reported as a regular file.
+    /// calls a FIFO, socket or device a file, so on Linux and macOS its real type is read: a client that checks
+    /// <see cref="SftpAttributes.IsRegularFile"/> before opening must not be told a FIFO is one. Only those four types
+    /// replace what .NET said. Elsewhere on Unix there's no way to tell, and such an entry is reported as a regular file.
     /// </summary>
     public static SftpAttributes FromInfo(FileSystemInfo info)
     {
@@ -182,7 +182,7 @@ internal static class SftpServerAttributes
         bool directory = !link && attributes.HasFlag(FileAttributes.Directory);
         UnixFileMode mode = OperatingSystem.IsWindows() ? WindowsMode(attributes) : info.UnixFileMode;
         uint type = link ? SftpAttributes.TypeSymbolicLink : directory ? SftpAttributes.TypeDirectory : SftpAttributes.TypeRegular;
-        if (type == SftpAttributes.TypeRegular && LocalFile.GetLinuxFileType(info.FullName) is { } real && real != 0)
+        if (type == SftpAttributes.TypeRegular && LocalFile.GetFileType(info.FullName, mode) is { } real && IsSpecialFileType(real))
         {
             type = real;
         }
@@ -190,6 +190,9 @@ internal static class SftpServerAttributes
         long size = type == SftpAttributes.TypeRegular && info is FileInfo file ? file.Length : 0;
         return SftpAttributes.ForServer(size, mode, type, info.LastAccessTimeUtc, info.LastWriteTimeUtc);
     }
+
+    /// <summary>A FIFO, character device, block device or socket: the types .NET reports as a regular file.</summary>
+    internal static bool IsSpecialFileType(uint type) => type is 0x1000 or 0x2000 or 0x6000 or 0xC000;
 
     public static SftpAttributes FromHandle(SafeFileHandle handle)
     {

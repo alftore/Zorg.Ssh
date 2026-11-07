@@ -136,12 +136,19 @@ internal static partial class LocalFile
     }
 
     /// <summary>
-    /// Reads the file type bits of a path (<c>st_mode &amp; S_IFMT</c>) without following a final link, on Linux. Null on
-    /// any other system, or if they can't be read. .NET reports a FIFO, a socket or a device as an ordinary file, and
-    /// this is what tells them apart.
+    /// Reads the file type bits of a path (<c>st_mode &amp; S_IFMT</c>) without following a final link, on Linux and
+    /// macOS. Null on any other system, or if they can't be read or can't be trusted. .NET reports a FIFO, a socket or a
+    /// device as an ordinary file, and this is what tells them apart. <paramref name="permissions"/> is what .NET reports
+    /// for the same entry: on macOS, whose <c>struct stat</c> layout hasn't been run here, the type is believed only if
+    /// the permission bits read beside it match, so a wrong layout gives null, not a wrong type.
     /// </summary>
-    public static uint? GetLinuxFileType(string path)
+    public static uint? GetFileType(string path, UnixFileMode permissions)
     {
+        if (OperatingSystem.IsMacOS())
+        {
+            return GetMacFileType(path, permissions);
+        }
+
         if (!OperatingSystem.IsLinux())
         {
             return null;
@@ -161,6 +168,44 @@ internal static partial class LocalFile
         }
 
         return BitConverter.ToUInt16(buffer, StatxModeOffset) & FileTypeMask;
+    }
+
+    /// <summary>
+    /// Takes the file type out of a macOS <c>struct stat</c> (64-bit inode layout, <c>st_mode</c> at offset 4), if the
+    /// permission bits beside it are <paramref name="permissions"/> and the type is one <c>S_IFMT</c> can hold. Null
+    /// otherwise: the layout was misread, or the entry changed between the two looks.
+    /// </summary>
+    internal static uint? ParseMacFileType(ReadOnlySpan<byte> status, UnixFileMode permissions)
+    {
+        if (status.Length < 6)
+        {
+            return null;
+        }
+
+        uint mode = System.Buffers.Binary.BinaryPrimitives.ReadUInt16LittleEndian(status[4..]);
+        uint type = mode & FileTypeMask;
+        bool knownType = type is 0x1000 or 0x2000 or 0x4000 or 0x6000 or 0x8000 or 0xA000 or 0xC000;
+        return knownType && (mode & 0xFFF) == (uint)permissions ? type : null;
+    }
+
+    private static uint? GetMacFileType(string path, UnixFileMode permissions)
+    {
+        byte[] buffer = new byte[256];
+        try
+        {
+            // As in TryMacIsRegular: x64 has the 64-bit-inode layout under lstat$INODE64, arm64 under plain lstat.
+            int result = RuntimeInformation.ProcessArchitecture switch
+            {
+                Architecture.Arm64 => LStat(path, buffer),
+                Architecture.X64 => LStatInode64(path, buffer),
+                _ => -1,
+            };
+            return result == 0 ? ParseMacFileType(buffer, permissions) : null;
+        }
+        catch (Exception ex) when (ex is EntryPointNotFoundException or DllNotFoundException or ArgumentException)
+        {
+            return null;
+        }
     }
 
     private static LocalFileKind WindowsKind(string path)
@@ -258,4 +303,12 @@ internal static partial class LocalFile
     [DefaultDllImportSearchPaths(DllImportSearchPath.SafeDirectories)]
     [LibraryImport("libc", EntryPoint = "stat$INODE64", StringMarshalling = StringMarshalling.Utf8, SetLastError = true)]
     private static partial int StatInode64(string path, [Out] byte[] buffer);
+
+    [DefaultDllImportSearchPaths(DllImportSearchPath.SafeDirectories)]
+    [LibraryImport("libc", EntryPoint = "lstat", StringMarshalling = StringMarshalling.Utf8, SetLastError = true)]
+    private static partial int LStat(string path, [Out] byte[] buffer);
+
+    [DefaultDllImportSearchPaths(DllImportSearchPath.SafeDirectories)]
+    [LibraryImport("libc", EntryPoint = "lstat$INODE64", StringMarshalling = StringMarshalling.Utf8, SetLastError = true)]
+    private static partial int LStatInode64(string path, [Out] byte[] buffer);
 }
