@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Numerics;
 using System.Security.Cryptography;
+using System.Threading;
 using Zorg.Ssh.Protocol;
 
 namespace Zorg.Ssh.Crypto.Keys;
@@ -171,6 +172,12 @@ internal sealed class RsaPublicKey : SshPublicKey
         }
         catch (CryptographicException ex)
         {
+            // Only the platform's own refusal of SHA-1 gets this message. A key or signature from the peer never does.
+            if (LegacyRsa.PlatformAllowsSha1)
+            {
+                return false;
+            }
+
             throw LegacyRsa.PolicyRefusal(ex);
         }
     }
@@ -185,8 +192,21 @@ internal sealed class RsaPublicKey : SshPublicKey
         // Some peers drop leading zero bytes from the signature, and OpenSSH accepts that. The BCL wants the full width.
         byte[] padded = new byte[_modulus.Length];
         signature.CopyTo(padded.AsSpan(padded.Length - signature.Length));
-        using RSA rsa = RSA.Create(Parameters());
-        return rsa.VerifyData(data, padded, hash, RSASignaturePadding.Pkcs1);
+        using RSA? rsa = CreateOrNull();
+        return rsa is not null && rsa.VerifyData(data, padded, hash, RSASignaturePadding.Pkcs1);
+    }
+
+    /// <summary>Loads the key into the platform, or gives null if it won't. That has nothing to do with SHA-1.</summary>
+    private RSA? CreateOrNull()
+    {
+        try
+        {
+            return RSA.Create(Parameters());
+        }
+        catch (CryptographicException)
+        {
+            return null;
+        }
     }
 
     private static ReadOnlySpan<byte> TrimLeadingZeros(ReadOnlySpan<byte> value)
@@ -281,7 +301,7 @@ internal sealed class RsaPrivateKey : SshPrivateKey
             return SignatureBlob.Write(LegacyAlgorithms.RsaSha1, _key.SignData(data, HashAlgorithmName.SHA1, RSASignaturePadding.Pkcs1));
 #pragma warning restore CA5350
         }
-        catch (CryptographicException ex)
+        catch (CryptographicException ex) when (!LegacyRsa.PlatformAllowsSha1)
         {
             throw LegacyRsa.PolicyRefusal(ex);
         }
@@ -317,6 +337,37 @@ internal static class LegacyRsa
     /// <summary>Checks a SHA-1 signature. Returns false for any key that isn't plain RSA.</summary>
     public static bool Verify(SshPublicKey key, ReadOnlySpan<byte> data, ReadOnlySpan<byte> signatureBlob) =>
         key is RsaPublicKey rsa && rsa.VerifyLegacySha1(data, signatureBlob);
+
+    private static readonly Lazy<bool> Probe = new(ProbeSha1, LazyThreadSafetyMode.ExecutionAndPublication);
+
+    private static readonly AsyncLocal<bool?> ProbeOverride = new();
+
+    /// <summary>
+    /// Gets whether the platform signs and checks RSA with SHA-1. It's tried once, on a key made here, so nothing
+    /// from a peer can decide the answer.
+    /// </summary>
+    public static bool PlatformAllowsSha1 => ProbeOverride.Value ?? Probe.Value;
+
+    /// <summary>Sets the answer of <see cref="PlatformAllowsSha1"/> for the current async flow, so tests can pretend.</summary>
+    internal static void SetPlatformAllowsSha1ForTests(bool? value) => ProbeOverride.Value = value;
+
+    /// <summary>Runs the probe itself, whatever was set for tests.</summary>
+    internal static bool ProbeSha1()
+    {
+        try
+        {
+            using RSA rsa = RSA.Create(RsaPublicKey.MinimumModulusBits);
+            byte[] data = [1, 2, 3];
+#pragma warning disable CA5350 // Legacy ssh-rsa, opt-in through SshAlgorithms.LegacyUnsafe or an explicit list only.
+            byte[] signature = rsa.SignData(data, HashAlgorithmName.SHA1, RSASignaturePadding.Pkcs1);
+            return rsa.VerifyData(data, signature, HashAlgorithmName.SHA1, RSASignaturePadding.Pkcs1);
+#pragma warning restore CA5350
+        }
+        catch (CryptographicException)
+        {
+            return false;
+        }
+    }
 
     /// <summary>The failure when the platform refuses SHA-1 signatures. It carries no data, only what to do.</summary>
     public static SshNegotiationException PolicyRefusal(CryptographicException inner) => new(

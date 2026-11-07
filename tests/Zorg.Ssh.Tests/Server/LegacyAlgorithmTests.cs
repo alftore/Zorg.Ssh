@@ -228,6 +228,44 @@ public sealed class LegacyAlgorithmTests : IDisposable
         Assert.Contains("update-crypto-policies", failure.Message, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void The_SHA_1_probe_agrees_with_what_the_platform_does()
+    {
+        bool signs;
+        try
+        {
+#pragma warning disable CA5350 // Legacy ssh-rsa, in a test.
+            signs = LegacyRsa.Sign(RsaKey, [1]).Length > 0;
+#pragma warning restore CA5350
+        }
+        catch (SshNegotiationException)
+        {
+            signs = false;
+        }
+
+        Assert.Equal(signs, LegacyRsa.PlatformAllowsSha1);
+        Assert.Equal(signs, LegacyRsa.ProbeSha1());
+    }
+
+    [Fact]
+    public void A_bad_signature_or_the_wrong_one_is_false_even_where_the_platform_forbids_SHA_1()
+    {
+        // The policy message belongs to the platform, so a peer's bytes alone must not be able to cause it.
+        LegacyRsa.SetPlatformAllowsSha1ForTests(false);
+        try
+        {
+            SshPublicKey key = RsaKey.PublicKey;
+            byte[] data = [1, 2, 3];
+            Assert.False(LegacyRsa.Verify(key, data, []));
+            Assert.False(LegacyRsa.Verify(key, data, new byte[64]));
+            Assert.False(LegacyRsa.Verify(key, data, RsaKey.Sign("rsa-sha2-256", data)));
+        }
+        finally
+        {
+            LegacyRsa.SetPlatformAllowsSha1ForTests(null);
+        }
+    }
+
     public static TheoryData<string?, bool, string> SignatureChoices => new()
     {
         { null, false, "rsa-sha2-512" }, // no server-sig-algs, legacy off: today's behaviour
