@@ -458,6 +458,25 @@ internal static class FuzzCorpus
         return seeds;
     }
 
+    /// <summary>
+    /// Inputs for the ChaCha20 differential target: a mode byte, a 32-byte key, a 4-byte sequence number and the data.
+    /// The lengths sit on both sides of the 64, 128 and 256-byte steps of the vector paths.
+    /// </summary>
+    public static IReadOnlyList<FuzzSeed> ChaChaInputs()
+    {
+        List<FuzzSeed> seeds = [];
+        Random random = new(8439);
+        foreach (int length in new[] { 0, 1, 63, 64, 65, 127, 128, 129, 255, 256, 257, 511, 1024, 1500, 4096 })
+        {
+            byte[] input = new byte[1 + 32 + 4 + length];
+            random.NextBytes(input);
+            input[0] = (byte)(seeds.Count % 8);
+            seeds.Add(FuzzSeed.Binary("chacha " + length, input));
+        }
+
+        return seeds;
+    }
+
     // ssh-agent.
 
     public static IReadOnlyList<FuzzSeed> AgentFrames()

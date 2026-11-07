@@ -3,7 +3,6 @@ using System.Buffers.Binary;
 using System.Linq;
 using System.Numerics;
 using System.Reflection;
-using Org.BouncyCastle.Crypto.Engines;
 using Xunit;
 using Zorg.Ssh.Crypto;
 using Zorg.Ssh.Crypto.Ciphers;
@@ -409,25 +408,18 @@ public class PacketCipherTests
     }
 
     [Fact]
-    public void Disposing_ChaCha_zeroes_the_engines()
+    public void Disposing_ChaCha_zeroes_its_key_words()
     {
         ChaCha20Poly1305Cipher cipher = (ChaCha20Poly1305Cipher)Create(ChaCha, null);
         byte[] packet = Plain(cipher, 20);
         cipher.Seal(packet, 0);
 
-        object[] engines = [PrivateField(cipher, "_bodyCipher"), PrivateField(cipher, "_lengthCipher")];
-        Assert.All(engines, engine => Assert.Contains(EngineState(engine)[4..12], word => word != 0));
+        uint[][] keys = [(uint[])PrivateField(cipher, "_bodyKey"), (uint[])PrivateField(cipher, "_lengthKey")];
+        Assert.All(keys, key => Assert.Contains(key, word => word != 0));
 
         cipher.Dispose();
 
-        Assert.All(engines, engine =>
-        {
-            Assert.All(EngineState(engine)[4..12], word => Assert.Equal(0u, word));
-
-            // The first keystream bytes for an all-zero key and nonce, per RFC 8439 A.1 vector 1.
-            byte[] keystream = (byte[])EngineField(engine, "keyStream");
-            Assert.Equal(Convert.FromHexString("76b8e0ada0f13d90"), keystream[..8]);
-        });
+        Assert.All(keys, key => Assert.All(key, word => Assert.Equal(0u, word)));
     }
 
     [Fact]
@@ -522,10 +514,4 @@ public class PacketCipherTests
 
     private static object PrivateField(object target, string name) =>
         target.GetType().GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(target)!;
-
-    private static uint[] EngineState(object engine) => (uint[])EngineField(engine, "engineState");
-
-    // BouncyCastle internals, so a version bump may need these names updated. The package version is pinned.
-    private static object EngineField(object engine, string name) =>
-        typeof(Salsa20Engine).GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(engine)!;
 }

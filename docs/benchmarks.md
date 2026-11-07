@@ -10,6 +10,7 @@ Zorg.Ssh measured against SSH.NET 2026.0.0 and Tmds.Ssh 0.26.0, talking to a rea
 - **AES-GCM download: Zorg.Ssh is slowest.** 475 ms against 415 ms for SSH.NET and 390 ms for Tmds.Ssh, so 13% and 18% more time. This is the reverse of 5 November, when all three were level at the speed of the path. The path (270 to 310 MiB/s) isn't the limit for Zorg.Ssh this time, at 269 MiB/s, but the standard deviations (4% to 7%) leave the gap to SSH.NET only about 3 deviations wide, and it moved between runs before.
 - **AES-GCM upload:** Zorg.Ssh 454 ms, SSH.NET 531 ms, Tmds.Ssh 606 ms. The standard deviations are 18% to 20%, so only Tmds.Ssh's lag is plausibly real, and it wasn't in the first run (it was 62% then).
 - **ChaCha20: SSH.NET is ahead.** Its download took 5% less than Zorg.Ssh's and its upload 12% less, in both cases inside the noise for upload. Tmds.Ssh's download is 2.7 times slower. Its upload is level.
+- **Two things changed after that run, both measured against `main` with the trees taking turns.** The AES download "regression" is noise: 422 ms for both trees over eight runs each, so the 476 ms above was a slow moment, and the AES download rows for the other two libraries should be read with that in mind ([the check](#the-aes-download-check)). And ChaCha20 now runs on the library's own vector code, which makes ChaCha20 download 1.23 to 1.29 times as fast (about 504 ms, against about 637 ms) and upload 1.68 times as fast (489 ms, against 823 ms). SSH.NET and Tmds.Ssh weren't measured again, so the ChaCha20 rows in the table below are from before the change ([the numbers](#chacha20-in-vector-code)).
 - **Memory: Zorg.Ssh now allocates 10 KB per command**, against 12.7 KB for SSH.NET and 3.1 KB for Tmds.Ssh. In transfers it allocates 9 to 33 times what Tmds.Ssh does. Against SSH.NET it allocates less on download (0.3 to 0.7 times) and more on upload (1.5 to 1.7 times).
 
 ## Setup
@@ -140,9 +141,9 @@ Zorg.Ssh only. In process, on one thread, with a 32 KiB payload, the largest pac
 | `aes256-ctr` with `hmac-sha2-512-etm@openssh.com` | 73.0 µs | 428 | 146.7 µs | 3.0 µs | 6.4 µs |
 | `aes128-ctr` with `hmac-sha2-256-etm@openssh.com` | 123.9 µs | 252 | 243.2 µs | 4.7 µs | 9.7 µs |
 | `aes256-ctr` with `hmac-sha2-256-etm@openssh.com` | 123.3 µs | 253 | 265.6 µs | 4.6 µs | 9.3 µs |
-| `chacha20-poly1305@openssh.com` | 130.4 µs | 240 | 263.5 µs | 4.5 µs | 9.2 µs |
+| `chacha20-poly1305@openssh.com` | 40.3 µs | 775 | 77.8 µs | 1.5 µs | 3.1 µs |
 
-AES-GCM runs on the CPU's AES instructions through the .NET library. ChaCha20-Poly1305 runs on BouncyCastle, about 20 times slower here. Its 240 MiB/s is close to what Zorg.Ssh reaches in ChaCha20 download (207 MiB/s), so the cipher is the likely limit there, not the network. The two CTR rows with SHA-256 are slow because this CPU has no SHA-NI, which is why SHA-512 comes first in the MAC list. A newer CPU may give a different order. The `aes256-ctr`/SHA-256 `SealThenOpen` row has a standard deviation of 41 µs (16%), so treat its 265.6 µs as rough.
+AES-GCM runs on the CPU's AES instructions through the .NET library. ChaCha20-Poly1305 ran on BouncyCastle until 7 November, at 240 MiB/s, about 20 times slower than AES-GCM and close to what Zorg.Ssh reached in ChaCha20 download (207 MiB/s). Its ChaCha20 half is now the library's own vectorised code, and the row above is from that: 775 MiB/s, 3.2 times faster. About 60% of what's left is BouncyCastle's Poly1305 (see [ChaCha20 in vector code](#chacha20-in-vector-code)). The two CTR rows with SHA-256 are slow because this CPU has no SHA-NI, which is why SHA-512 comes first in the MAC list. A newer CPU may give a different order. The `aes256-ctr`/SHA-256 `SealThenOpen` row has a standard deviation of 41 µs (16%), so treat its 265.6 µs as rough.
 
 There's no equivalent figure for the other libraries' ciphers.
 
@@ -163,7 +164,52 @@ The first measurement used the code at the commit that added this file. Where th
 | ChaCha20 upload, Zorg.Ssh / SSH.NET / Tmds.Ssh | 913 / 862 / 858 ms | 894 / 787 / 903 ms |
 | Plain TCP, container to client | 225 to 282 MiB/s | 272 to 309 MiB/s |
 
-Zorg.Ssh's AES download is 46 ms slower than before, while SSH.NET's is unchanged and the path is, if anything, faster. That could be a real regression in Zorg.Ssh since 5 November, or noise: the standard deviation then was 18 ms and is 21 ms now. Only one run was made this time, so it wasn't separated. Worth a second look before anything is said about it.
+Zorg.Ssh's AES download looked 46 ms slower than on 5 November. It wasn't: see [the AES download check](#the-aes-download-check). Eight alternating runs of each tree gave 422 ms for both, so the 476 ms was noise.
+
+## The AES download check
+
+The 7 November run showed Zorg.Ssh's AES-GCM download at 476 ms, against 430 ms on 5 November, while the other two libraries stayed level. To see whether that was real, the same benchmark (`SftpBenchmarks.ZorgDownload`, identical benchmark code in both trees) ran with the two trees taking turns, eight times each: `000acd1`, the commit the 5 November numbers came from, and `dae2e02`, `main` on 7 November. Each run is a new process and a new container, 2 warmup and 8 measured iterations, as above.
+
+| Tree | Mean of the run means | Spread of the run means | Lowest and highest run |
+|---|---:|---:|---:|
+| `000acd1` (5 November) | 421 ms | 10 ms (seven runs) | 407 to 440 ms |
+| `dae2e02` (7 November) | 422 ms | 5 ms (eight runs) | 414 to 429 ms |
+
+The eighth run of the old tree hit an outlier (one 1,812 ms iteration, median 464 ms) and is left out of the first row. The difference between the trees is 0.4 ms, and the spread inside either tree is 10 times that. **There is no regression.** The 476 ms of 7 November sits far above anything the code did in sixteen further runs (the slowest was 440 ms), so it was a slow moment on the machine, not the code. Because of that, the AES download ranking against SSH.NET and Tmds.Ssh in the table above rests on one run for them and one slow run for Zorg.Ssh, and should be read with that in mind. Neither of the other two was measured again. The ChaCha20 download over the same eight pairs: 645 ms for the old tree, 632 ms for the new one, with a spread of about 20 ms for each, which is also no difference.
+
+## ChaCha20 in vector code
+
+Spike S4 asked whether Zorg.Ssh should carry its own vectorised ChaCha20 instead of BouncyCastle's. It should, and it now does. `ChaCha20Simd` computes four blocks at a time in 256-bit vectors, two in 128-bit vectors (SSE2 and later, Arm AdvSimd) and one in plain integers, picked by what the CPU reports. Poly1305 is still BouncyCastle's. Measured on the machine described above, on `0067522`:
+
+**ChaCha20 alone**, in process, 32 KiB:
+
+| Implementation | Time | MB/s |
+|---|---:|---:|
+| BouncyCastle `ChaCha7539Engine` | 89 µs | 368 |
+| `ChaCha20Simd`, 256-bit | 13.7 µs | 2,390 |
+| `ChaCha20Simd`, 128-bit | 25.5 µs | 1,285 |
+| `ChaCha20Simd`, plain integers | 70 µs | 466 |
+
+With 1 KiB it is 2.85 µs, 0.44 µs, 0.80 µs and 2.24 µs. Every path beats or matches BouncyCastle, so a machine with no vector support doesn't get slower.
+
+**The packet cipher** (`Seal`, 32 KiB): 130.4 µs before, 40.3 µs now. `SealThenOpen`: 263.5 µs before, 77.8 µs now.
+
+**The SFTP transfer over the container**, Zorg.Ssh only, `main` (`dae2e02`) against the new tree, five pairs taking turns (`ZorgDownload` and `ZorgUpload` with ChaCha20), the same 128 MiB file, 2 warmup and 8 measured iterations each:
+
+| Case | `main`, run means | New, run means | Change in speed |
+|---|---|---|---:|
+| Download, ChaCha20 | 623 ms (610 to 648) | 508 ms (487 to 537) | 1.23 times |
+| Upload, ChaCha20 | 823 ms (758 to 883) | 489 ms (471 to 505) | 1.68 times |
+
+An earlier set of six alternating pairs on the download, in one tree switching between the two implementations, gave 649 ms (616 to 708) against 501 ms (490 to 519), 1.29 times. Over all eleven pairs, the means are 637 and 504 ms (1.26 times) and the medians 620 and 504 ms (1.23 times). **The download speed went up by 23 to 29%, and the upload by 68%.** The download is held back by the path (about 270 to 310 MiB/s) and by the rest of the receive path. At 508 ms it is within 20% of the AES-GCM download in the same runs (422 ms).
+
+The AES-GCM rows in the same runs didn't change: download 422 ms and upload 390 ms for `main`, 423 ms and 381 ms with the new code (means of the run means).
+
+**A faster Poly1305 wasn't worth it.** BouncyCastle's Poly1305 takes 24 µs of the 40 µs for a 32 KiB packet and allocates 80 bytes. A 64-bit-limb version (three 44-bit limbs, `Math.BigMul`) passed the RFC 8439 vectors and a comparison with BouncyCastle for every length from 0 to 4096, but ran at 0.84 to 0.89 times BouncyCastle's time, or 11 to 16% less, and a variant that takes two blocks at a time ran no faster. One written with `UInt128` sums ran 2.5 times slower. That is about 4 µs of the 40 µs, 3% of a download, for new security code, so it wasn't kept. A vectorised Poly1305 would be the way to get more, and nothing here argues for it yet.
+
+**Not measured:** Native AOT (the plan said to check) and Arm. On this machine the AOT default target reported no AVX2 in an earlier spike, so there the 128-bit path would be the one used, at about half the speed above. `Path.Auto` takes whatever `Vector256.IsHardwareAccelerated` says, so it does the right thing, but this was not run.
+
+Noise: another agent's test runs shared the machine for part of this. Most iterations were clean, but single runs had outliers (an AES case at 535 ms, one at 649 ms). The pairs above alternate the trees to spread that. The micro-benchmarks ran with no test process running.
 
 ## Limits
 
