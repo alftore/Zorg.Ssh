@@ -199,7 +199,7 @@ A path with an unpaired surrogate, such as half an emoji from a string cut in th
 
 Limits reached in the library also arrive as `SftpException`: raise `MaxReadAllBytes` or `MaxDirectoryEntries` in `SftpClientOptions`, or `maxTotalBytes`, if the size is expected.
 
-`CreateDirectoryAsync` on an existing directory usually gives `Failure`. Check with `ExistsAsync` first.
+`CreateDirectoryAsync` on an existing directory usually gives `Failure`. Use `CreateDirectoryAsync(path, recursive: true)`, which accepts a directory that is already there and also makes the missing parents.
 
 ## SftpUnsafeNameException
 

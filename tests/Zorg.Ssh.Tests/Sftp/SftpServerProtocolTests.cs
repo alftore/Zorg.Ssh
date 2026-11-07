@@ -56,6 +56,91 @@ public sealed class SftpServerProtocolTests : IDisposable
     }
 
     [Fact]
+    public async Task A_recursive_create_makes_the_missing_parents_and_accepts_what_is_there()
+    {
+        (SftpClient sftp, Task<int> serving) = await StartClientAsync();
+        await using (sftp)
+        {
+            await sftp.CreateDirectoryAsync("a/b/c", recursive: true, Ct);
+            Assert.True(Directory.Exists(_sandbox.InRoot("a/b/c")));
+
+            // Again, and with a deeper tail, a trailing slash, a "." and a rooted path.
+            await sftp.CreateDirectoryAsync("a/b/c", recursive: true, Ct);
+            await sftp.CreateDirectoryAsync("a/b/c/d/e/", recursive: true, Ct);
+            await sftp.CreateDirectoryAsync("/a/./b/f", recursive: true, Ct);
+            await sftp.CreateDirectoryAsync("/", recursive: true, Ct);
+            Assert.True(Directory.Exists(_sandbox.InRoot("a/b/c/d/e")));
+            Assert.True(Directory.Exists(_sandbox.InRoot("a/b/f")));
+
+            // Without the flag it is the old call: the parent has to exist, and an existing directory is a failure.
+            await Assert.ThrowsAsync<SftpFileNotFoundException>(() => sftp.CreateDirectoryAsync("x/y", recursive: false, Ct));
+            await Assert.ThrowsAnyAsync<SftpException>(() => sftp.CreateDirectoryAsync("a", recursive: false, Ct));
+            Assert.False(Directory.Exists(_sandbox.InRoot("x")));
+        }
+
+        await serving;
+    }
+
+    [Fact]
+    public async Task A_recursive_create_refuses_a_path_that_runs_through_a_file()
+    {
+        (SftpClient sftp, Task<int> serving) = await StartClientAsync();
+        await using (sftp)
+        {
+            await sftp.WriteAllBytesAsync("file", "x"u8.ToArray(), Ct);
+            await sftp.CreateDirectoryAsync("dir", Ct);
+            await sftp.WriteAllBytesAsync("dir/file", "x"u8.ToArray(), Ct);
+
+            SftpException leaf = await Assert.ThrowsAsync<SftpException>(() => sftp.CreateDirectoryAsync("dir/file", recursive: true, Ct));
+            Assert.Equal(SftpStatusCode.Failure, leaf.StatusCode);
+            Assert.Contains("isn't a directory", leaf.Message);
+            await Assert.ThrowsAsync<SftpException>(() => sftp.CreateDirectoryAsync("file/below/that", recursive: true, Ct));
+            Assert.False(Directory.Exists(_sandbox.InRoot("dir/file")));
+            Assert.Equal("x", await File.ReadAllTextAsync(_sandbox.InRoot("file"), Ct));
+        }
+
+        await serving;
+    }
+
+    [Fact]
+    public async Task Clients_creating_the_same_directories_at_once_all_succeed()
+    {
+        const int Clients = 12;
+        List<(SftpClient Client, Task<int> Serving)> started = [];
+        for (int i = 0; i < Clients; i++)
+        {
+            started.Add(await StartClientAsync());
+        }
+
+        try
+        {
+            using ManualResetEventSlim go = new(false);
+            Task[] creators = [.. started.Select((s, i) => Task.Run(
+                async () =>
+                {
+                    go.Wait(Ct);
+                    await s.Client.CreateDirectoryAsync($"shared/day-{i % 3}/deep/er", recursive: true, Ct);
+                },
+                Ct))];
+            go.Set();
+            await Task.WhenAll(creators);
+
+            for (int day = 0; day < 3; day++)
+            {
+                Assert.True(Directory.Exists(_sandbox.InRoot($"shared/day-{day}/deep/er")));
+            }
+        }
+        finally
+        {
+            foreach ((SftpClient client, Task<int> serving) in started)
+            {
+                await client.DisposeAsync();
+                await serving;
+            }
+        }
+    }
+
+    [Fact]
     public async Task Our_client_gets_files_directories_and_attributes_through()
     {
         (SftpClient sftp, Task<int> serving) = await StartClientAsync();

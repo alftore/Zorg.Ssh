@@ -1,2 +1,5 @@
 #nullable enable
 Zorg.Ssh.Sftp.SftpEntry.HasValidName.get -> bool
+*REMOVED*Zorg.Ssh.Sftp.SftpClient.CreateDirectoryAsync(string! path, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+Zorg.Ssh.Sftp.SftpClient.CreateDirectoryAsync(string! path, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task!
+Zorg.Ssh.Sftp.SftpClient.CreateDirectoryAsync(string! path, bool recursive = false, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!

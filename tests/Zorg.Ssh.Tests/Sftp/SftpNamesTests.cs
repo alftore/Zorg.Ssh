@@ -343,6 +343,56 @@ public sealed class SftpNamesTests : IDisposable
         await Assert.ThrowsAsync<ArgumentException>(async () => await fake.Client.ListDirectoryAsync(path, Ct).ToArrayAsync(Ct));
     }
 
+    private static ValueTask SendModeAsync(FakeSftpServer server, uint id, uint mode) =>
+        server.SendAsync(new Packet().U8(SftpMessage.Attrs).U32(id).U32(0x4).U32(mode).ToFrame());
+
+    [Fact(Timeout = Limit)]
+    public async Task A_recursive_create_accepts_a_directory_another_client_made_first()
+    {
+        int stats = 0;
+        await using FakeSftpServer fake = await FakeSftpServer.StartAsync((server, request) => request.Type switch
+        {
+            // Not there for the first look, a directory by the time the create has failed.
+            SftpMessage.Stat when Interlocked.Increment(ref stats) == 1 => server.SendStatusAsync(request.Id, FakeSftpServer.StatusNoSuchFile),
+            SftpMessage.Stat => SendModeAsync(server, request.Id, Directory),
+            SftpMessage.MkDir => server.SendStatusAsync(request.Id, FakeSftpServer.StatusFailure),
+            _ => server.SendStatusAsync(request.Id),
+        });
+
+        await fake.Client.CreateDirectoryAsync("/raced", recursive: true, Ct);
+        Assert.Equal(2, stats);
+    }
+
+    [Fact(Timeout = Limit)]
+    public async Task A_recursive_create_reports_a_failure_when_nothing_is_there_afterwards()
+    {
+        await using FakeSftpServer fake = await FakeSftpServer.StartAsync((server, request) => request.Type switch
+        {
+            SftpMessage.Stat => server.SendStatusAsync(request.Id, FakeSftpServer.StatusNoSuchFile),
+            SftpMessage.MkDir => server.SendStatusAsync(request.Id, FakeSftpServer.StatusFailure, "disk full"),
+            _ => server.SendStatusAsync(request.Id),
+        });
+
+        SftpException ex = await Assert.ThrowsAsync<SftpException>(() => fake.Client.CreateDirectoryAsync("/full", recursive: true, Ct));
+        Assert.Equal(SftpStatusCode.Failure, ex.StatusCode);
+    }
+
+    [Fact(Timeout = Limit)]
+    public async Task A_recursive_create_reports_a_failure_when_a_file_took_the_name()
+    {
+        int stats = 0;
+        await using FakeSftpServer fake = await FakeSftpServer.StartAsync((server, request) => request.Type switch
+        {
+            SftpMessage.Stat when Interlocked.Increment(ref stats) == 1 => server.SendStatusAsync(request.Id, FakeSftpServer.StatusNoSuchFile),
+            SftpMessage.Stat => SendModeAsync(server, request.Id, RegularFile),
+            SftpMessage.MkDir => server.SendStatusAsync(request.Id, FakeSftpServer.StatusFailure),
+            _ => server.SendStatusAsync(request.Id),
+        });
+
+        SftpException ex = await Assert.ThrowsAsync<SftpException>(() => fake.Client.CreateDirectoryAsync("/taken", recursive: true, Ct));
+        Assert.Contains("isn't a directory", ex.Message);
+    }
+
     [Fact(Timeout = Limit)]
     public async Task A_path_with_a_surrogate_pair_is_accepted()
     {

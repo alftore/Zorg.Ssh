@@ -213,6 +213,63 @@ public class SftpTests
 
     [InteropTheory]
     [MemberData(nameof(Peers))]
+    public async Task A_recursive_create_makes_parents_and_accepts_what_exists(string peer)
+    {
+        await using SshPeerContainer container = await StartAsync(peer);
+        await using SshClient client = await ConnectAsync(container);
+        await using SftpClient sftp = await client.OpenSftpAsync(Ct);
+
+        await sftp.CreateDirectoryAsync("deep/er/still", recursive: true, Ct);
+        await sftp.CreateDirectoryAsync("deep/er/still", recursive: true, Ct);
+        await sftp.CreateDirectoryAsync("/home/zorg/deep/er/", recursive: true, Ct);
+        Assert.True((await sftp.GetAttributesAsync("deep/er/still", Ct)).IsDirectory);
+
+        // A symbolic link to a directory counts as a directory.
+        await sftp.CreateSymbolicLinkAsync("deep/link", "er", Ct);
+        await sftp.CreateDirectoryAsync("deep/link/more", recursive: true, Ct);
+        Assert.True(await sftp.ExistsAsync("deep/er/more", Ct));
+
+        await sftp.WriteAllBytesAsync("deep/file", "x"u8.ToArray(), Ct);
+        SftpException onFile = await Assert.ThrowsAsync<SftpException>(() => sftp.CreateDirectoryAsync("deep/file", recursive: true, Ct));
+        Assert.Contains("isn't a directory", onFile.Message);
+        await Assert.ThrowsAsync<SftpException>(() => sftp.CreateDirectoryAsync("deep/file/below", recursive: true, Ct));
+        Assert.Equal("x", Encoding.UTF8.GetString(await sftp.ReadAllBytesAsync("deep/file", Ct)));
+    }
+
+    private static Task CreateWhenReleasedAsync(SftpClient sftp, ManualResetEventSlim go, string path)
+    {
+        go.Wait(Ct);
+        return sftp.CreateDirectoryAsync(path, recursive: true, Ct);
+    }
+
+    [InteropTheory]
+    [MemberData(nameof(Peers))]
+    public async Task Two_clients_creating_the_same_directories_at_once_both_succeed(string peer)
+    {
+        await using SshPeerContainer container = await StartAsync(peer);
+        await using SshClient first = await ConnectAsync(container);
+        await using SshClient second = await ConnectAsync(container);
+        await using SftpClient sftpA = await first.OpenSftpAsync(Ct);
+        await using SftpClient sftpB = await second.OpenSftpAsync(Ct);
+
+        // Many rounds, each with fresh names, so that one of them is likely to collide on a parent.
+        for (int round = 0; round < 25; round++)
+        {
+            string path = $"race/r{round}/a/b/c/d";
+            using ManualResetEventSlim go = new(false);
+            Task[] creators =
+            [
+                Task.Run(() => CreateWhenReleasedAsync(sftpA, go, path), Ct),
+                Task.Run(() => CreateWhenReleasedAsync(sftpB, go, path), Ct),
+            ];
+            go.Set();
+            await Task.WhenAll(creators);
+            Assert.True((await sftpA.GetAttributesAsync(path, Ct)).IsDirectory);
+        }
+    }
+
+    [InteropTheory]
+    [MemberData(nameof(Peers))]
     public async Task Failures_are_typed(string peer)
     {
         await using SshPeerContainer container = await StartAsync(peer);

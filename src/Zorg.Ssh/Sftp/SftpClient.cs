@@ -341,10 +341,48 @@ public sealed class SftpClient : IAsyncDisposable
     /// await sftp.CreateDirectoryAsync("/srv/uploads", cancellationToken);
     /// </code>
     /// </example>
-    public Task CreateDirectoryAsync(string path, CancellationToken cancellationToken = default)
+    public Task CreateDirectoryAsync(string path, CancellationToken cancellationToken)
     {
         ValidatePath(path);
         return StatusRequestAsync(SftpFrames.PathAndAttributes(path, new SftpAttributes()), SftpMessage.MkDir, path, cancellationToken);
+    }
+
+    /// <summary>
+    /// Creates a directory, and the parents that are missing. It succeeds if the directory already exists, and it
+    /// copes with another client creating the same directories at the same moment.
+    /// </summary>
+    /// <param name="path">The remote path.</param>
+    /// <param name="recursive">True to create the missing parents too. False is the same as the overload without it.</param>
+    /// <param name="cancellationToken">Cancels the request. Directories already made stay.</param>
+    /// <returns>A task that completes when the directory exists.</returns>
+    /// <exception cref="SftpException">The server refused, or a component of the path exists and isn't a directory.</exception>
+    /// <example>
+    /// <code>
+    /// await sftp.CreateDirectoryAsync("/srv/uploads/2026/11", recursive: true, cancellationToken);
+    /// </code>
+    /// </example>
+    public async Task CreateDirectoryAsync(string path, bool recursive = false, CancellationToken cancellationToken = default)
+    {
+        if (!recursive)
+        {
+            await CreateDirectoryAsync(path, cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        ValidatePath(path);
+        List<string> prefixes = RecursivePrefixes(path);
+
+        // Walk up to the deepest directory that exists, so a path that is already there costs one request.
+        int first = prefixes.Count;
+        while (first > 0 && !await IsExistingDirectoryAsync(prefixes[first - 1], cancellationToken).ConfigureAwait(false))
+        {
+            first--;
+        }
+
+        for (int i = first; i < prefixes.Count; i++)
+        {
+            await MakeDirectoryOrAcceptAsync(prefixes[i], cancellationToken).ConfigureAwait(false);
+        }
     }
 
     /// <summary>Deletes a file or a symbolic link.</summary>
@@ -761,6 +799,63 @@ public sealed class SftpClient : IAsyncDisposable
 
     private static SshProtocolException EndlessEmptyReads() =>
         new("The SFTP server keeps answering reads with no data and no end of file.");
+
+    /// <summary>The paths to create for <paramref name="path"/>, shortest first. Empty components and <c>.</c> are dropped.</summary>
+    private static List<string> RecursivePrefixes(string path)
+    {
+        List<string> prefixes = [];
+        string current = path.StartsWith('/') ? "/" : string.Empty;
+        foreach (string part in path.Split('/', StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (part == ".")
+            {
+                continue;
+            }
+
+            current = current.Length == 0 || current.EndsWith('/') ? current + part : current + "/" + part;
+            prefixes.Add(current);
+        }
+
+        return prefixes;
+    }
+
+    /// <summary>True if the path is a directory. Throws if it's something else, because no directory can be made there.</summary>
+    private async Task<bool> IsExistingDirectoryAsync(string path, CancellationToken cancellationToken)
+    {
+        SftpAttributes attributes;
+        try
+        {
+            attributes = await GetAttributesAsync(path, cancellationToken).ConfigureAwait(false);
+        }
+        catch (SftpFileNotFoundException)
+        {
+            return false;
+        }
+
+        if (attributes.HasFileType && !attributes.IsDirectory)
+        {
+            throw new SftpException($"Can't create a directory at '{SftpParser.Sanitise(path)}': it exists and isn't a directory.", SftpStatusCode.Failure, path);
+        }
+
+        return true;
+    }
+
+    /// <summary>Creates one directory. SFTP version 3 has no "already exists" status, so a failure is checked by asking again.</summary>
+    private async Task MakeDirectoryOrAcceptAsync(string path, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await CreateDirectoryAsync(path, cancellationToken).ConfigureAwait(false);
+        }
+        catch (SftpException ex) when (ex.StatusCode == SftpStatusCode.Failure)
+        {
+            // Another client may have made it first. Anything but a directory there now is a real failure.
+            if (!await IsExistingDirectoryAsync(path, cancellationToken).ConfigureAwait(false))
+            {
+                throw;
+            }
+        }
+    }
 
     private static void ValidatePath(string path)
     {

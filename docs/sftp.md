@@ -16,10 +16,7 @@ Paths are sent as you write them. With OpenSSH, a relative path starts from the 
 `UploadFileAsync` and `DownloadFileAsync` work on any stream, and keep many requests in flight.
 
 ```csharp
-if (!await sftp.ExistsAsync("reports", cancellationToken))
-{
-    await sftp.CreateDirectoryAsync("reports", cancellationToken);
-}
+await sftp.CreateDirectoryAsync("reports", recursive: true, cancellationToken);
 
 await using (FileStream source = File.OpenRead("report.pdf"))
 {
@@ -144,7 +141,8 @@ await sftp.DeleteFileAsync("reports/old.txt", cancellationToken);
 
 - `RenameAsync` with `overwrite: true` replaces the target atomically through `posix-rename@openssh.com`. A server without that extension can only rename to a free name.
 - `CreateSymbolicLinkAsync` takes the link first, then the target. OpenSSH reverses the arguments on the wire compared with the draft, and Zorg.Ssh handles that.
-- `DeleteDirectoryAsync` removes an empty directory. `CreateDirectoryAsync` needs the parent to exist.
+- `DeleteDirectoryAsync` removes an empty directory. `CreateDirectoryAsync` needs the parent to exist, unless you pass `recursive: true`.
+- `CreateDirectoryAsync(path, recursive: true)` creates the missing parents too. It succeeds if the directory is already there, and it throws `SftpException` if the path or one of its parents exists and isn't a directory. A symbolic link to a directory counts as one. If another client makes the same directories at the same moment, a create that fails is checked again, and it succeeds if a directory is now there. Directories already made stay if you cancel or a later one fails.
 - `ExistsAsync` counts a symbolic link as existing, even if its target is missing. It throws `SftpPermissionDeniedException` if the account can't look there, because the answer is then unknown.
 
 ## Server extensions
