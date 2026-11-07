@@ -5,8 +5,8 @@ using System.Diagnostics.CodeAnalysis;
 namespace Zorg.Ssh.Crypto.Ciphers;
 
 /// <summary>
-/// The packet shape rules every cipher here shares. Each cipher leaves the length out of the padding, so the body
-/// alone is a multiple of the block size. Messages hold no peer data.
+/// The packet shape rules every cipher here shares. AEAD and EtM ciphers leave the length out of the padding, so the
+/// body alone is a multiple of the block size. Encrypt-and-MAC pads the length too. Messages hold no peer data.
 /// </summary>
 internal static class PacketChecks
 {
@@ -68,6 +68,28 @@ internal static class PacketChecks
         if (!IsValidBodySize(bodyLength, blockSize) || BinaryPrimitives.ReadUInt32BigEndian(packet) != bodyLength)
         {
             throw new ArgumentException("The packet must hold its length field, a padded body and room for the tag.", nameof(packet));
+        }
+    }
+
+    /// <summary>
+    /// For encrypt-and-MAC, where the length field is padded and encrypted with the body: checks that the length field and
+    /// body together are whole blocks, at least one. <paramref name="coveredLength"/> is in long, so a hostile length near
+    /// 2^32 can't wrap.
+    /// </summary>
+    public static void CheckCoveredSize(long coveredLength, int blockSize)
+    {
+        if (!IsValidBodySize(coveredLength, blockSize))
+        {
+            ThrowMalformed();
+        }
+    }
+
+    /// <summary>Rejects a header shorter than the first block, which an encrypt-and-MAC cipher decrypts to read the length.</summary>
+    public static void CheckHeader(int headerLength, int needed)
+    {
+        if (headerLength < needed)
+        {
+            ThrowMalformed();
         }
     }
 

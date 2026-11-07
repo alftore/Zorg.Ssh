@@ -24,6 +24,7 @@ internal static class Targets
         target = name switch
         {
             "packet-reader" => PacketReaderTarget,
+            "packet-reader-ctr-eam" => EamPacketReaderTarget,
             "kex-init" => KexInitTarget,
             "sftp-response" => SftpResponseTarget,
             _ => null,
@@ -54,6 +55,81 @@ internal static class Targets
         catch (SshException)
         {
         }
+    }
+
+    /// <summary>
+    /// Feeds the bytes to the packet reader through AES-128-CTR with encrypt-and-MAC HMAC-SHA-256 and a fixed key, where the
+    /// length is encrypted and the reader decrypts the first block to learn it. The first byte picks the form: even is
+    /// ciphertext as it is, odd is plaintext packets, each sealed with the fixed key when its length makes a valid shape,
+    /// so that mutated lengths and padding get past the MAC.
+    /// </summary>
+    private static void EamPacketReaderTarget(ReadOnlySpan<byte> data)
+    {
+        if (data.Length == 0)
+        {
+            return;
+        }
+
+        byte[] stream = (data[0] & 1) == 0 ? data[1..].ToArray() : SealEam(data[1..]);
+        using MemoryStream input = new(stream);
+        using PacketReader reader = new(input, MaxPacketLength);
+        using PacketCipher cipher = EamCipher();
+        try
+        {
+            uint sequence = 0;
+            while (true)
+            {
+                reader.ReadPacketAsync(cipher, sequence++, CancellationToken.None).AsTask().GetAwaiter().GetResult();
+            }
+        }
+        catch (SshException)
+        {
+        }
+    }
+
+    /// <summary>The fixed key of the encrypt-and-MAC target. Seeds are sealed with it.</summary>
+    internal static PacketCipher EamCipher()
+    {
+        byte[] key = new byte[16];
+        byte[] iv = new byte[16];
+        byte[] macKey = new byte[32];
+        for (int i = 0; i < macKey.Length; i++)
+        {
+            macKey[i] = (byte)(i * 7);
+            if (i < 16)
+            {
+                key[i] = (byte)(i * 5);
+                iv[i] = (byte)(0xf0 + i);
+            }
+        }
+
+        return PacketCipherCatalog.Create("aes128-ctr", "hmac-sha2-256", key, iv, macKey);
+    }
+
+    /// <summary>Seals each plaintext packet whose length field gives a valid shape. The rest of the input goes as it is.</summary>
+    internal static byte[] SealEam(ReadOnlySpan<byte> plain)
+    {
+        using PacketCipher cipher = EamCipher();
+        using MemoryStream output = new();
+        uint sequence = 0;
+        while (plain.Length >= 4)
+        {
+            uint length = System.Buffers.Binary.BinaryPrimitives.ReadUInt32BigEndian(plain);
+            long covered = 4L + length;
+            if (covered % 16 != 0 || covered > plain.Length || length > MaxPacketLength)
+            {
+                break;
+            }
+
+            byte[] packet = new byte[covered + cipher.TagLength];
+            plain[..(int)covered].CopyTo(packet);
+            cipher.Seal(packet, sequence++);
+            output.Write(packet);
+            plain = plain[(int)covered..];
+        }
+
+        output.Write(plain);
+        return output.ToArray();
     }
 
     private static void KexInitTarget(ReadOnlySpan<byte> data)

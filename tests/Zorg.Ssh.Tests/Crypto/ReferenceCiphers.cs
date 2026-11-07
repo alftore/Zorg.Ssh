@@ -169,6 +169,54 @@ internal static class ReferenceCiphers
         return packet;
     }
 
+    /// <summary>
+    /// Seals an encrypt-and-MAC packet (RFC 4253 section 6.4): the MAC is HMAC(sequence number || plaintext length field || plaintext
+    /// body), and CTR encrypts the length field and body together. Neither needs to be well formed.
+    /// </summary>
+    public static byte[] SealCtrEam(byte[] key, ref BigInteger counter, HashAlgorithmName hash, byte[] macKey, uint sequenceNumber, uint lengthField, ReadOnlySpan<byte> body)
+    {
+        byte[] plaintext = new byte[LengthField + body.Length];
+        BinaryPrimitives.WriteUInt32BigEndian(plaintext, lengthField);
+        body.CopyTo(plaintext.AsSpan(LengthField));
+
+        byte[] macInput = new byte[4 + plaintext.Length];
+        BinaryPrimitives.WriteUInt32BigEndian(macInput, sequenceNumber);
+        plaintext.CopyTo(macInput, 4);
+        byte[] tag = CryptographicOperations.HmacData(hash, macKey, macInput);
+
+        byte[] ciphertext = CtrXor(key, ref counter, plaintext);
+        byte[] packet = new byte[ciphertext.Length + tag.Length];
+        ciphertext.CopyTo(packet, 0);
+        tag.CopyTo(packet, ciphertext.Length);
+        return packet;
+    }
+
+    /// <summary>AES-CTR with single blocks: XORs the keystream from <paramref name="counter"/> into a copy of the data.</summary>
+    public static byte[] CtrXor(byte[] key, ref BigInteger counter, ReadOnlySpan<byte> data)
+    {
+        using Aes aes = Aes.Create();
+        aes.Key = key;
+        BigInteger modulus = BigInteger.One << 128;
+        byte[] output = new byte[data.Length];
+        for (int offset = 0; offset < data.Length; offset += 16)
+        {
+            byte[] counterBlock = new byte[16];
+            counter.TryWriteBytes(counterBlock, out int written, isUnsigned: true, isBigEndian: true);
+            Array.Copy(counterBlock, 0, counterBlock, 16 - written, written);
+            Array.Clear(counterBlock, 0, 16 - written);
+
+            byte[] stream = aes.EncryptEcb(counterBlock, PaddingMode.None);
+            for (int i = 0; i < 16 && offset + i < data.Length; i++)
+            {
+                output[offset + i] = (byte)(data[offset + i] ^ stream[i]);
+            }
+
+            counter = (counter + 1) % modulus;
+        }
+
+        return output;
+    }
+
     private static void QuarterRound(uint[] x, int a, int b, int c, int d)
     {
         x[a] += x[b];

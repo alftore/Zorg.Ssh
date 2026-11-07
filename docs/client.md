@@ -53,7 +53,7 @@ SshClientOptions options = new()
 | `BannerHandler` | none | Receives the server's login banner. The server chooses that text. |
 | `LoggerFactory` | none | A standard `ILoggerFactory`. Secrets aren't logged. |
 
-Algorithms can't be chosen: see [security.md](security.md#algorithms).
+`Algorithms` narrows the algorithm lists, for example to meet a policy. The defaults need no tuning, and [security.md](security.md#algorithms) lists them. Against a server with no AEAD cipher and no EtM MAC, such as Dropbear or some appliances, the client uses AES-CTR with `hmac-sha2-512` or `hmac-sha2-256` (encrypt-and-MAC), which security.md explains.
 
 `client.ServerVersion` holds the server's identification line, such as `SSH-2.0-OpenSSH_10.6`. The server chooses that too, so don't base a security decision on it.
 

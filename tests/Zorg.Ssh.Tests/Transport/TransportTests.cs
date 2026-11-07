@@ -25,6 +25,8 @@ public class TransportTests
         { "chacha20-poly1305@openssh.com", null },
         { "aes256-ctr", "hmac-sha2-512-etm@openssh.com" },
         { "aes128-ctr", "hmac-sha2-256-etm@openssh.com" },
+        { "aes256-ctr", "hmac-sha2-512" },
+        { "aes128-ctr", "hmac-sha2-256" },
     };
 
     private static async Task AssertRoundTrip(SshTransport from, SshTransport to, byte marker)

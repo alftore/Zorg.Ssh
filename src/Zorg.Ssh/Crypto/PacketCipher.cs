@@ -22,8 +22,15 @@ internal abstract class PacketCipher : IDisposable
     public abstract bool LengthExcludedFromPadding { get; }
 
     /// <summary>
-    /// Reads <c>packet_length</c> from the first 4 bytes of an incoming packet, without changing them. The
-    /// value is untrusted until <see cref="Open"/> succeeds, and the caller checks it against its limits.
+    /// Gets how many bytes of an incoming packet <see cref="ReadPacketLength"/> needs. 4 when the length field can be read
+    /// on its own. Encrypt-and-MAC encrypts the length with the body, so it needs the whole first cipher block. Every
+    /// valid packet is at least this long.
+    /// </summary>
+    public virtual int LengthBlockSize => 4;
+
+    /// <summary>
+    /// Reads <c>packet_length</c> from the first <see cref="LengthBlockSize"/> bytes of an incoming packet, without
+    /// changing them. The value is untrusted until <see cref="Open"/> succeeds, and the caller checks it against its limits.
     /// </summary>
     public abstract uint ReadPacketLength(ReadOnlySpan<byte> header, uint sequenceNumber);
 

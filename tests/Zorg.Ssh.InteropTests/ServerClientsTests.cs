@@ -23,10 +23,11 @@ public sealed class ServerClientsTests : IDisposable
 
     public void Dispose() => _hostKey.Dispose();
 
-    private Task<SshServer> StartServerAsync() => SshServer.StartAsync(
+    private Task<SshServer> StartServerAsync(SshAlgorithms? algorithms = null) => SshServer.StartAsync(
         new SshServerOptions
         {
             HostKeys = [_hostKey],
+            Algorithms = algorithms ?? SshAlgorithms.Default,
             MaxUnauthenticatedConnections = RelayConnections + 5,
             LoginGraceTime = TimeSpan.FromMinutes(2),
             PasswordHandler = (request, _) => ValueTask.FromResult(
@@ -67,6 +68,29 @@ public sealed class ServerClientsTests : IDisposable
     public async Task Python_clients_log_in_and_run_a_command(string script)
     {
         await using SshServer server = await StartServerAsync();
+        await using SshPeerContainer relay = await StartRelayAsync();
+        List<TcpClient> sockets = await FeedRelayAsync(server, relay);
+        try
+        {
+            string output = await ContainerCli.RunAsync(TimeSpan.FromSeconds(60), Ct, "exec", relay.Id, "python", "-u", $"/app/{script}", "127.0.0.1", "2222");
+            Assert.Contains("ran hello", output);
+            Assert.Contains("exit 3", output);
+        }
+        finally
+        {
+            sockets.ForEach(static s => s.Dispose());
+        }
+    }
+
+    [InteropTheory]
+    [InlineData("client_paramiko.py", "aes128-ctr", "hmac-sha2-256")]
+    [InlineData("client_paramiko.py", "aes256-ctr", "hmac-sha2-512")]
+    [InlineData("client_asyncssh.py", "aes128-ctr", "hmac-sha2-256")]
+    [InlineData("client_asyncssh.py", "aes256-ctr", "hmac-sha2-512")]
+    public async Task Python_clients_log_in_over_encrypt_and_MAC(string script, string cipher, string mac)
+    {
+        // Our server offers only the suite under test, so an independent implementation of encrypt-and-MAC checks ours.
+        await using SshServer server = await StartServerAsync(new SshAlgorithms { Ciphers = [cipher], Macs = [mac] });
         await using SshPeerContainer relay = await StartRelayAsync();
         List<TcpClient> sockets = await FeedRelayAsync(server, relay);
         try

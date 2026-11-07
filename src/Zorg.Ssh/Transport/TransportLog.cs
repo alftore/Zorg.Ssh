@@ -8,8 +8,8 @@ internal static partial class TransportLog
     [LoggerMessage(Level = LogLevel.Debug, Message = "Peer identified as {Identification}")]
     public static partial void PeerIdentified(ILogger logger, string identification);
 
-    [LoggerMessage(Level = LogLevel.Debug, Message = "Negotiated kex={Kex} hostkey={HostKey} send={SendCipher} receive={ReceiveCipher} strict={Strict}")]
-    public static partial void Negotiated(ILogger logger, string kex, string hostKey, string sendCipher, string receiveCipher, bool strict);
+    [LoggerMessage(Level = LogLevel.Debug, Message = "Negotiated kex={Kex} hostkey={HostKey} send={SendCipher} mac={SendMac} receive={ReceiveCipher} mac={ReceiveMac} strict={Strict}")]
+    public static partial void Negotiated(ILogger logger, string kex, string hostKey, string sendCipher, string sendMac, string receiveCipher, string receiveMac, bool strict);
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Starting a rekey after {Bytes} bytes and {Packets} packets")]
     public static partial void RekeyStarting(ILogger logger, long bytes, long packets);

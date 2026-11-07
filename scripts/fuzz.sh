@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Coverage-guided fuzzing of the wire decoders, in a Linux container, on Podman or Docker.
 #
-#   scripts/fuzz.sh <packet-reader|kex-init|sftp-response> [seconds]
+#   scripts/fuzz.sh <packet-reader|packet-reader-ctr-eam|kex-init|sftp-response> [seconds]
 #
 # SharpFuzz instruments Zorg.Ssh.dll inside the container, and libFuzzer drives tests/Zorg.Ssh.Fuzz. The
 # corpus and any crash inputs live in the named volume zorg-ssh-fuzz, so a second run starts where the
@@ -10,7 +10,7 @@ set -euo pipefail
 
 target="${1:-}"
 seconds="${2:-60}"
-case "$target" in packet-reader|kex-init|sftp-response) ;; *) sed -n '2,8p' "$0"; exit 2 ;; esac
+case "$target" in packet-reader|packet-reader-ctr-eam|kex-init|sftp-response) ;; *) sed -n '2,8p' "$0"; exit 2 ;; esac
 case "$seconds" in ''|*[!0-9]*) echo "seconds must be a number" >&2; exit 2 ;; esac
 
 export MSYS_NO_PATHCONV=1

@@ -80,7 +80,8 @@ internal static class StatefulTargets
                 FuzzRandom random = new(seed);
                 int pick = random.Next(seeds.Count);
                 List<FuzzOp> mutated = SequenceMutator.Mutate(random, seeds[pick].Ops, pool);
-                return FuzzOpCodec.Encode((byte)random.Next(variants), mutated);
+                // The low nibble is the rig's variant, the high one the peer's cipher suite.
+                return FuzzOpCodec.Encode((byte)(random.Next(variants) | (random.Next(StatefulLimits.PeerSuites.Count) << 4)), mutated);
             },
         };
     }

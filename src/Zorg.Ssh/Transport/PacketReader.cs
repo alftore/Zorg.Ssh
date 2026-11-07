@@ -101,12 +101,16 @@ internal sealed class PacketReader : IDisposable
         _buffer.AsSpan(_start - _lastPacketLength, _lastPacketLength).Clear();
         _lastPacketLength = 0;
 
-        if (_end - _start < 4)
+        // Encrypt-and-MAC needs a whole cipher block to decrypt the length. Every valid packet is at least that long,
+        // so waiting for it never waits for more than the peer must send anyway.
+        int lengthBlock = cipher.LengthBlockSize;
+        if (_end - _start < lengthBlock)
         {
-            await FillAsync(4, cancellationToken).ConfigureAwait(false);
+            await FillAsync(lengthBlock, cancellationToken).ConfigureAwait(false);
         }
 
-        uint packetLength = cipher.ReadPacketLength(_buffer.AsSpan(_start, 4), sequenceNumber);
+        // Every check on the length comes before the read or the buffer growth it would cause.
+        uint packetLength = cipher.ReadPacketLength(_buffer.AsSpan(_start, lengthBlock), sequenceNumber);
         if (packetLength < MinPacketLength || packetLength > (uint)_maxPacketLength)
         {
             throw new SshProtocolException("The peer sent a packet with an invalid length.");

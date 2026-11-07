@@ -378,6 +378,70 @@ internal static class FuzzCorpus
         return seeds;
     }
 
+    public const string EamCipher = "aes128-ctr";
+    public const string EamMac = "hmac-sha2-256";
+
+    private static readonly byte[] EamKey = [.. Enumerable.Range(0, 16).Select(i => (byte)(i * 5))];
+    private static readonly byte[] EamIv = [.. Enumerable.Range(0, 16).Select(i => (byte)(0xf0 + i))];
+    private static readonly byte[] EamMacKey = [.. Enumerable.Range(0, 32).Select(i => (byte)(i * 7))];
+
+    public static PacketCipher EamPacketCipher() => PacketCipherCatalog.Create(EamCipher, EamMac, EamKey, EamIv, EamMacKey);
+
+    /// <summary>
+    /// Encrypt-and-MAC packet streams with a fixed AES-128-CTR and HMAC-SHA-256 key, sequence numbers from 0. The first byte picks
+    /// the form: even is the bytes as they go on the wire, odd is plaintext that <see cref="SealEamStream"/> seals packet by packet.
+    /// The odd form gives mutated lengths and padding a valid MAC, so they get past the tag check to the checks behind it.
+    /// </summary>
+    public static IReadOnlyList<FuzzSeed> EamPackets()
+    {
+        List<byte[]> payloads = [KexInits()[0].Data, [2], new FuzzBlob().Byte(94).UInt32(5).String(new byte[40]).ToArray(), [21]];
+        List<FuzzSeed> seeds = [];
+        for (int count = 1; count <= payloads.Count; count++)
+        {
+            byte[] plain = [.. payloads.Take(count).SelectMany(EamPlain)];
+            seeds.Add(FuzzSeed.Binary("eam sealed " + count, [0, .. SealEamStream(plain)]));
+            seeds.Add(FuzzSeed.Binary("eam plain " + count, [1, .. plain]));
+        }
+
+        return seeds;
+    }
+
+    /// <summary>
+    /// Seals a plaintext stream with the reference implementation, one packet per length field, sequence numbers from 0. A length that
+    /// overruns the input takes what is left. The shape isn't checked, so every malformed packet still carries a valid MAC.
+    /// </summary>
+    public static byte[] SealEamStream(ReadOnlySpan<byte> plain)
+    {
+        List<byte> sealedBytes = [];
+        System.Numerics.BigInteger counter = new(EamIv, isUnsigned: true, isBigEndian: true);
+        uint sequence = 0;
+        while (plain.Length >= 4)
+        {
+            uint length = BinaryPrimitives.ReadUInt32BigEndian(plain);
+            int bodyLength = (int)Math.Min(length, (uint)(plain.Length - 4));
+            sealedBytes.AddRange(Crypto.ReferenceCiphers.SealCtrEam(EamKey, ref counter, System.Security.Cryptography.HashAlgorithmName.SHA256, EamMacKey, sequence++, length, plain.Slice(4, bodyLength)));
+            plain = plain[(4 + bodyLength)..];
+        }
+
+        sealedBytes.AddRange(plain.ToArray());
+        return [.. sealedBytes];
+    }
+
+    private static byte[] EamPlain(byte[] payload)
+    {
+        int padding = 16 - ((5 + payload.Length) % 16);
+        if (padding < 4)
+        {
+            padding += 16;
+        }
+
+        byte[] packet = new byte[5 + payload.Length + padding];
+        BinaryPrimitives.WriteUInt32BigEndian(packet, (uint)(1 + payload.Length + padding));
+        packet[4] = (byte)padding;
+        payload.CopyTo(packet, 5);
+        return packet;
+    }
+
     // ssh-agent.
 
     public static IReadOnlyList<FuzzSeed> AgentFrames()

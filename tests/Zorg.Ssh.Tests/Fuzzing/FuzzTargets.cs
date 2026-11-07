@@ -40,6 +40,7 @@ internal static class FuzzAllowedExceptions
     public const string Socks = "SocksHandshake.ReadRequestAsync";
     public const string PacketsPlain = "PacketReader (unencrypted)";
     public const string PacketsSealed = "PacketReader (ChaCha20-Poly1305)";
+    public const string PacketsEam = "PacketReader (AES-CTR, encrypt-and-MAC)";
     public const string Agent = "SshAgentConnection replies";
     public const string SftpServer = "SftpServerSession.DispatchAsync";
     public const string PublicKeyRequest = "ServerAuthenticator.ParsePublicKey";
@@ -76,7 +77,7 @@ internal static class FuzzAllowedExceptions
         Socks => [typeof(IOException)],
 
         // PacketReader: SshProtocolException for bad framing, SshConnectionException when the stream ends.
-        PacketsPlain or PacketsSealed => [typeof(SshProtocolException), typeof(SshConnectionException)],
+        PacketsPlain or PacketsSealed or PacketsEam => [typeof(SshProtocolException), typeof(SshConnectionException)],
 
         // SshAgentConnection: "all it sends is untrusted", every failure is an SshAgentException.
         Agent => [typeof(SshAgentException)],
@@ -115,6 +116,7 @@ internal static class FuzzTargets
         [FuzzAllowedExceptions.Socks] = 3,
         [FuzzAllowedExceptions.PacketsPlain] = 3,
         [FuzzAllowedExceptions.PacketsSealed] = 1,
+        [FuzzAllowedExceptions.PacketsEam] = 3,
         [FuzzAllowedExceptions.Agent] = 4,
         [FuzzAllowedExceptions.SftpServer] = 30,
         [FuzzAllowedExceptions.PublicKeyRequest] = 2,
@@ -138,6 +140,7 @@ internal static class FuzzTargets
         SocksTarget(),
         PacketsPlainTarget(),
         PacketsSealedTarget(),
+        PacketsEamTarget(),
         AgentTarget(),
         SftpServerTarget(),
         PublicKeyRequestTarget(),
@@ -571,6 +574,44 @@ internal static class FuzzTargets
         ReadOnlyMemory<byte> payload = reader.ReadPacketAsync(cipher, 0, CancellationToken.None).AsTask().GetAwaiter().GetResult();
         Require(payload.Length >= 1, "an empty payload was accepted");
         FuzzNotes.Reached("sealed packet opened");
+        return FuzzOutcome.Accepted;
+    }
+
+    private static FuzzTarget PacketsEamTarget() => Make(FuzzAllowedExceptions.PacketsEam, FuzzCorpus.EamPackets(), RunPacketsEam, 2000, t =>
+    {
+        t.MinAccepted = 0.01;
+        t.Slack = 1024 * 1024;
+        t.MinReasons = 3;
+    });
+
+    private static FuzzOutcome RunPacketsEam(byte[] input)
+    {
+        if (input.Length == 0)
+        {
+            return FuzzOutcome.Skipped;
+        }
+
+        // The length is encrypted, so every packet goes through the first-block decrypt before anything is read for it.
+        byte[] stream = (input[0] & 1) == 0 ? input[1..] : FuzzCorpus.SealEamStream(input.AsSpan(1));
+        using PacketCipher cipher = FuzzCorpus.EamPacketCipher();
+        using PacketReader reader = new(new FuzzStream(stream), 262144);
+        int packets = 0;
+        try
+        {
+            for (uint sequence = 0; sequence < 16; sequence++)
+            {
+                ReadOnlyMemory<byte> payload = reader.ReadPacketAsync(cipher, sequence, CancellationToken.None).AsTask().GetAwaiter().GetResult();
+                Require(payload.Length is >= 1 and <= 262144, "a packet payload has a bad length");
+                packets++;
+            }
+        }
+        catch (SshConnectionException) when (packets > 0)
+        {
+            // The stream ended after whole packets.
+        }
+
+        FuzzNotes.Reached((input[0] & 1) == 0 ? "as sent" : "self-sealed");
+        FuzzNotes.Reached("eam packets read: " + Math.Min(packets, 3));
         return FuzzOutcome.Accepted;
     }
 

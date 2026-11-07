@@ -51,7 +51,7 @@ internal sealed class ClientRig(Depth depth = Depth.Channel) : IDisposable
     private async Task<FuzzOutcome> RunAsync(byte[] input, StatefulNotes notes)
     {
         Stopwatch watch = Stopwatch.StartNew();
-        (_, List<FuzzOp> ops) = FuzzOpCodec.Decode(input);
+        (byte variant, List<FuzzOp> ops) = FuzzOpCodec.Decode(input);
         _inputs++;
         CaptureLoggerFactory logs = new();
         SshClientOptions options = new()
@@ -83,7 +83,9 @@ internal sealed class ClientRig(Depth depth = Depth.Channel) : IDisposable
             using CancellationTokenSource handshake = new(TimeSpan.FromSeconds(20));
             try
             {
-                peer = await StatefulPeer.StartAsync(peerStream, TransportHarness.ServerOptions(kex: ["curve25519-sha256"]), handshake.Token).ConfigureAwait(false);
+                (string suiteName, string[]? ciphers, string[]? macs) = StatefulLimits.PeerSuite(variant);
+                notes.Reached("cipher: " + suiteName);
+                peer = await StatefulPeer.StartAsync(peerStream, TransportHarness.ServerOptions(kex: ["curve25519-sha256"], ciphers: ciphers, macs: macs), handshake.Token).ConfigureAwait(false);
             }
             catch (Exception ex)
             {

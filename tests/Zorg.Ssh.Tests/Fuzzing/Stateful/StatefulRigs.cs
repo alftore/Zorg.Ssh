@@ -61,6 +61,23 @@ internal static class StatefulLimits
 
     public static readonly SshAlgorithms FastAlgorithms = new() { KeyExchange = ["curve25519-sha256"] };
 
+    /// <summary>
+    /// The cipher and MAC the peer offers, picked by the high bits of an input's variant byte, so that a run covers each packet
+    /// format: the defaults, encrypt-and-MAC with the length encrypted, encrypt-then-MAC, and both AEADs. The SUT keeps its defaults,
+    /// which include all of them, so the peer's single choice is what is negotiated. The low bits stay the rig's own.
+    /// </summary>
+    public static readonly IReadOnlyList<(string Name, string[]? Ciphers, string[]? Macs)> PeerSuites =
+    [
+        ("defaults", null, null),
+        ("aes128-ctr + hmac-sha2-256", ["aes128-ctr"], ["hmac-sha2-256"]),
+        ("aes256-ctr + hmac-sha2-512", ["aes256-ctr"], ["hmac-sha2-512"]),
+        ("aes256-ctr + hmac-sha2-512-etm", ["aes256-ctr"], ["hmac-sha2-512-etm@openssh.com"]),
+        ("chacha20-poly1305", ["chacha20-poly1305@openssh.com"], null),
+        ("aes128-gcm", ["aes128-gcm@openssh.com"], null),
+    ];
+
+    public static (string Name, string[]? Ciphers, string[]? Macs) PeerSuite(byte variant) => PeerSuites[(variant >> 4) % PeerSuites.Count];
+
     private static readonly Dictionary<byte, string> Names = new()
     {
         [1] = "DISCONNECT",
@@ -495,7 +512,9 @@ internal sealed class ServerRig : IDisposable
             using CancellationTokenSource handshake = new(TimeSpan.FromSeconds(20));
             try
             {
-                peer = await StatefulPeer.StartAsync(peerStream, TransportHarness.ClientOptions(kex: ["curve25519-sha256"]), handshake.Token).ConfigureAwait(false);
+                (string suiteName, string[]? ciphers, string[]? macs) = StatefulLimits.PeerSuite(variant);
+                notes.Reached("cipher: " + suiteName);
+                peer = await StatefulPeer.StartAsync(peerStream, TransportHarness.ClientOptions(kex: ["curve25519-sha256"], ciphers: ciphers, macs: macs), handshake.Token).ConfigureAwait(false);
             }
             catch (Exception ex)
             {

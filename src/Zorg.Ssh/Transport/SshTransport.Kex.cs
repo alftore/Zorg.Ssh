@@ -209,7 +209,9 @@ internal sealed partial class SshTransport
             negotiated.Kex,
             negotiated.HostKey,
             client ? negotiated.CipherClientToServer : negotiated.CipherServerToClient,
+            (client ? negotiated.MacClientToServer : negotiated.MacServerToClient) ?? "implicit",
             client ? negotiated.CipherServerToClient : negotiated.CipherClientToServer,
+            (client ? negotiated.MacServerToClient : negotiated.MacClientToServer) ?? "implicit",
             _strictKex);
 
         if (client)

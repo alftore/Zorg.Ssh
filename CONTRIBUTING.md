@@ -96,7 +96,7 @@ To add a stateful target, write valid sequences in `StatefulTargets.cs`, add the
 
 ## Coverage-guided fuzzing
 
-`tests/Zorg.Ssh.Fuzz` holds three libFuzzer targets for the wire decoders: `packet-reader` (identification line and packet framing), `kex-init` and `sftp-response`. SharpFuzz instruments `Zorg.Ssh.dll` in a container (Ubuntu, glibc), so nothing is installed on your machine.
+`tests/Zorg.Ssh.Fuzz` holds four libFuzzer targets for the wire decoders: `packet-reader` (identification line and packet framing), `packet-reader-ctr-eam` (framing through AES-CTR with encrypt-and-MAC, where the length is encrypted), `kex-init` and `sftp-response`. SharpFuzz instruments `Zorg.Ssh.dll` in a container (Ubuntu, glibc), so nothing is installed on your machine.
 
 ```
 scripts/fuzz.sh kex-init 300      # target, then seconds (default 60)

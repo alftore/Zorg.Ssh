@@ -14,6 +14,7 @@ internal static class SeedCorpus
     public static void Write(string directory)
     {
         WritePacketReaderSeeds(Path.Combine(directory, "packet-reader"));
+        WriteEamSeeds(Path.Combine(directory, "packet-reader-ctr-eam"));
         WriteKexInitSeeds(Path.Combine(directory, "kex-init"));
         WriteSftpSeeds(Path.Combine(directory, "sftp-response"));
     }
@@ -55,6 +56,21 @@ internal static class SeedCorpus
         Save(directory, "id-kexinit", Concat([0], id, Plain(kex, 8)));
         Save(directory, "packets", Concat([1], Plain(kex, 8), Plain([21], 10), Plain([5, 0, 0, 0, 12, 115, 115, 104, 45, 117, 115, 101, 114], 4)));
         Save(directory, "short-padding", Concat([1], Plain([21], 4)));
+    }
+
+    private static void WriteEamSeeds(string directory)
+    {
+        // The first byte picks the form: even is ciphertext, odd is plaintext the target seals. Padding is to 16 with the length field.
+        byte[] plain = Concat(Padded(KexInitSample().Encode()), Padded([21]), Padded([2, 0, 0, 0, 0]));
+        Save(directory, "plain", Concat([1], plain));
+        Save(directory, "sealed", Concat([0], Targets.SealEam(plain)));
+        Save(directory, "sealed-one", Concat([0], Targets.SealEam(Padded([21]))));
+    }
+
+    private static byte[] Padded(byte[] payload)
+    {
+        int padding = 16 - ((5 + payload.Length) % 16);
+        return Plain(payload, padding < 4 ? padding + 16 : padding);
     }
 
     private static KexInitMessage KexInitSample() => new()

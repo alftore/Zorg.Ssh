@@ -36,30 +36,31 @@ internal static class CipherSmoke
         using PacketCipher sender = PacketCipherCatalog.Create(cipherName, macName, key, iv, macKey);
         using PacketCipher receiver = PacketCipherCatalog.Create(cipherName, macName, key, iv, macKey);
 
-        const int BodyLength = 64;
+        // Encrypt-and-MAC pads the length field with the body, so its body is 4 bytes short of the blocks.
+        int bodyLength = sender.LengthExcludedFromPadding ? 64 : 60;
         const int PaddingLength = 7;
-        byte[] packet = new byte[4 + BodyLength + sender.TagLength];
-        BinaryPrimitives.WriteUInt32BigEndian(packet, BodyLength);
+        byte[] packet = new byte[4 + bodyLength + sender.TagLength];
+        BinaryPrimitives.WriteUInt32BigEndian(packet, (uint)bodyLength);
         packet[4] = PaddingLength;
-        for (int i = 5; i < 4 + BodyLength; i++)
+        for (int i = 5; i < 4 + bodyLength; i++)
         {
             packet[i] = (byte)i;
         }
 
-        byte[] plain = packet.AsSpan(4, BodyLength).ToArray();
+        byte[] plain = packet.AsSpan(4, bodyLength).ToArray();
 
         // Two packets, so the counters and sequence numbers have to stay in step.
         for (uint sequence = 0; sequence < 2; sequence++)
         {
             sender.Seal(packet, sequence);
-            if (packet.AsSpan(4, BodyLength).SequenceEqual(plain)
-                || receiver.ReadPacketLength(packet, sequence) != BodyLength)
+            if (packet.AsSpan(4, bodyLength).SequenceEqual(plain)
+                || receiver.ReadPacketLength(packet, sequence) != (uint)bodyLength)
             {
                 return false;
             }
 
             receiver.Open(packet, sequence);
-            if (!packet.AsSpan(4, BodyLength).SequenceEqual(plain))
+            if (!packet.AsSpan(4, bodyLength).SequenceEqual(plain))
             {
                 return false;
             }

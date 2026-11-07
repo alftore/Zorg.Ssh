@@ -20,7 +20,7 @@ internal static class Program
 
         if (args.Length < 1 || !Targets.TryGet(args[0], out ReadOnlySpanAction? target))
         {
-            Console.Error.WriteLine("Usage: Zorg.Ssh.Fuzz <packet-reader|kex-init|sftp-response> [input-file]");
+            Console.Error.WriteLine("Usage: Zorg.Ssh.Fuzz <packet-reader|packet-reader-ctr-eam|kex-init|sftp-response> [input-file]");
             Console.Error.WriteLine("       Zorg.Ssh.Fuzz --seed <directory>");
             return 2;
         }

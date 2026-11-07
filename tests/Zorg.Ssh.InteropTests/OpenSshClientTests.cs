@@ -29,6 +29,10 @@ public class OpenSshClientTests
         { "aes256-ctr", "hmac-sha2-256-etm@openssh.com" },
         { "aes128-ctr", "hmac-sha2-512-etm@openssh.com" },
         { "aes128-ctr", "hmac-sha2-256-etm@openssh.com" },
+        { "aes256-ctr", "hmac-sha2-512" },
+        { "aes256-ctr", "hmac-sha2-256" },
+        { "aes128-ctr", "hmac-sha2-512" },
+        { "aes128-ctr", "hmac-sha2-256" },
     };
 
     [InteropTheory]
@@ -59,6 +63,12 @@ public class OpenSshClientTests
     {
         string log = await RunAsync(["-o", $"Ciphers={cipher}", "-o", $"MACs={mac}"]);
         Assert.Contains($"cipher: {cipher}", log);
+        if (cipher.EndsWith("-ctr", StringComparison.Ordinal))
+        {
+            // ssh -v prints "kex: server->client cipher: aes128-ctr MAC: hmac-sha2-256 compression: none".
+            Assert.Contains($"cipher: {cipher} MAC: {mac} compression", log);
+            Assert.Contains("will use strict KEX ordering", log, StringComparison.Ordinal);
+        }
     }
 
     [InteropFact]

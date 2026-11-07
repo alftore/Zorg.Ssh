@@ -15,6 +15,8 @@ internal static class CipherHarness
     public const string Aes256Ctr = "aes256-ctr";
     public const string Sha256Etm = "hmac-sha2-256-etm@openssh.com";
     public const string Sha512Etm = "hmac-sha2-512-etm@openssh.com";
+    public const string Sha256Eam = "hmac-sha2-256";
+    public const string Sha512Eam = "hmac-sha2-512";
 
     /// <summary>Every cipher and MAC pairing the catalog can build.</summary>
     public static TheoryData<string, string?> AllSuites =>
@@ -76,7 +78,9 @@ internal static class CipherHarness
     /// <summary>Builds a plaintext packet as RFC 4253 section 6 lays it out, with room for the tag.</summary>
     public static byte[] Plain(PacketCipher cipher, int payloadLength, byte seed = 0x44)
     {
-        int padding = cipher.BlockSize - ((1 + payloadLength) % cipher.BlockSize);
+        // Encrypt-and-MAC pads the length field too, as OutgoingPacket.Frame does.
+        int covered = 1 + payloadLength + (cipher.LengthExcludedFromPadding ? 0 : 4);
+        int padding = cipher.BlockSize - (covered % cipher.BlockSize);
         if (padding < 4)
         {
             padding += cipher.BlockSize;

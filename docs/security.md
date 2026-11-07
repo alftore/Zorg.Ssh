@@ -46,7 +46,7 @@ Strict key exchange, the fix for Terrapin, is used whenever the peer supports it
 
 ## Algorithms
 
-The lists below are fixed, in preference order. **There's no public option to change them**, on the client or the server. To force an algorithm, set it on the other side, as [benchmarks.md](benchmarks.md) does with `sshd -o Ciphers=...`.
+The lists below are the defaults, in preference order, on the client and the server. `Algorithms` on `SshClientOptions` and `SshServerOptions` can narrow them, for example to meet a policy; a name the library doesn't implement is refused when you connect or start.
 
 Key exchange:
 
@@ -78,11 +78,24 @@ Ciphers, on a machine with AES hardware:
 
 Without AES hardware, `chacha20-poly1305@openssh.com` moves to the front.
 
-MACs, used only with the CTR ciphers: `hmac-sha2-512-etm@openssh.com`, then `hmac-sha2-256-etm@openssh.com`.
+MACs, used only with the CTR ciphers:
+
+1. `hmac-sha2-512-etm@openssh.com`
+2. `hmac-sha2-256-etm@openssh.com`
+3. `hmac-sha2-512`
+4. `hmac-sha2-256`
+
+The last two are encrypt-and-MAC (RFC 6668): the MAC covers the plaintext, and the packet length is encrypted with the body. They come after both EtM MACs, as in OpenSSH 10's client order, and with the default cipher order they're used only against a peer that has no AEAD cipher and no EtM MAC. Dropbear has never had an EtM MAC, and some appliances offer only these.
+
+Why they're acceptable:
+
+- With CTR, encrypt-and-MAC has no known attack. The Albrecht–Paterson–Watson plaintext recovery (2009) needs CBC, which isn't offered. Terrapin's authors (USENIX Security 2024) list CTR with encrypt-and-MAC as not affected, and strict key exchange is negotiated and enforced exactly as with the other ciphers.
+- HMAC-SHA-2 doesn't rely on SHA-2's collision resistance.
+- The length is the only value read before the MAC is checked, because the reader needs it to know how much to read. It's checked against the 256 KiB limit and the block shape from the first 16 bytes, before anything more is read or allocated, and a packet that fails its MAC is zeroed and ends the connection. Nothing else from the packet is acted on until the MAC passes, and the comparison is constant-time.
 
 Compression: `none` only.
 
-Not offered: `ssh-rsa` with SHA-1, `ssh-dss`, CBC ciphers, `diffie-hellman-*` key exchange and non-EtM MACs. A server that offers only those fails with `SshNegotiationException`.
+Not offered: `ssh-rsa` with SHA-1, `ssh-dss`, CBC ciphers, `diffie-hellman-*` key exchange and `hmac-sha1`. A server that offers only those fails with `SshNegotiationException`.
 
 BouncyCastle provides Ed25519, X25519, ML-KEM, sntrup761 and ChaCha20-Poly1305 where the .NET libraries don't. Its code hasn't been reviewed as part of this project. See [dependencies.md](dependencies.md).
 
