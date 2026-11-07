@@ -74,7 +74,7 @@ public sealed class KeepAliveInteropTests : IDisposable
         await using SshPeerContainer container = await StartAsync(peer);
         await using SshClient client = await SshClient.ConnectAsync(ClientOptions(container), TestContext.Current.CancellationToken);
 
-        SshCommandResult result = await client.ExecuteAsync("sleep 6; echo done", Ct);
+        SshCommandResult result = await client.ExecuteAsync("sleep 10; echo done", Ct);
 
         Assert.Equal("done\n", result.StandardOutput);
         int answered = client.Connection.KeepAlive!.ProbesAnswered;
