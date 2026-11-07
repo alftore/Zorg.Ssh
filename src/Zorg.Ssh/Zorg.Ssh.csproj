@@ -3,7 +3,7 @@
   <PropertyGroup>
     <Description>Async-first SSH client and server library for .NET.</Description>
     <PackageTags>ssh;sftp;openssh;async</PackageTags>
-    <!-- Only for source-generated LibraryImport stubs (file type checks, the Windows agent pipe). No unsafe code is written by hand. -->
+    <!-- Only for source-generated LibraryImport stubs (file type checks, Linux directory listings for the SFTP server, the Windows agent pipe). No unsafe code is written by hand. -->
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 

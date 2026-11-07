@@ -187,6 +187,14 @@ internal sealed class SftpServerPaths
         }
 
         int budget = MaxMoveScanEntries;
+        if (SftpServerLinux.IsSupported)
+        {
+            // .NET would decode a name that isn't UTF-8 with U+FFFD and then look for a path that isn't there, so a
+            // link with such a name, or anything below a directory with one, would go unchecked.
+            SftpServerLinux.ScanForClimbs(source.RealPath, target.Parts.Count, ref budget, static (stored, depth) => ClimbsOutOf(stored, depth, null));
+            return;
+        }
+
         ScanMoved(source.RealPath, target.Parts.Count, ref budget);
     }
 

@@ -24,10 +24,74 @@ internal sealed class SftpServerFile(FileStream stream, bool canRead, bool canWr
     public void Dispose() => Stream.Dispose();
 }
 
-/// <summary>A listing in progress. The operating system is read as batches are asked for, so nothing grows with the directory.</summary>
-internal sealed class SftpServerDirectory(IEnumerator<FileSystemInfo> entries, SftpAttributes self) : IDisposable
+/// <summary>An entry of a listing. <paramref name="RawName"/> holds the name's bytes when they aren't UTF-8, and is null otherwise.</summary>
+internal readonly record struct SftpServerListedEntry(string Name, byte[]? RawName, SftpAttributes Attributes);
+
+/// <summary>Reads a directory an entry at a time, without <c>.</c> and <c>..</c>. An entry that can't be looked at is left out.</summary>
+internal abstract class SftpServerListing : IDisposable
 {
-    public IEnumerator<FileSystemInfo> Entries { get; } = entries;
+    private static readonly EnumerationOptions ListingOptions = new()
+    {
+        AttributesToSkip = 0,
+        IgnoreInaccessible = true,
+        RecurseSubdirectories = false,
+        ReturnSpecialDirectories = false,
+    };
+
+    /// <summary>Gets a listing with nothing in it.</summary>
+    public static SftpServerListing Empty => new DotNetListing(null);
+
+    /// <summary>
+    /// Opens a directory to list it. On Linux it's read as bytes (<see cref="SftpServerLinux"/>), so a name that isn't
+    /// UTF-8 is listed as it is, with its own attributes. Elsewhere .NET reads it.
+    /// </summary>
+    public static SftpServerListing Open(string path) =>
+        SftpServerLinux.IsSupported ? SftpServerLinux.OpenListing(path) : OpenWithDotNet(path);
+
+    /// <summary>Opens a directory through .NET, which decodes each name with U+FFFD in place of bytes that aren't UTF-8.</summary>
+    internal static SftpServerListing OpenWithDotNet(string path) =>
+        new DotNetListing(new DirectoryInfo(path).EnumerateFileSystemInfos("*", ListingOptions).GetEnumerator());
+
+    public abstract bool TryNext(out SftpServerListedEntry entry);
+
+    public void Dispose()
+    {
+        Dispose(true);
+        GC.SuppressFinalize(this);
+    }
+
+    protected abstract void Dispose(bool disposing);
+
+    private sealed class DotNetListing(IEnumerator<FileSystemInfo>? entries) : SftpServerListing
+    {
+        public override bool TryNext(out SftpServerListedEntry entry)
+        {
+            while (entries is not null && entries.MoveNext())
+            {
+                FileSystemInfo info = entries.Current;
+                try
+                {
+                    entry = new SftpServerListedEntry(info.Name, null, SftpServerAttributes.FromInfo(info));
+                    return true;
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    // It went away, or can't be read. Neither stops the rest of the listing.
+                }
+            }
+
+            entry = default;
+            return false;
+        }
+
+        protected override void Dispose(bool disposing) => entries?.Dispose();
+    }
+}
+
+/// <summary>A listing in progress. The operating system is read as batches are asked for, so nothing grows with the directory.</summary>
+internal sealed class SftpServerDirectory(SftpServerListing entries, SftpAttributes self) : IDisposable
+{
+    public SftpServerListing Entries { get; } = entries;
 
     /// <summary>Gets what <c>.</c> and <c>..</c> report. Using the directory itself for both means the root's real parent is never looked at.</summary>
     public SftpAttributes Self { get; } = self;

@@ -45,14 +45,6 @@ internal sealed partial class SftpServerSession : IAsyncDisposable
     /// </summary>
     internal static readonly SemaphoreSlim NamespaceGate = new(1, 1);
 
-    private static readonly EnumerationOptions ListingOptions = new()
-    {
-        AttributesToSkip = 0,
-        IgnoreInaccessible = true,
-        RecurseSubdirectories = false,
-        ReturnSpecialDirectories = false,
-    };
-
 #pragma warning disable CA2213 // The streams belong to the caller.
     private readonly Stream _input;
     private readonly Stream _output;
@@ -700,7 +692,7 @@ internal sealed partial class SftpServerSession : IAsyncDisposable
             throw Refuse(SftpStatusCode.Failure);
         }
 
-        IEnumerator<FileSystemInfo> entries = new DirectoryInfo(resolved.RealPath).EnumerateFileSystemInfos("*", ListingOptions).GetEnumerator();
+        SftpServerListing entries = SftpServerListing.Open(resolved.RealPath);
         try
         {
             if (_paths.Resolve(path, SftpServerFinalLink.Follow).RealPath != resolved.RealPath)
@@ -737,21 +729,17 @@ internal sealed partial class SftpServerSession : IAsyncDisposable
             }
 
             int limit = _maxPacketLength - ListingMargin;
-            while (count < (uint)_options.MaxListingBatch && writer.Length < limit && directory.Entries.MoveNext())
+            while (count < (uint)_options.MaxListingBatch && writer.Length < limit && directory.Entries.TryNext(out SftpServerListedEntry entry))
             {
-                FileSystemInfo entry = directory.Entries.Current;
-                SftpAttributes attributes;
-                try
+                if (entry.RawName is { } raw)
                 {
-                    attributes = SftpServerAttributes.FromInfo(entry);
+                    WriteRawName(ref writer, raw, entry.Attributes);
                 }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                else
                 {
-                    // It went away, or can't be read. Neither stops the rest of the listing.
-                    continue;
+                    WriteName(ref writer, entry.Name, entry.Attributes);
                 }
 
-                WriteName(ref writer, entry.Name, attributes);
                 count++;
             }
 
@@ -774,6 +762,30 @@ internal sealed partial class SftpServerSession : IAsyncDisposable
     {
         WriteFileName(ref writer, name);
         WriteFileName(ref writer, SftpServerAttributes.LongName(name, attributes));
+        attributes.WriteWithFileType(ref writer);
+    }
+
+    /// <summary>
+    /// Writes a name that isn't UTF-8 as the bytes the file system holds, in the name and the long name, as OpenSSH's
+    /// <c>sftp-server</c> does. A client can't use it as a path, and our client reports it with
+    /// <see cref="SftpEntry.HasValidName"/> false, but it isn't mistaken for another entry.
+    /// </summary>
+    private static void WriteRawName(ref SshWriter writer, byte[] name, SftpAttributes attributes)
+    {
+        writer.WriteBinary(name);
+        string prefix = SftpServerAttributes.LongName(string.Empty, attributes);
+        byte[] longName = ArrayPool<byte>.Shared.Rent(Encoding.UTF8.GetByteCount(prefix) + name.Length);
+        try
+        {
+            int length = Encoding.UTF8.GetBytes(prefix, longName);
+            name.CopyTo(longName.AsSpan(length));
+            writer.WriteBinary(longName.AsSpan(0, length + name.Length));
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(longName);
+        }
+
         attributes.WriteWithFileType(ref writer);
     }
 
