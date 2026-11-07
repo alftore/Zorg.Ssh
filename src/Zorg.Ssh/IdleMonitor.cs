@@ -16,6 +16,7 @@ internal sealed class IdleMonitor
     private readonly TimeSpan _timeout;
     private readonly TimeProvider _time;
     private int _open;
+    private bool _expired;
     private long _idleSince;
     private TaskCompletionSource _changed = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -26,22 +27,34 @@ internal sealed class IdleMonitor
         _idleSince = time.GetTimestamp();
     }
 
-    /// <summary>A channel was opened. This stops the clock.</summary>
-    public void ChannelOpened()
+    /// <summary>
+    /// A channel was opened. This stops the clock. Returns false once the idle decision has been made: the channel
+    /// is then not counted, and the caller must refuse it.
+    /// </summary>
+    public bool ChannelOpened()
     {
         lock (_lock)
         {
+            if (_expired)
+            {
+                return false;
+            }
+
             _open++;
             Signal();
+            return true;
         }
     }
 
-    /// <summary>A channel ended. When it was the last, the clock restarts from now.</summary>
-    public void ChannelClosed()
+    /// <summary>
+    /// A channel ended. When it was the last, the clock restarts from now, unless <paramref name="restartClock"/> is
+    /// false. A refused open is no use of the connection, so it passes false: refused opens can't keep a connection alive.
+    /// </summary>
+    public void ChannelClosed(bool restartClock = true)
     {
         lock (_lock)
         {
-            if (_open > 0 && --_open == 0)
+            if (_open > 0 && --_open == 0 && restartClock)
             {
                 _idleSince = _time.GetTimestamp();
             }
@@ -69,6 +82,8 @@ internal sealed class IdleMonitor
                     remaining = _timeout - _time.GetElapsedTime(_idleSince);
                     if (remaining <= TimeSpan.Zero)
                     {
+                        // Decided under the same lock that counts opens, so no open can be counted after this.
+                        _expired = true;
                         return;
                     }
                 }

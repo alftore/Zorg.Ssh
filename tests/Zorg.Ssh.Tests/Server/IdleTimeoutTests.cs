@@ -85,6 +85,62 @@ public sealed class IdleTimeoutTests : IDisposable
         await WaitForAsync(() => _logs.Contains("Closed a connection"));
     }
 
+    // A refused open is no use of the connection: it must not restart the clock, or a client could hold an unused connection for ever.
+    [Fact]
+    public async Task A_refused_direct_tcpip_open_does_not_restart_the_idle_clock()
+    {
+        await using SshServer server = await StartAsync(Timeout10, denyDirectTcp: true);
+        await using SshClient client = await ConnectAsync(server);
+        await _time.WaitForTimerAsync(0);
+
+        _time.Advance(TimeSpan.FromMinutes(9));
+        await Assert.ThrowsAsync<SshException>(() => client.OpenTcpStreamAsync("127.0.0.1", 9, Ct));
+
+        _time.Advance(TimeSpan.FromMinutes(1));
+        await WaitForAsync(() => _logs.Contains("Closed a connection"));
+    }
+
+    // The idle decision and the count of opens are one step: an open after the decision is refused, not counted.
+    [Fact]
+    public async Task A_channel_opened_after_the_idle_decision_is_not_counted()
+    {
+        FixedTime time = new();
+        IdleMonitor monitor = new(Timeout10, time);
+        time.Now = Timeout10.Ticks;
+
+        await monitor.WaitForIdleAsync(Ct).WaitAsync(Limit, Ct);
+
+        Assert.False(monitor.ChannelOpened());
+    }
+
+    [Fact]
+    public async Task A_channel_opened_before_the_idle_decision_keeps_the_connection()
+    {
+        FixedTime time = new();
+        IdleMonitor monitor = new(Timeout10, time);
+        time.Now = Timeout10.Ticks;
+
+        Assert.True(monitor.ChannelOpened());
+        Task waiting = monitor.WaitForIdleAsync(Ct);
+        await Task.Delay(100, Ct);
+        Assert.False(waiting.IsCompleted);
+
+        // Closing without a restart leaves the old deadline, which has passed.
+        monitor.ChannelClosed(restartClock: false);
+        await waiting.WaitAsync(Limit, Ct);
+        Assert.False(monitor.ChannelOpened());
+    }
+
+    /// <summary>A clock that is only read, never waited on.</summary>
+    private sealed class FixedTime : TimeProvider
+    {
+        public long Now { get; set; }
+
+        public override long TimestampFrequency => TimeSpan.TicksPerSecond;
+
+        public override long GetTimestamp() => Now;
+    }
+
     [Theory]
     [InlineData(0)]
     [InlineData(-5)]
@@ -105,7 +161,7 @@ public sealed class IdleTimeoutTests : IDisposable
         Assert.Equal(0, _time.TimersCreated);
     }
 
-    private Task<SshServer> StartAsync(TimeSpan? idle) => SshServer.StartWithClockAsync(
+    private Task<SshServer> StartAsync(TimeSpan? idle, bool denyDirectTcp = false) => SshServer.StartWithClockAsync(
         new SshServerOptions
         {
             HostKeys = [_hostKey],
@@ -121,6 +177,7 @@ public sealed class IdleTimeoutTests : IDisposable
                 return 0;
             },
             IdleTimeout = idle,
+            DirectTcpHandler = denyDirectTcp ? (_, _) => ValueTask.FromResult(SshForwardDecision.Deny) : null,
             LoggerFactory = _logs,
         },
         _time,
