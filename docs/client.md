@@ -49,9 +49,15 @@ SshClientOptions options = new()
 | `ConnectTimeout` | 30 seconds | One limit for TCP connect, key exchange and login together. |
 | `KeepAliveInterval` | 5 minutes | How long the connection can be silent before a probe goes out. `TimeSpan.Zero` turns it off. See [Keepalive](#keepalive). |
 | `KeepAliveCountMax` | 3 | How many more silent intervals end the connection. |
+| `Algorithms` | `SshAlgorithms.Default` | The algorithms to offer. See below. |
 | `MaxCommandOutputBytes` | 64 MiB | The most `ExecuteAsync` keeps per stream before it fails. |
-| `BannerHandler` | none | Receives the server's login banner. The server chooses that text. |
+| `JumpHost` | none | A connected `SshClient` to reach this host through, as `ssh -J` does. See [Through a jump host](#through-a-jump-host). |
+| `MaxForwardedConnections` | 64 | The most connections each forward carries at once. Past it, a forward refuses new ones until one ends. |
+| `SocksHandshakeTimeout` | 10 seconds | The time a client of `ForwardDynamicPortAsync` has to finish its SOCKS handshake. |
+| `BannerHandler` | none | Receives the server's login banner. The server chooses that text. If it throws, the login stops. |
 | `LoggerFactory` | none | A standard `ILoggerFactory`. Secrets aren't logged. |
+
+`SshClientOptions` is a record, so `with` makes a changed copy, for example of what `FromConfig` returns. Its `ToString` shows only the host, port and user name, so logging the options can't leak a credential.
 
 `Algorithms` narrows the algorithm lists, for example to meet a policy. The defaults need no tuning, and [security.md](security.md#algorithms) lists them. A name that isn't supported throws `ArgumentException` when you connect. Against a server with no AEAD cipher and no EtM MAC, such as Dropbear or some appliances, the client uses AES-CTR with `hmac-sha2-512` or `hmac-sha2-256` (encrypt-and-MAC), which security.md explains.
 
@@ -252,7 +258,7 @@ SshClientOptions options = new()
 
 - If nothing arrives for one interval, the client sends a `keepalive@openssh.com` request. Any packet counts as an answer, so a busy connection sends no probes. A server that doesn't know global requests can answer `UNIMPLEMENTED`, and that counts too.
 - Only one probe is out at a time. After it, `KeepAliveCountMax` more silent intervals end the connection. With the defaults that's 20 minutes of silence. Set a shorter interval to notice sooner, at the cost of dropping a connection over a shorter network break. The default is the one Debian's OpenSSH uses for `BatchMode`, because upstream OpenSSH leaves it off and relies on TCP keepalive, which can't see a peer that stops reading.
-- A server that keeps sending but has stopped reading is never silent. So one socket write that doesn't finish within the interval times the count also ends the connection. With the defaults that's 90 seconds, or up to one interval more.
+- A server that keeps sending but has stopped reading is never silent. So one socket write that doesn't finish within the interval times the count also ends the connection. With the defaults that's 15 minutes, or up to one interval more.
 - No probe goes out during a rekey, because nothing but the rekey can. Silence still counts. A live rekey sends packets, and each one restarts the count.
 - The connection fails with `SshConnectionException`, and everything waiting on it wakes: commands, stream reads and writes, SFTP calls and forwards. Connect again to continue.
 - `TimeSpan.Zero` turns all of this off. The interval can be 1 second to 1 day, and the count 1 to 1000.
