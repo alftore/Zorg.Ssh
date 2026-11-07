@@ -124,6 +124,7 @@ It also opens a real connection: an in-memory client and server, a command, an S
 - **Public API changes** update `src/Zorg.Ssh/PublicAPI.Unshipped.txt`. The build fails otherwise.
 - **BouncyCastle stays internal.** Its types never appear in the public API.
 - **Vertical slices.** Tests and docs land in the same commit as the code.
+- **Tests listen on loopback only** (`IPAddress.Loopback`, never `Any`), because anything wider prompts the Windows firewall. To test several source addresses, bind the client to 127.0.0.x and connect to 127.0.0.1. `ListenAddressGuardTests` enforces this.
 - **New packages** go through the review in `docs/dependencies.md`.
 - **Legacy algorithms** live behind `SshAlgorithms.LegacyInsecure`, and weak-crypto analyzer suppressions stay in those files, with a reason.
 

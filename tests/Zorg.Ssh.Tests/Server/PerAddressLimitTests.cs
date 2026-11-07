@@ -189,7 +189,7 @@ public sealed class PerAddressLimitTests : IDisposable
     private SshServerOptions Options(int perAddress = 5, TimeSpan? grace = null) => new()
     {
         HostKeys = [_hostKey],
-        Address = IPAddress.Any,
+        Address = IPAddress.Loopback,
         PasswordHandler = (r, _) => ValueTask.FromResult(r.Password == "pw" ? SshAuthDecision.Accept : SshAuthDecision.Reject),
         SessionHandler = (_, _) => Task.FromResult(0),
         MaxUnauthenticatedPerAddress = perAddress,
@@ -209,7 +209,9 @@ public sealed class PerAddressLimitTests : IDisposable
     {
         TcpClient socket = new(new IPEndPoint(source, 0));
         _sockets.Add(socket);
-        await socket.ConnectAsync(source, port, Ct);
+
+        // The source is any 127.0.0.x, which is loopback on Windows and Linux. The server listens on 127.0.0.1 only.
+        await socket.ConnectAsync(IPAddress.Loopback, port, Ct);
         return socket;
     }
 

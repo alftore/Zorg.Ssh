@@ -131,6 +131,9 @@ internal sealed partial class SshTransport : IAsyncDisposable
     /// </summary>
     public Action<uint>? UnimplementedHandler { get; set; }
 
+    /// <summary>Gets or sets a hearer of every UNIMPLEMENTED in any phase. Only for tests that script a peer through the login.</summary>
+    internal Action<uint>? UnimplementedObserver { get; set; }
+
     /// <summary>Gets the sequence number of the last packet received.</summary>
     internal uint LastReceivedSequence => _lastReceivedSequence;
 
@@ -486,7 +489,14 @@ internal sealed partial class SshTransport : IAsyncDisposable
                     // Malformed ones stay ignored, as they always were: there's nothing to act on.
                     if (payload.Length >= 5)
                     {
-                        UnimplementedHandler?.Invoke(BinaryPrimitives.ReadUInt32BigEndian(payload.Span[1..]));
+                        uint rejected = BinaryPrimitives.ReadUInt32BigEndian(payload.Span[1..]);
+                        UnimplementedObserver?.Invoke(rejected);
+
+                        // It can complete a global request, so only once connected (MessagePolicy says why it is also legal during a rekey).
+                        if (_phase == TransportPhase.Connected)
+                        {
+                            UnimplementedHandler?.Invoke(rejected);
+                        }
                     }
 
                     return null;

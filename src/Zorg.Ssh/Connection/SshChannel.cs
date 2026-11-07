@@ -186,7 +186,17 @@ internal sealed class SshChannel : IAsyncDisposable
             while (!data.IsEmpty)
             {
                 int chunk = await ReserveWindowAsync(data.Length, cancellationToken).ConfigureAwait(false);
-                await SendDataAsync(data[..chunk], extendedType, cancellationToken).ConfigureAwait(false);
+                try
+                {
+                    await SendDataAsync(data[..chunk], extendedType, cancellationToken).ConfigureAwait(false);
+                }
+                catch
+                {
+                    // The packet never reached the queue, and the peer still counts this credit as unused.
+                    ReturnWindow(chunk);
+                    throw;
+                }
+
                 data = data[chunk..];
             }
         }
@@ -285,6 +295,7 @@ internal sealed class SshChannel : IAsyncDisposable
             try
             {
                 bool eof;
+                TaskCompletionSource? window;
                 lock (_gate)
                 {
                     if (_closeSent && !_closeOwed)
@@ -295,7 +306,12 @@ internal sealed class SshChannel : IAsyncDisposable
                     _closeSent = true;
                     _closeOwed = true;
                     eof = _eofOwed;
+                    window = _windowWaiter;
+                    _windowWaiter = null;
                 }
+
+                // A writer parked in a zero window finds the channel closed now, without waiting for the peer.
+                window?.TrySetResult();
 
                 if (eof)
                 {
@@ -370,6 +386,23 @@ internal sealed class SshChannel : IAsyncDisposable
     /// <summary>Answers a request taken from <see cref="Requests"/>.</summary>
     public ValueTask ReplyAsync(bool success, CancellationToken cancellationToken) =>
         SendOrderedAsync(SimpleMessage(success ? MessageNumber.ChannelSuccess : MessageNumber.ChannelFailure), cancellationToken);
+
+    /// <summary>
+    /// Gives back window reserved for a packet that was never queued. It isn't a WINDOW_ADJUST from the peer: it only
+    /// restores what the peer granted, so the overflow check doesn't apply.
+    /// </summary>
+    private void ReturnWindow(int bytes)
+    {
+        TaskCompletionSource? waiter;
+        lock (_gate)
+        {
+            _sendWindow += bytes;
+            waiter = _windowWaiter;
+            _windowWaiter = null;
+        }
+
+        waiter?.TrySetResult();
+    }
 
     public void OnWindowAdjust(uint bytes)
     {

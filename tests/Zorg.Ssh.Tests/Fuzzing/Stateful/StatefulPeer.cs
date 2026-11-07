@@ -63,7 +63,7 @@ internal sealed class StatefulPeer : IAsyncDisposable
         StatefulPeer peer = new(transport, stream);
 
         // The transport answers UNIMPLEMENTED itself and never hands it up, so the peer listens for it here. It is delivered like any other message.
-        transport.UnimplementedHandler = sequence => peer.Deliver(MessageNumber.Unimplemented, [MessageNumber.Unimplemented, (byte)(sequence >> 24), (byte)(sequence >> 16), (byte)(sequence >> 8), (byte)sequence]);
+        transport.UnimplementedObserver = sequence => peer.Deliver(MessageNumber.Unimplemented, [MessageNumber.Unimplemented, (byte)(sequence >> 24), (byte)(sequence >> 16), (byte)(sequence >> 8), (byte)sequence]);
         peer._loop = Task.Run(peer.ReceiveLoopAsync, CancellationToken.None);
         return peer;
     }

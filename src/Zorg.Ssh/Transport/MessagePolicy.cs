@@ -63,6 +63,9 @@ internal static class MessagePolicy
         return message switch
         {
             MessageNumber.Disconnect => MessageDecision.Handle,
+            // UNIMPLEMENTED may answer a global request, also during the peer's key exchange, by design: the peer may
+            // be answering a request that reached it before our KEXINIT. The transport calls its handler only in
+            // the Connected phase, so it can't reach anything while the user is still being authenticated.
             MessageNumber.Ignore or MessageNumber.Unimplemented or MessageNumber.Debug =>
                 Allow(!strictInitial),
             MessageNumber.ServiceRequest => Allow(server && quiet && context.Phase == TransportPhase.AwaitService),

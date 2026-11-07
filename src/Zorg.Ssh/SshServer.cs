@@ -492,9 +492,19 @@ public sealed partial class SshServer : IAsyncDisposable
             {
                 await foreach (IncomingChannelOpen open in connection.IncomingChannels.ReadAllAsync(ended.Token).ConfigureAwait(false))
                 {
-                    idle?.ChannelOpened();
+                    if (idle is not null && !idle.ChannelOpened())
+                    {
+                        // The idle decision was made first. The connection is closing, so this open isn't served.
+                        sessions.Add(Task.Run(() => RefuseAfterIdleAsync(connection, open), CancellationToken.None));
+                        continue;
+                    }
+
                     sessions.Add(open.Channel is { } channel
-                        ? Task.Run(() => RunCountedAsync(idle, () => ServeSessionAsync(connection, channel, principal)), CancellationToken.None)
+                        ? Task.Run(() => RunCountedAsync(idle, async () =>
+                        {
+                            await ServeSessionAsync(connection, channel, principal).ConfigureAwait(false);
+                            return true;
+                        }), CancellationToken.None)
                         : Task.Run(() => RunCountedAsync(idle, () => ServeDirectTcpAsync(connection, open, principal)), CancellationToken.None));
                     sessions.RemoveAll(static s => s.IsCompleted);
                 }
@@ -514,15 +524,41 @@ public sealed partial class SshServer : IAsyncDisposable
     }
 
     /// <summary>Runs one channel's work and tells the idle clock when it ends, however it ends.</summary>
-    private static async Task RunCountedAsync(IdleMonitor? idle, Func<Task> work)
+    /// <remarks>The work returns false if the channel was refused, which doesn't restart the idle clock.</remarks>
+    private static async Task RunCountedAsync(IdleMonitor? idle, Func<Task<bool>> work)
     {
+        bool served = false;
         try
         {
-            await work().ConfigureAwait(false);
+            served = await work().ConfigureAwait(false);
         }
         finally
         {
-            idle?.ChannelClosed();
+            idle?.ChannelClosed(restartClock: served);
+        }
+    }
+
+    /// <summary>Ends an open that arrived after the connection was judged idle: a session is closed, a direct-tcpip open refused.</summary>
+    private async Task RefuseAfterIdleAsync(SshConnection connection, IncomingChannelOpen open)
+    {
+        try
+        {
+            if (open.Channel is { } channel)
+            {
+                await channel.DisposeAsync().ConfigureAwait(false);
+            }
+            else
+            {
+                await connection.RefuseIncomingAsync(open, SshConnection.OpenFailureResourceShortage, "connection closing", _stop.Token).ConfigureAwait(false);
+            }
+        }
+        catch (Exception ex) when (ex is SshException or OperationCanceledException or IOException or ObjectDisposedException)
+        {
+            LogConnectionEnded(_logger, ex);
+        }
+        finally
+        {
+            connection.ReleaseIncomingSession();
         }
     }
 
@@ -551,16 +587,18 @@ public sealed partial class SshServer : IAsyncDisposable
     /// <summary>
     /// Owns one direct-tcpip connection from start to end, like <see cref="ServeSessionAsync"/>. The client hears
     /// the answer only after the handler and the connect, so a refusal is a refused channel, not a closed one.
+    /// Returns whether the open was accepted: a refused one is no use of the connection, so it doesn't restart the idle clock.
     /// </summary>
-    private async Task ServeDirectTcpAsync(SshConnection connection, IncomingChannelOpen open, SshPrincipal principal)
+    private async Task<bool> ServeDirectTcpAsync(SshConnection connection, IncomingChannelOpen open, SshPrincipal principal)
     {
+        bool accepted = false;
         try
         {
             (Socket? target, int refusal) = await ConnectDirectTcpAsync(open, principal).ConfigureAwait(false);
             if (target is null)
             {
                 await connection.RefuseIncomingAsync(open, refusal, "refused", _stop.Token).ConfigureAwait(false);
-                return;
+                return false;
             }
 
             SshChannel channel;
@@ -574,6 +612,7 @@ public sealed partial class SshServer : IAsyncDisposable
                 throw;
             }
 
+            accepted = true;
             await TcpRelay.RunAsync(channel, target, _stop.Token).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is SshException or OperationCanceledException or IOException or SocketException or ObjectDisposedException)
@@ -584,6 +623,8 @@ public sealed partial class SshServer : IAsyncDisposable
         {
             connection.ReleaseIncomingSession();
         }
+
+        return accepted;
     }
 
     /// <summary>Asks the handler, and connects if it said yes. Without a socket, the second value is the reason to refuse with.</summary>
