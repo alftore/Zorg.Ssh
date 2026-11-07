@@ -14,7 +14,7 @@ namespace Zorg.Ssh;
 /// }
 /// </code>
 /// </example>
-public class SshAgentException : SshException
+public sealed class SshAgentException : SshException
 {
     /// <summary>Creates an exception with a default message.</summary>
     public SshAgentException()

@@ -27,12 +27,13 @@ Zorg.Ssh.Sftp.SftpClient.CreateSymbolicLinkAsync(string! linkPath, string! targe
 Zorg.Ssh.Sftp.SftpClient.DeleteDirectoryAsync(string! path, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
 Zorg.Ssh.Sftp.SftpClient.DeleteFileAsync(string! path, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
 Zorg.Ssh.Sftp.SftpClient.DisposeAsync() -> System.Threading.Tasks.ValueTask
-Zorg.Ssh.Sftp.SftpClient.DownloadDirectoryAsync(string! remotePath, string! localDirectory, long maxTotalBytes = 9223372036854775807, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+Zorg.Ssh.Sftp.SftpClient.DownloadDirectoryAsync(string! remotePath, string! localDirectory, long maxTotalBytes, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
 Zorg.Ssh.Sftp.SftpClient.DownloadFileAsync(string! remotePath, System.IO.Stream! destination, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
 Zorg.Ssh.Sftp.SftpClient.ExistsAsync(string! path, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<bool>!
-Zorg.Ssh.Sftp.SftpClient.GetAttributesAsync(string! path, bool followSymbolicLinks = true, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Zorg.Ssh.Sftp.SftpAttributes!>!
+Zorg.Ssh.Sftp.SftpClient.GetAttributesAsync(string! path, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Zorg.Ssh.Sftp.SftpAttributes!>!
 Zorg.Ssh.Sftp.SftpClient.GetFileSystemInfoAsync(string! path, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Zorg.Ssh.Sftp.SftpFileSystemInfo!>!
 Zorg.Ssh.Sftp.SftpClient.GetFullPathAsync(string! path, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<string!>!
+Zorg.Ssh.Sftp.SftpClient.GetLinkAttributesAsync(string! path, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Zorg.Ssh.Sftp.SftpAttributes!>!
 Zorg.Ssh.Sftp.SftpClient.ListDirectoryAsync(string! path, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Collections.Generic.IAsyncEnumerable<Zorg.Ssh.Sftp.SftpEntry!>!
 Zorg.Ssh.Sftp.SftpClient.OpenAsync(string! path, System.IO.FileMode mode = System.IO.FileMode.Open, System.IO.FileAccess access = System.IO.FileAccess.Read, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Zorg.Ssh.Sftp.SftpFile!>!
 Zorg.Ssh.Sftp.SftpClient.ReadAllBytesAsync(string! path, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<byte[]!>!
@@ -168,8 +169,9 @@ Zorg.Ssh.SshClient
 Zorg.Ssh.SshClient.DisposeAsync() -> System.Threading.Tasks.ValueTask
 Zorg.Ssh.SshClient.ExecuteAsync(string! command, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<Zorg.Ssh.SshCommandResult!>!
 Zorg.Ssh.SshClient.ExecuteAsync(string! command, Zorg.Ssh.SshProcessOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Zorg.Ssh.SshCommandResult!>!
-Zorg.Ssh.SshClient.ForwardDynamicPortAsync(System.Net.IPEndPoint? localEndPoint = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Zorg.Ssh.SshForward!>!
-Zorg.Ssh.SshClient.ForwardLocalPortAsync(System.Net.IPEndPoint? localEndPoint, string! remoteHost, int remotePort, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Zorg.Ssh.SshForward!>!
+Zorg.Ssh.SshClient.ForwardDynamicPortAsync(System.Net.IPEndPoint? localEndPoint = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Zorg.Ssh.SshLocalForward!>!
+Zorg.Ssh.SshClient.ForwardLocalPortAsync(string! remoteHost, int remotePort, System.Net.IPEndPoint? localEndPoint = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Zorg.Ssh.SshLocalForward!>!
+Zorg.Ssh.SshClient.ForwardLocalPortAsync(string! remoteHost, int remotePort, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<Zorg.Ssh.SshLocalForward!>!
 Zorg.Ssh.SshClient.ForwardRemotePortAsync(string! remoteAddress, int remotePort, string! localHost, int localPort, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Zorg.Ssh.SshRemoteForward!>!
 Zorg.Ssh.SshClient.OpenSftpAsync(System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<Zorg.Ssh.Sftp.SftpClient!>!
 Zorg.Ssh.SshClient.OpenSftpAsync(Zorg.Ssh.Sftp.SftpClientOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Zorg.Ssh.Sftp.SftpClient!>!
@@ -248,21 +250,33 @@ Zorg.Ssh.SshDirectTcpRequest.Port.init -> void
 Zorg.Ssh.SshDirectTcpRequest.Principal.get -> Zorg.Ssh.SshPrincipal!
 Zorg.Ssh.SshDirectTcpRequest.Principal.init -> void
 Zorg.Ssh.SshDirectTcpRequest.SshDirectTcpRequest() -> void
+Zorg.Ssh.SshDisconnectReason
+Zorg.Ssh.SshDisconnectReason.AuthCancelledByUser = 13 -> Zorg.Ssh.SshDisconnectReason
+Zorg.Ssh.SshDisconnectReason.ByApplication = 11 -> Zorg.Ssh.SshDisconnectReason
+Zorg.Ssh.SshDisconnectReason.CompressionError = 6 -> Zorg.Ssh.SshDisconnectReason
+Zorg.Ssh.SshDisconnectReason.ConnectionLost = 10 -> Zorg.Ssh.SshDisconnectReason
+Zorg.Ssh.SshDisconnectReason.HostKeyNotVerifiable = 9 -> Zorg.Ssh.SshDisconnectReason
+Zorg.Ssh.SshDisconnectReason.HostNotAllowedToConnect = 1 -> Zorg.Ssh.SshDisconnectReason
+Zorg.Ssh.SshDisconnectReason.IllegalUserName = 15 -> Zorg.Ssh.SshDisconnectReason
+Zorg.Ssh.SshDisconnectReason.KeyExchangeFailed = 3 -> Zorg.Ssh.SshDisconnectReason
+Zorg.Ssh.SshDisconnectReason.MacError = 5 -> Zorg.Ssh.SshDisconnectReason
+Zorg.Ssh.SshDisconnectReason.NoMoreAuthMethodsAvailable = 14 -> Zorg.Ssh.SshDisconnectReason
+Zorg.Ssh.SshDisconnectReason.None = 0 -> Zorg.Ssh.SshDisconnectReason
+Zorg.Ssh.SshDisconnectReason.ProtocolError = 2 -> Zorg.Ssh.SshDisconnectReason
+Zorg.Ssh.SshDisconnectReason.ProtocolVersionNotSupported = 8 -> Zorg.Ssh.SshDisconnectReason
+Zorg.Ssh.SshDisconnectReason.ServiceNotAvailable = 7 -> Zorg.Ssh.SshDisconnectReason
+Zorg.Ssh.SshDisconnectReason.TooManyConnections = 12 -> Zorg.Ssh.SshDisconnectReason
 Zorg.Ssh.SshDisconnectedException
 Zorg.Ssh.SshDisconnectedException.Description.get -> string!
-Zorg.Ssh.SshDisconnectedException.ReasonCode.get -> uint
+Zorg.Ssh.SshDisconnectedException.Reason.get -> Zorg.Ssh.SshDisconnectReason
 Zorg.Ssh.SshDisconnectedException.SshDisconnectedException() -> void
+Zorg.Ssh.SshDisconnectedException.SshDisconnectedException(Zorg.Ssh.SshDisconnectReason reason, string! description) -> void
 Zorg.Ssh.SshDisconnectedException.SshDisconnectedException(string! message) -> void
 Zorg.Ssh.SshDisconnectedException.SshDisconnectedException(string! message, System.Exception! innerException) -> void
-Zorg.Ssh.SshDisconnectedException.SshDisconnectedException(uint reasonCode, string! description) -> void
 Zorg.Ssh.SshException
 Zorg.Ssh.SshException.SshException() -> void
 Zorg.Ssh.SshException.SshException(string! message) -> void
 Zorg.Ssh.SshException.SshException(string! message, System.Exception! innerException) -> void
-Zorg.Ssh.SshForward
-Zorg.Ssh.SshForward.ActiveConnections.get -> int
-Zorg.Ssh.SshForward.DisposeAsync() -> System.Threading.Tasks.ValueTask
-Zorg.Ssh.SshForward.LocalEndPoint.get -> System.Net.IPEndPoint!
 Zorg.Ssh.SshForwardDecision
 Zorg.Ssh.SshForwardDecision.Allow = 1 -> Zorg.Ssh.SshForwardDecision
 Zorg.Ssh.SshForwardDecision.Deny = 0 -> Zorg.Ssh.SshForwardDecision
@@ -310,6 +324,10 @@ Zorg.Ssh.SshKeyFileException
 Zorg.Ssh.SshKeyFileException.SshKeyFileException() -> void
 Zorg.Ssh.SshKeyFileException.SshKeyFileException(string! message) -> void
 Zorg.Ssh.SshKeyFileException.SshKeyFileException(string! message, System.Exception! innerException) -> void
+Zorg.Ssh.SshLocalForward
+Zorg.Ssh.SshLocalForward.ActiveConnections.get -> int
+Zorg.Ssh.SshLocalForward.DisposeAsync() -> System.Threading.Tasks.ValueTask
+Zorg.Ssh.SshLocalForward.LocalEndPoint.get -> System.Net.IPEndPoint!
 Zorg.Ssh.SshNegotiationException
 Zorg.Ssh.SshNegotiationException.Family.get -> string!
 Zorg.Ssh.SshNegotiationException.LocalAlgorithms.get -> System.Collections.Generic.IReadOnlyList<string!>!
@@ -468,7 +486,6 @@ Zorg.Ssh.SshStrictHostKeyChecking
 Zorg.Ssh.SshStrictHostKeyChecking.AcceptNew = 1 -> Zorg.Ssh.SshStrictHostKeyChecking
 Zorg.Ssh.SshStrictHostKeyChecking.No = 2 -> Zorg.Ssh.SshStrictHostKeyChecking
 Zorg.Ssh.SshStrictHostKeyChecking.Yes = 0 -> Zorg.Ssh.SshStrictHostKeyChecking
-const Zorg.Ssh.SshConfig.MaxFileLength = 1048576 -> int
 override Zorg.Ssh.Sftp.SftpAttributes.Equals(object? obj) -> bool
 override Zorg.Ssh.Sftp.SftpAttributes.GetHashCode() -> int
 override Zorg.Ssh.Sftp.SftpAttributes.ToString() -> string!

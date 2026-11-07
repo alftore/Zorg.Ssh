@@ -92,7 +92,7 @@ internal static class SftpExamples
     public static async Task Attributes(SftpClient sftp, CancellationToken cancellationToken)
     {
         // doc:sftp-attributes
-        SftpAttributes attributes = await sftp.GetAttributesAsync("reports/log.txt", cancellationToken: cancellationToken);
+        SftpAttributes attributes = await sftp.GetAttributesAsync("reports/log.txt", cancellationToken);
         Console.WriteLine($"{attributes.Size} bytes, {attributes.Permissions}");
 
         await sftp.SetAttributesAsync(

@@ -71,7 +71,7 @@ public class SftpTests
         await sftp.DownloadFileAsync("big.bin", received, Ct);
         Assert.Equal(Hash(data), Hash(received.GetBuffer().AsSpan(0, (int)received.Length)));
 
-        Assert.Equal(data.Length, (await sftp.GetAttributesAsync("big.bin", cancellationToken: Ct)).Size);
+        Assert.Equal(data.Length, (await sftp.GetAttributesAsync("big.bin", Ct)).Size);
     }
 
     [InteropTheory]
@@ -179,8 +179,8 @@ public class SftpTests
         Assert.Equal("target.txt\n", readlink.StandardOutput);
 
         Assert.Equal("target.txt", await sftp.ReadLinkAsync("link.txt", Ct));
-        Assert.True((await sftp.GetAttributesAsync("link.txt", followSymbolicLinks: false, Ct)).IsSymbolicLink);
-        Assert.True((await sftp.GetAttributesAsync("link.txt", cancellationToken: Ct)).IsRegularFile);
+        Assert.True((await sftp.GetLinkAttributesAsync("link.txt", Ct)).IsSymbolicLink);
+        Assert.True((await sftp.GetAttributesAsync("link.txt", Ct)).IsRegularFile);
         Assert.Equal("through the link"u8.ToArray(), await sftp.ReadAllBytesAsync("link.txt", Ct));
 
         // A dangling link exists as far as ExistsAsync is concerned.
@@ -258,7 +258,7 @@ public class SftpTests
                 return Hash(received.GetBuffer().AsSpan(0, (int)received.Length));
             },
             Ct))];
-        Task[] stats = [.. Enumerable.Range(0, 500).Select(i => (Task)sftp.GetAttributesAsync($"c{i % files.Length}.bin", cancellationToken: Ct))];
+        Task[] stats = [.. Enumerable.Range(0, 500).Select(i => (Task)sftp.GetAttributesAsync($"c{i % files.Length}.bin", Ct))];
         await Task.WhenAll(stats);
 
         Assert.Equal(files.Select(f => Hash(f)), await Task.WhenAll(downloads));
@@ -390,7 +390,7 @@ public class SftpTests
             },
             Ct);
 
-        SftpAttributes attributes = await sftp.GetAttributesAsync("attr.bin", cancellationToken: Ct);
+        SftpAttributes attributes = await sftp.GetAttributesAsync("attr.bin", Ct);
         Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead, attributes.Permissions);
         Assert.Equal(time, attributes.ModifiedTime);
         Assert.Equal(10, attributes.Size);
@@ -465,7 +465,7 @@ public class SftpTests
         string local = Path.Combine(Path.GetTempPath(), "zorg-sftp-" + Guid.NewGuid().ToString("N"));
         try
         {
-            await sftp.DownloadDirectoryAsync("tree", local, cancellationToken: Ct);
+            await sftp.DownloadDirectoryAsync("tree", local, long.MaxValue, Ct);
 
             Assert.Equal("one\n", await File.ReadAllTextAsync(Path.Combine(local, "one.txt"), Ct));
             Assert.Equal("two\n", await File.ReadAllTextAsync(Path.Combine(local, "a", "two.txt"), Ct));
@@ -499,7 +499,7 @@ public class SftpTests
         {
             for (int i = 0; i < 1000; i++)
             {
-                await sftp.GetAttributesAsync("kill.bin", cancellationToken: Ct);
+                await sftp.GetAttributesAsync("kill.bin", Ct);
             }
         });
 

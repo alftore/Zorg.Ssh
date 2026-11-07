@@ -37,16 +37,75 @@ public class SshConnectionException : SshException
     }
 }
 
+/// <summary>Why a peer disconnected: the reason codes of RFC 4253 section 11.1. A code outside the list keeps its number.</summary>
+/// <example>
+/// <code>
+/// if (ex.Reason == SshDisconnectReason.TooManyConnections)
+/// {
+///     await Task.Delay(TimeSpan.FromSeconds(30), cancellationToken);
+/// }
+/// </code>
+/// </example>
+#pragma warning disable CA1028 // The wire value is a uint32, and an unknown one must pass through unchanged.
+public enum SshDisconnectReason : uint
+#pragma warning restore CA1028
+{
+    /// <summary>Zero, which RFC 4253 doesn't define.</summary>
+    None = 0,
+
+    /// <summary>The host isn't allowed to connect.</summary>
+    HostNotAllowedToConnect = 1,
+
+    /// <summary>A protocol error.</summary>
+    ProtocolError = 2,
+
+    /// <summary>The key exchange failed.</summary>
+    KeyExchangeFailed = 3,
+
+    /// <summary>A packet failed its MAC check.</summary>
+    MacError = 5,
+
+    /// <summary>A compression error.</summary>
+    CompressionError = 6,
+
+    /// <summary>The service isn't available.</summary>
+    ServiceNotAvailable = 7,
+
+    /// <summary>The protocol version isn't supported.</summary>
+    ProtocolVersionNotSupported = 8,
+
+    /// <summary>The host key couldn't be verified.</summary>
+    HostKeyNotVerifiable = 9,
+
+    /// <summary>The connection was lost.</summary>
+    ConnectionLost = 10,
+
+    /// <summary>The application closed the connection, the usual reason for an orderly end.</summary>
+    ByApplication = 11,
+
+    /// <summary>The peer has too many connections.</summary>
+    TooManyConnections = 12,
+
+    /// <summary>The user cancelled authentication.</summary>
+    AuthCancelledByUser = 13,
+
+    /// <summary>No more authentication methods are available.</summary>
+    NoMoreAuthMethodsAvailable = 14,
+
+    /// <summary>The user name isn't allowed.</summary>
+    IllegalUserName = 15,
+}
+
 /// <summary>The peer ended the connection with an SSH_MSG_DISCONNECT.</summary>
 /// <example>
 /// <code>
 /// catch (SshDisconnectedException ex)
 /// {
-///     logger.LogWarning("Server closed the connection: {Code} {Text}", ex.ReasonCode, ex.Description);
+///     logger.LogWarning("Server closed the connection: {Reason} {Text}", ex.Reason, ex.Description);
 /// }
 /// </code>
 /// </example>
-public class SshDisconnectedException : SshConnectionException
+public sealed class SshDisconnectedException : SshConnectionException
 {
     /// <summary>Creates an exception with no reason.</summary>
     public SshDisconnectedException()
@@ -73,17 +132,17 @@ public class SshDisconnectedException : SshConnectionException
     }
 
     /// <summary>Creates an exception from a disconnect message.</summary>
-    /// <param name="reasonCode">The reason code from RFC 4253 section 11.1.</param>
+    /// <param name="reason">The reason code from RFC 4253 section 11.1.</param>
     /// <param name="description">The peer's text, already sanitised.</param>
-    public SshDisconnectedException(uint reasonCode, string description)
-        : base($"The peer disconnected (reason {reasonCode}): {description}")
+    public SshDisconnectedException(SshDisconnectReason reason, string description)
+        : base($"The peer disconnected (reason {(uint)reason}, {reason}): {description}")
     {
-        ReasonCode = reasonCode;
+        Reason = reason;
         Description = description;
     }
 
-    /// <summary>Gets the reason code from RFC 4253 section 11.1.</summary>
-    public uint ReasonCode { get; }
+    /// <summary>Gets the reason code from RFC 4253 section 11.1. A code outside <see cref="SshDisconnectReason"/>'s names keeps its number.</summary>
+    public SshDisconnectReason Reason { get; }
 
     /// <summary>Gets the peer's text, with control characters removed and its length capped. It's still peer-controlled.</summary>
     public string Description { get; }
@@ -98,7 +157,7 @@ public class SshDisconnectedException : SshConnectionException
 /// }
 /// </code>
 /// </example>
-public class SshNegotiationException : SshProtocolException
+public sealed class SshNegotiationException : SshProtocolException
 {
     /// <summary>Creates an exception with a default message.</summary>
     public SshNegotiationException()
@@ -173,7 +232,7 @@ public class SshNegotiationException : SshProtocolException
 /// }
 /// </code>
 /// </example>
-public class SshHostKeyException : SshException
+public sealed class SshHostKeyException : SshException
 {
     /// <summary>Creates an exception with a default message.</summary>
     public SshHostKeyException()

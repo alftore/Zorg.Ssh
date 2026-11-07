@@ -419,7 +419,7 @@ public class SftpClientTests
             server.SendAsync(new Packet().U8(SftpMessage.Attrs).U32(request.Id).U32(0x8000000F).U64(77).U32(5).U32(6).U32(0x41ED).U32(1000).U32(2000).U32(2)
                 .Text("a").Text("b").Text("c").Text("d").ToFrame()));
 
-        SftpAttributes attributes = await fake.Client.GetAttributesAsync("x", cancellationToken: Ct);
+        SftpAttributes attributes = await fake.Client.GetAttributesAsync("x", Ct);
         Assert.Equal(77, attributes.Size);
         Assert.Equal(5u, attributes.Uid);
         Assert.Equal(6u, attributes.Gid);

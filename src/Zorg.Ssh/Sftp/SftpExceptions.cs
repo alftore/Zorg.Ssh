@@ -169,7 +169,7 @@ public class SftpException : SshException
 /// }
 /// </code>
 /// </example>
-public class SftpFileNotFoundException : SftpException
+public sealed class SftpFileNotFoundException : SftpException
 {
     /// <summary>Creates an exception with a default message.</summary>
     /// <example>
@@ -230,7 +230,7 @@ public class SftpFileNotFoundException : SftpException
 /// }
 /// </code>
 /// </example>
-public class SftpPermissionDeniedException : SftpException
+public sealed class SftpPermissionDeniedException : SftpException
 {
     /// <summary>Creates an exception with a default message.</summary>
     /// <example>
@@ -294,7 +294,7 @@ public class SftpPermissionDeniedException : SftpException
 /// }
 /// </code>
 /// </example>
-public class SftpUnsafeNameException : SftpException
+public sealed class SftpUnsafeNameException : SftpException
 {
     /// <summary>Creates an exception with a default message.</summary>
     /// <example>

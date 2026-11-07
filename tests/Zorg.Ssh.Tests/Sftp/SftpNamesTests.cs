@@ -63,7 +63,7 @@ public sealed class SftpNamesTests : IDisposable
         files.Directories["/d"] = [("good.txt", RegularFile), (name, RegularFile)];
         await using FakeSftpServer fake = await ServerWithAsync(files);
 
-        SftpUnsafeNameException ex = await Assert.ThrowsAsync<SftpUnsafeNameException>(() => fake.Client.DownloadDirectoryAsync("/d", Destination, cancellationToken: Ct));
+        SftpUnsafeNameException ex = await Assert.ThrowsAsync<SftpUnsafeNameException>(() => fake.Client.DownloadDirectoryAsync("/d", Destination, long.MaxValue, Ct));
         Assert.Equal(name, ex.EntryName);
         Assert.Equal("/d", ex.Path);
 
@@ -81,7 +81,7 @@ public sealed class SftpNamesTests : IDisposable
         files.Files["/d/" + name + "/evil.txt"] = "evil"u8.ToArray();
         await using FakeSftpServer fake = await ServerWithAsync(files);
 
-        await Assert.ThrowsAsync<SftpUnsafeNameException>(() => fake.Client.DownloadDirectoryAsync("/d", Destination, cancellationToken: Ct));
+        await Assert.ThrowsAsync<SftpUnsafeNameException>(() => fake.Client.DownloadDirectoryAsync("/d", Destination, long.MaxValue, Ct));
         Assert.Empty(new DirectoryInfo(_sandbox).GetFiles("*", SearchOption.AllDirectories));
         Assert.DoesNotContain(new DirectoryInfo(_sandbox).GetDirectories("*", SearchOption.AllDirectories), d => d.FullName != Destination);
     }
@@ -96,7 +96,7 @@ public sealed class SftpNamesTests : IDisposable
             files.Files["/d/" + name] = "evil"u8.ToArray();
             files.Directories["/d"] = [(name, RegularFile)];
             await using FakeSftpServer fake = await ServerWithAsync(files);
-            await Assert.ThrowsAsync<SftpUnsafeNameException>(() => fake.Client.DownloadDirectoryAsync("/d", Destination, cancellationToken: Ct));
+            await Assert.ThrowsAsync<SftpUnsafeNameException>(() => fake.Client.DownloadDirectoryAsync("/d", Destination, long.MaxValue, Ct));
             Assert.Empty(WrittenOutsideDestination());
         }
     }
@@ -111,7 +111,7 @@ public sealed class SftpNamesTests : IDisposable
         files.Directories["/d"] = [(".", RegularFile), ("..", Directory), ("ok.txt", RegularFile)];
         await using FakeSftpServer fake = await ServerWithAsync(files);
 
-        await fake.Client.DownloadDirectoryAsync("/d", Destination, cancellationToken: Ct);
+        await fake.Client.DownloadDirectoryAsync("/d", Destination, long.MaxValue, Ct);
 
         Assert.Equal(["ok.txt"], new DirectoryInfo(Destination).GetFileSystemInfos().Select(i => i.Name));
         Assert.DoesNotContain(fake.Requests, r => r.Type == SftpMessage.OpenDir && r.Path.EndsWith("..", StringComparison.Ordinal));
@@ -126,7 +126,7 @@ public sealed class SftpNamesTests : IDisposable
         files.Directories["/d"] = [("same.txt", RegularFile), ("same.txt", RegularFile)];
         await using FakeSftpServer fake = await ServerWithAsync(files);
 
-        await Assert.ThrowsAsync<SftpUnsafeNameException>(() => fake.Client.DownloadDirectoryAsync("/d", Destination, cancellationToken: Ct));
+        await Assert.ThrowsAsync<SftpUnsafeNameException>(() => fake.Client.DownloadDirectoryAsync("/d", Destination, long.MaxValue, Ct));
     }
 
     [Fact(Timeout = Limit)]
@@ -141,7 +141,7 @@ public sealed class SftpNamesTests : IDisposable
         files.Directories["/d"] = [("important.txt", RegularFile)];
         await using FakeSftpServer fake = await ServerWithAsync(files);
 
-        await Assert.ThrowsAsync<SftpUnsafeNameException>(() => fake.Client.DownloadDirectoryAsync("/d", Destination, cancellationToken: Ct));
+        await Assert.ThrowsAsync<SftpUnsafeNameException>(() => fake.Client.DownloadDirectoryAsync("/d", Destination, long.MaxValue, Ct));
         Assert.Equal("mine", await File.ReadAllTextAsync(existing, Ct));
     }
 
@@ -156,7 +156,7 @@ public sealed class SftpNamesTests : IDisposable
         files.Directories["/d/sub"] = [];
         await using FakeSftpServer fake = await ServerWithAsync(files);
 
-        await Assert.ThrowsAsync<SftpUnsafeNameException>(() => fake.Client.DownloadDirectoryAsync("/d", Destination, cancellationToken: Ct));
+        await Assert.ThrowsAsync<SftpUnsafeNameException>(() => fake.Client.DownloadDirectoryAsync("/d", Destination, long.MaxValue, Ct));
     }
 
     [Fact(Timeout = Limit)]
@@ -185,7 +185,7 @@ public sealed class SftpNamesTests : IDisposable
         files.Files["/d/sub/evil.txt"] = "evil"u8.ToArray();
         await using FakeSftpServer fake = await ServerWithAsync(files);
 
-        await Assert.ThrowsAsync<SftpUnsafeNameException>(() => fake.Client.DownloadDirectoryAsync("/d", Destination, cancellationToken: Ct));
+        await Assert.ThrowsAsync<SftpUnsafeNameException>(() => fake.Client.DownloadDirectoryAsync("/d", Destination, long.MaxValue, Ct));
         Assert.Empty(new DirectoryInfo(outside).GetFiles());
     }
 
@@ -200,7 +200,7 @@ public sealed class SftpNamesTests : IDisposable
         await using FakeSftpServer fake = await ServerWithAsync(files);
 
         // A trailing separator on the destination is as good as none.
-        await fake.Client.DownloadDirectoryAsync("/d", Destination + Path.DirectorySeparatorChar, cancellationToken: Ct);
+        await fake.Client.DownloadDirectoryAsync("/d", Destination + Path.DirectorySeparatorChar, long.MaxValue, Ct);
 
         Assert.Equal("a", await File.ReadAllTextAsync(Path.Combine(Destination, "a.txt"), Ct));
         Assert.Equal("b", await File.ReadAllTextAsync(Path.Combine(Destination, "sub", "b.txt"), Ct));
@@ -224,7 +224,7 @@ public sealed class SftpNamesTests : IDisposable
             return files.HandleAsync(server, request);
         });
 
-        SftpException ex = await Assert.ThrowsAsync<SftpException>(() => fake.Client.DownloadDirectoryAsync("/d", Destination, cancellationToken: Ct));
+        SftpException ex = await Assert.ThrowsAsync<SftpException>(() => fake.Client.DownloadDirectoryAsync("/d", Destination, long.MaxValue, Ct));
         Assert.Contains("levels deep", ex.Message);
     }
 
@@ -252,7 +252,7 @@ public sealed class SftpNamesTests : IDisposable
         await using FakeSftpServer fake = await ServerWithAsync(files);
 
         fake.Client.Options = new SftpClientOptions { MaxDirectoryEntries = 2 };
-        await Assert.ThrowsAsync<SftpException>(() => fake.Client.DownloadDirectoryAsync("/d", Destination, cancellationToken: Ct));
+        await Assert.ThrowsAsync<SftpException>(() => fake.Client.DownloadDirectoryAsync("/d", Destination, long.MaxValue, Ct));
     }
 
     [Fact(Timeout = Limit)]

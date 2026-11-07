@@ -49,11 +49,32 @@ public sealed class SshPtyOptions
     /// <summary>Gets the terminal type. The default is <c>xterm-256color</c>.</summary>
     public string Terminal { get; init; } = "xterm-256color";
 
+    private readonly int _columns = 80;
+    private readonly int _rows = 24;
+
     /// <summary>Gets the width in characters. The default is 80.</summary>
-    public int Columns { get; init; } = 80;
+    /// <exception cref="ArgumentOutOfRangeException">The value is zero or less.</exception>
+    public int Columns
+    {
+        get => _columns;
+        init
+        {
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(value);
+            _columns = value;
+        }
+    }
 
     /// <summary>Gets the height in characters. The default is 24.</summary>
-    public int Rows { get; init; } = 24;
+    /// <exception cref="ArgumentOutOfRangeException">The value is zero or less.</exception>
+    public int Rows
+    {
+        get => _rows;
+        init
+        {
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(value);
+            _rows = value;
+        }
+    }
 }
 
 /// <summary>Settings for <see cref="SshClient.StartProcessAsync"/>.</summary>
@@ -109,9 +130,14 @@ public sealed partial class SshClient : IAsyncDisposable
     /// <param name="options">Where to connect, and how to log in.</param>
     /// <param name="cancellationToken">Cancels the connection attempt.</param>
     /// <returns>A connected client.</returns>
-    /// <exception cref="SshHostKeyException">The host key wasn't trusted.</exception>
-    /// <exception cref="SshAuthenticationException">The server refused every credential.</exception>
-    /// <exception cref="SshConnectionException">The network failed.</exception>
+    /// <exception cref="SshHostKeyException">The host key wasn't trusted, or your <see cref="HostKeyPolicy.Custom"/> check threw. Show it to a person: it can mean an attack.</exception>
+    /// <exception cref="SshAuthenticationException">The server refused every credential, or a banner or keyboard-interactive handler of yours threw. An agent that failed is named in the message, not thrown as <see cref="SshAgentException"/>.</exception>
+    /// <exception cref="SshKeyFileException">A private key file couldn't be read, or its passphrase is wrong. An identity file that <see cref="SshClientOptions.FromConfig"/> added is passed over instead.</exception>
+    /// <exception cref="SshNegotiationException">The two sides share no algorithm in one family.</exception>
+    /// <exception cref="SshDisconnectedException">The server ended the connection, with a reason code.</exception>
+    /// <exception cref="SshConnectionException">The network failed, or the connection timed out.</exception>
+    /// <exception cref="SshProtocolException">The server broke the protocol.</exception>
+    /// <exception cref="ArgumentException">An option is out of range, or <see cref="SshClientOptions.Algorithms"/> names an algorithm that isn't supported.</exception>
     /// <example>
     /// <code>
     /// await using SshClient client = await SshClient.ConnectAsync(options, cancellationToken);
@@ -547,6 +573,7 @@ public sealed class SshProcess : IAsyncDisposable
     /// <param name="rows">The height in characters.</param>
     /// <param name="cancellationToken">Cancels the send.</param>
     /// <returns>A task that completes when the request is queued.</returns>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="columns"/> or <paramref name="rows"/> is zero or less.</exception>
     /// <example>
     /// <code>
     /// await shell.ResizeAsync(120, 40, cancellationToken);
@@ -554,6 +581,8 @@ public sealed class SshProcess : IAsyncDisposable
     /// </example>
     public async Task ResizeAsync(int columns, int rows, CancellationToken cancellationToken = default)
     {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(columns);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(rows);
         SshRequestWriter writer = new();
         writer.UInt32((uint)columns);
         writer.UInt32((uint)rows);

@@ -13,11 +13,11 @@ namespace Zorg.Ssh;
 /// </summary>
 /// <example>
 /// <code>
-/// await using SshForward forward = await client.ForwardLocalPortAsync(null, "db.internal", 5432, cancellationToken);
+/// await using SshLocalForward forward = await client.ForwardLocalPortAsync("db.internal", 5432, cancellationToken);
 /// Console.WriteLine($"Connect to {forward.LocalEndPoint}");
 /// </code>
 /// </example>
-public sealed class SshForward : IAsyncDisposable
+public sealed class SshLocalForward : IAsyncDisposable
 {
     private static readonly TimeSpan AcceptRetryDelay = TimeSpan.FromMilliseconds(100);
 
@@ -27,7 +27,7 @@ public sealed class SshForward : IAsyncDisposable
     private Task? _acceptLoop;
     private int _disposed;
 
-    internal SshForward(TcpListener listener, ForwardScope scope, Action<IAsyncDisposable> onClosed)
+    internal SshLocalForward(TcpListener listener, ForwardScope scope, Action<IAsyncDisposable> onClosed)
     {
         _listener = listener;
         _scope = scope;

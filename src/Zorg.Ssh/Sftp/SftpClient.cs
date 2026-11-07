@@ -169,7 +169,7 @@ public sealed class SftpClient : IAsyncDisposable
     /// await sftp.DownloadDirectoryAsync("/srv/site", @"C:\backup\site", 10L * 1024 * 1024 * 1024, cancellationToken);
     /// </code>
     /// </example>
-    public async Task DownloadDirectoryAsync(string remotePath, string localDirectory, long maxTotalBytes = long.MaxValue, CancellationToken cancellationToken = default)
+    public async Task DownloadDirectoryAsync(string remotePath, string localDirectory, long maxTotalBytes, CancellationToken cancellationToken = default)
     {
         ValidatePath(remotePath);
         ArgumentException.ThrowIfNullOrEmpty(localDirectory);
@@ -275,22 +275,38 @@ public sealed class SftpClient : IAsyncDisposable
         }
     }
 
-    /// <summary>Gets a file's attributes.</summary>
+    /// <summary>Gets a file's attributes, following a symbolic link to what it points to.</summary>
     /// <param name="path">The remote path.</param>
-    /// <param name="followSymbolicLinks">False reports on a link itself, not on what it points to.</param>
     /// <param name="cancellationToken">Cancels the request.</param>
     /// <returns>What the server reported.</returns>
     /// <exception cref="SftpFileNotFoundException">Nothing exists at the path.</exception>
     /// <example>
     /// <code>
-    /// SftpAttributes attributes = await sftp.GetAttributesAsync("/srv/data.bin", cancellationToken: cancellationToken);
+    /// SftpAttributes attributes = await sftp.GetAttributesAsync("/srv/data.bin", cancellationToken);
     /// Console.WriteLine(attributes.Size);
     /// </code>
     /// </example>
-    public Task<SftpAttributes> GetAttributesAsync(string path, bool followSymbolicLinks = true, CancellationToken cancellationToken = default)
+    public Task<SftpAttributes> GetAttributesAsync(string path, CancellationToken cancellationToken = default)
     {
         ValidatePath(path);
-        return RequestAsync(SftpFrames.Path(path), followSymbolicLinks ? SftpMessage.Stat : SftpMessage.Lstat, SftpMessage.Attrs, SftpParser.ReadAttributes, path, cancellationToken);
+        return RequestAsync(SftpFrames.Path(path), SftpMessage.Stat, SftpMessage.Attrs, SftpParser.ReadAttributes, path, cancellationToken);
+    }
+
+    /// <summary>Gets a file's attributes without following a symbolic link: for a link, it reports on the link itself.</summary>
+    /// <param name="path">The remote path.</param>
+    /// <param name="cancellationToken">Cancels the request.</param>
+    /// <returns>What the server reported.</returns>
+    /// <exception cref="SftpFileNotFoundException">Nothing exists at the path.</exception>
+    /// <example>
+    /// <code>
+    /// SftpAttributes link = await sftp.GetLinkAttributesAsync("/srv/current", cancellationToken);
+    /// Console.WriteLine(link.IsSymbolicLink);
+    /// </code>
+    /// </example>
+    public Task<SftpAttributes> GetLinkAttributesAsync(string path, CancellationToken cancellationToken = default)
+    {
+        ValidatePath(path);
+        return RequestAsync(SftpFrames.Path(path), SftpMessage.Lstat, SftpMessage.Attrs, SftpParser.ReadAttributes, path, cancellationToken);
     }
 
     /// <summary>Changes a file's attributes. Only the properties you set are sent.</summary>
@@ -468,7 +484,7 @@ public sealed class SftpClient : IAsyncDisposable
     {
         try
         {
-            await GetAttributesAsync(path, followSymbolicLinks: false, cancellationToken).ConfigureAwait(false);
+            await GetLinkAttributesAsync(path, cancellationToken).ConfigureAwait(false);
             return true;
         }
         catch (SftpFileNotFoundException)
@@ -1087,7 +1103,7 @@ public sealed class SftpClient : IAsyncDisposable
             string remote = remotePrefix + entry.Name;
             SftpAttributes attributes = entry.Attributes.HasFileType
                 ? entry.Attributes
-                : await GetAttributesAsync(remote, followSymbolicLinks: false, cancellationToken).ConfigureAwait(false);
+                : await GetLinkAttributesAsync(remote, cancellationToken).ConfigureAwait(false);
             if (attributes.IsDirectory)
             {
                 CreateLocalDirectory(local, entry.Name, remoteDirectory);

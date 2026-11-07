@@ -56,23 +56,41 @@ public sealed partial class SshClient
     /// <c>ssh -L</c> does. At most <see cref="SshClientOptions.MaxForwardedConnections"/> run at once, and
     /// connections past that are closed.
     /// </summary>
+    /// <param name="remoteHost">The target host, as the server sees it.</param>
+    /// <param name="remotePort">The target port.</param>
+    /// <param name="cancellationToken">Cancels the start. It doesn't stop a forward that has started: dispose it for that.</param>
+    /// <returns>The running forward, with the free loopback port it bound.</returns>
+    /// <exception cref="SshException">The port couldn't be bound.</exception>
+    /// <example>
+    /// <code>
+    /// await using SshLocalForward forward = await client.ForwardLocalPortAsync("db.internal", 5432, cancellationToken);
+    /// using TcpClient connection = new();
+    /// await connection.ConnectAsync(forward.LocalEndPoint, cancellationToken);
+    /// </code>
+    /// </example>
+    public Task<SshLocalForward> ForwardLocalPortAsync(string remoteHost, int remotePort, CancellationToken cancellationToken) =>
+        ForwardLocalPortAsync(remoteHost, remotePort, null, cancellationToken);
+
+    /// <summary>
+    /// Listens on a local port, and carries each connection through the server to one fixed target, as
+    /// <c>ssh -L</c> does. At most <see cref="SshClientOptions.MaxForwardedConnections"/> run at once, and
+    /// connections past that are closed.
+    /// </summary>
+    /// <param name="remoteHost">The target host, as the server sees it.</param>
+    /// <param name="remotePort">The target port.</param>
     /// <param name="localEndPoint">
     /// The address and port to bind. Null binds a free port on loopback. Anyone who can reach this port can use the
     /// tunnel, with no login, so think before binding anything but loopback.
     /// </param>
-    /// <param name="remoteHost">The target host, as the server sees it.</param>
-    /// <param name="remotePort">The target port.</param>
     /// <param name="cancellationToken">Cancels the start. It doesn't stop a forward that has started: dispose it for that.</param>
     /// <returns>The running forward, with the port it bound.</returns>
     /// <exception cref="SshException">The port couldn't be bound.</exception>
     /// <example>
     /// <code>
-    /// await using SshForward forward = await client.ForwardLocalPortAsync(null, "db.internal", 5432, cancellationToken);
-    /// using TcpClient connection = new();
-    /// await connection.ConnectAsync(forward.LocalEndPoint, cancellationToken);
+    /// await using SshLocalForward forward = await client.ForwardLocalPortAsync("db.internal", 5432, new IPEndPoint(IPAddress.Loopback, 15432), cancellationToken);
     /// </code>
     /// </example>
-    public Task<SshForward> ForwardLocalPortAsync(IPEndPoint? localEndPoint, string remoteHost, int remotePort, CancellationToken cancellationToken = default)
+    public Task<SshLocalForward> ForwardLocalPortAsync(string remoteHost, int remotePort, IPEndPoint? localEndPoint = null, CancellationToken cancellationToken = default)
     {
         CheckTarget(remoteHost, remotePort);
         cancellationToken.ThrowIfCancellationRequested();
@@ -94,11 +112,11 @@ public sealed partial class SshClient
     /// <exception cref="SshException">The port couldn't be bound.</exception>
     /// <example>
     /// <code>
-    /// await using SshForward proxy = await client.ForwardDynamicPortAsync(null, cancellationToken);
+    /// await using SshLocalForward proxy = await client.ForwardDynamicPortAsync(null, cancellationToken);
     /// using HttpClient http = new(new SocketsHttpHandler { Proxy = new WebProxy($"socks5://{proxy.LocalEndPoint}") });
     /// </code>
     /// </example>
-    public Task<SshForward> ForwardDynamicPortAsync(IPEndPoint? localEndPoint = null, CancellationToken cancellationToken = default)
+    public Task<SshLocalForward> ForwardDynamicPortAsync(IPEndPoint? localEndPoint = null, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         return ListenAsync(localEndPoint, ServeSocksAsync);
@@ -206,7 +224,7 @@ public sealed partial class SshClient
         w.UInt32((uint)entry.BoundPort);
     });
 
-    private async Task<SshForward> ListenAsync(IPEndPoint? localEndPoint, Func<Socket, CancellationToken, Task> serve)
+    private async Task<SshLocalForward> ListenAsync(IPEndPoint? localEndPoint, Func<Socket, CancellationToken, Task> serve)
     {
         IPEndPoint endPoint = localEndPoint ?? new IPEndPoint(IPAddress.Loopback, 0);
 #pragma warning disable CA2000 // The forward owns both, and is disposed below if it's never handed out.
@@ -221,7 +239,7 @@ public sealed partial class SshClient
             throw new SshException($"Couldn't listen on {endPoint}: {ex.Message}. Check that the address is local and the port is free.", ex);
         }
 
-        SshForward forward = new(listener, new ForwardScope(_options.MaxForwardedConnections, _logger), Forget);
+        SshLocalForward forward = new(listener, new ForwardScope(_options.MaxForwardedConnections, _logger), Forget);
 #pragma warning restore CA2000
         if (!TryAdopt(forward))
         {

@@ -642,7 +642,7 @@ public sealed class HostileForwardingTests
                 seen.Add(reply.Span[0]);
             }
         });
-        Assert.Equal(11u, disconnect.ReasonCode);
+        Assert.Equal(SshDisconnectReason.ByApplication, disconnect.Reason);
         Assert.Equal("closed", disconnect.Description);
         Assert.DoesNotContain(MessageNumber.ChannelOpenConfirmation, seen);
         Assert.DoesNotContain(MessageNumber.ChannelOpenFailure, seen);

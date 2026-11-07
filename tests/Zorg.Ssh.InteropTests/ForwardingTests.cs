@@ -161,7 +161,7 @@ public class ForwardingTests
         await using SshPeerContainer container = await StartAsync();
         await using SshClient client = await ConnectAsync(container);
         await using SshProcess echo = await StartEchoAsync(client);
-        await using SshForward forward = await client.ForwardLocalPortAsync(null, "127.0.0.1", EchoPort, Ct);
+        await using SshLocalForward forward = await client.ForwardLocalPortAsync("127.0.0.1", EchoPort, Ct);
 
         await Task.WhenAll(Enumerable.Range(0, 4).Select(async _ =>
         {
@@ -199,7 +199,7 @@ public class ForwardingTests
 
         for (int round = 0; round < 10; round++)
         {
-            SshForward forward = await client.ForwardLocalPortAsync(null, "127.0.0.1", FloodPort, Ct);
+            SshLocalForward forward = await client.ForwardLocalPortAsync("127.0.0.1", FloodPort, Ct);
             using TcpClient connection = new();
             await connection.ConnectAsync(forward.LocalEndPoint, Ct);
             byte[] buffer = new byte[256 * 1024];
@@ -324,7 +324,7 @@ public class ForwardingTests
         await using SshPeerContainer container = await StartAsync();
         await using SshClient client = await ConnectAsync(container);
         await using SshProcess echo = await StartEchoAsync(client);
-        await using SshForward proxy = await client.ForwardDynamicPortAsync(null, Ct);
+        await using SshLocalForward proxy = await client.ForwardDynamicPortAsync(null, Ct);
 
         foreach (byte[] target in new[] { AddressTarget(EchoPort), NameTarget("localhost", EchoPort) })
         {
@@ -349,7 +349,7 @@ public class ForwardingTests
     {
         await using SshPeerContainer container = await StartAsync();
         await using SshClient client = await ConnectAsync(container);
-        await using SshForward proxy = await client.ForwardDynamicPortAsync(null, Ct);
+        await using SshLocalForward proxy = await client.ForwardDynamicPortAsync(null, Ct);
 
         using TcpClient connection = new();
         await connection.ConnectAsync(proxy.LocalEndPoint, Ct);
@@ -372,7 +372,7 @@ public class ForwardingTests
             "printf '#!/bin/sh\\nprintf \"HTTP/1.0 200 OK\\\\r\\\\nContent-Length: 5\\\\r\\\\n\\\\r\\\\nhello\"\\n' > /tmp/http.sh; chmod +x /tmp/http.sh",
             Ct);
         await using SshProcess http = await StartServiceAsync(client, $"nc -lk -p {HttpPort} -e /tmp/http.sh", HttpPort);
-        await using SshForward proxy = await client.ForwardDynamicPortAsync(null, Ct);
+        await using SshLocalForward proxy = await client.ForwardDynamicPortAsync(null, Ct);
 
         using SocketsHttpHandler handler = new() { Proxy = new WebProxy($"socks5://{proxy.LocalEndPoint}"), UseProxy = true };
         using HttpClient browser = new(handler);

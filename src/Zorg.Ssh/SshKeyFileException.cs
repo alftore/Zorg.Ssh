@@ -18,7 +18,7 @@ namespace Zorg.Ssh;
 /// }
 /// </code>
 /// </example>
-public class SshKeyFileException : SshException
+public sealed class SshKeyFileException : SshException
 {
     /// <summary>Creates an exception with a default message.</summary>
     public SshKeyFileException()

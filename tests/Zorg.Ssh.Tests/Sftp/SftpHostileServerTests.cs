@@ -80,7 +80,7 @@ public class SftpHostileServerTests
     public async Task A_response_of_the_wrong_type_ends_the_session()
     {
         await using FakeSftpServer fake = await FakeSftpServer.StartAsync((server, request) => server.SendDataAsync(request.Id, [1, 2, 3]));
-        SshProtocolException ex = await Assert.ThrowsAsync<SshProtocolException>(() => fake.Client.GetAttributesAsync("x", cancellationToken: Ct));
+        SshProtocolException ex = await Assert.ThrowsAsync<SshProtocolException>(() => fake.Client.GetAttributesAsync("x", Ct));
         Assert.Contains("doesn't allow", ex.Message);
     }
 
@@ -186,7 +186,7 @@ public class SftpHostileServerTests
         [
             (SftpMessage.Handle, new Packet().Bytes([1, 2, 3, 4]).ToBytes(), c => c.OpenAsync("x", cancellationToken: Ct)),
             (SftpMessage.Name, new Packet().U32(1).Entry("name").ToBytes(), c => c.GetFullPathAsync(".", Ct)),
-            (SftpMessage.Attrs, new Packet().U32(0x8000000F).U64(1).U32(2).U32(3).U32(4).U32(5).U32(6).U32(1).Text("a").Text("b").ToBytes(), c => c.GetAttributesAsync("x", cancellationToken: Ct)),
+            (SftpMessage.Attrs, new Packet().U32(0x8000000F).U64(1).U32(2).U32(3).U32(4).U32(5).U32(6).U32(1).Text("a").Text("b").ToBytes(), c => c.GetAttributesAsync("x", Ct)),
             (SftpMessage.Status, new Packet().U32(4).Text("failed").Text("en").ToBytes(), c => c.DeleteFileAsync("x", Ct)),
         ];
 
@@ -248,7 +248,7 @@ public class SftpHostileServerTests
     public async Task A_file_size_past_the_range_of_a_long_ends_the_session()
     {
         await using FakeSftpServer fake = await FakeSftpServer.StartAsync((server, request) => server.SendAttributesAsync(request.Id, ulong.MaxValue));
-        await Assert.ThrowsAsync<SshProtocolException>(() => fake.Client.GetAttributesAsync("x", cancellationToken: Ct));
+        await Assert.ThrowsAsync<SshProtocolException>(() => fake.Client.GetAttributesAsync("x", Ct));
     }
 
     [Fact(Timeout = Limit)]
@@ -517,7 +517,7 @@ public class SftpHostileServerTests
     public async Task A_status_of_ok_where_data_is_needed_ends_the_session()
     {
         await using FakeSftpServer fake = await FakeSftpServer.StartAsync((server, request) => server.SendStatusAsync(request.Id));
-        await Assert.ThrowsAsync<SshProtocolException>(() => fake.Client.GetAttributesAsync("x", cancellationToken: Ct));
+        await Assert.ThrowsAsync<SshProtocolException>(() => fake.Client.GetAttributesAsync("x", Ct));
     }
 
     [Fact(Timeout = Limit)]

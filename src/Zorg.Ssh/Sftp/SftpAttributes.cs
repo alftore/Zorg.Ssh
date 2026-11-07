@@ -10,7 +10,7 @@ namespace Zorg.Ssh.Sftp;
 /// </summary>
 /// <example>
 /// <code>
-/// SftpAttributes attributes = await sftp.GetAttributesAsync("/var/log/app.log", cancellationToken: cancellationToken);
+/// SftpAttributes attributes = await sftp.GetAttributesAsync("/var/log/app.log", cancellationToken);
 /// Console.WriteLine($"{attributes.Size} bytes, changed {attributes.ModifiedTime}");
 ///
 /// await sftp.SetAttributesAsync(

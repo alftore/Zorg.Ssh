@@ -73,6 +73,40 @@ public sealed class ClientOverloadTests : IDisposable
         Assert.Throws<ArgumentOutOfRangeException>(() => new SftpClientOptions { MaxDirectoryEntries = -1 });
     }
 
+    [Fact]
+    public async Task Terminal_sizes_must_be_positive()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => new SshPtyOptions { Columns = 0 });
+        Assert.Throws<ArgumentOutOfRangeException>(() => new SshPtyOptions { Rows = -1 });
+
+        await using SshServer server = await StartAsync(async (session, ct) =>
+        {
+            await session.Input.CopyToAsync(Stream.Null, ct);
+            return 0;
+        });
+        await using SshClient client = await ConnectAsync(server);
+        await using SshProcess shell = await client.StartShellAsync(null, Ct);
+
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => shell.ResizeAsync(0, 24, Ct));
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => shell.ResizeAsync(80, -1, Ct));
+        await shell.ResizeAsync(120, 40, Ct);
+        await shell.StandardInput.DisposeAsync();
+        await shell.WaitForExitAsync(Ct);
+        Assert.Equal(0, shell.ExitCode);
+    }
+
+    [Fact]
+    public void A_disconnect_reason_outside_the_list_keeps_its_number()
+    {
+        SshDisconnectedException known = new(SshDisconnectReason.TooManyConnections, "busy");
+        Assert.Equal(12u, (uint)known.Reason);
+        Assert.Contains("TooManyConnections", known.Message, StringComparison.Ordinal);
+
+        SshDisconnectedException unknown = new((SshDisconnectReason)99, "odd");
+        Assert.Equal(99u, (uint)unknown.Reason);
+        Assert.Contains("reason 99", unknown.Message, StringComparison.Ordinal);
+    }
+
     private Task<SshServer> StartAsync(Func<SshServerSession, CancellationToken, Task<int>> handler) => SshServer.StartAsync(
         new SshServerOptions
         {

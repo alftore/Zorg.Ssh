@@ -81,7 +81,7 @@ await sftp.DownloadDirectoryAsync("reports", "local-reports", maxTotalBytes: 10L
 - `maxTotalBytes` bounds the bytes across all files, and `MaxDirectoryEntries` bounds the entries across the tree. It stops at 64 levels of nesting.
 - If it fails or you cancel, the files already written stay.
 
-Set `maxTotalBytes` for any server you don't fully trust. The default is no limit.
+`maxTotalBytes` is required, so every download says how much it will take. Pass `long.MaxValue` only for a server you fully trust.
 
 ## Files as streams
 
@@ -108,7 +108,7 @@ int read = await file.ReadAsync(start, cancellationToken); // Can be less than y
 ## Attributes
 
 ```csharp
-SftpAttributes attributes = await sftp.GetAttributesAsync("reports/log.txt", cancellationToken: cancellationToken);
+SftpAttributes attributes = await sftp.GetAttributesAsync("reports/log.txt", cancellationToken);
 Console.WriteLine($"{attributes.Size} bytes, {attributes.Permissions}");
 
 await sftp.SetAttributesAsync(
@@ -119,7 +119,7 @@ await sftp.SetAttributesAsync(
 
 A property is null if the server didn't send it, and `SetAttributesAsync` changes only the properties you set. Set `Uid` with `Gid`, and `ModifiedTime` with `AccessTime`, because the protocol sends them in pairs. Times have a resolution of one second.
 
-`GetAttributesAsync` follows symbolic links unless you pass `followSymbolicLinks: false`.
+`GetAttributesAsync` follows symbolic links. `GetLinkAttributesAsync` reports on a link itself.
 
 ## Managing files
 

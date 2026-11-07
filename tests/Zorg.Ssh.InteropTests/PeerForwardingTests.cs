@@ -114,7 +114,7 @@ public class PeerForwardingTests
         await using SshPeerContainer container = await StartAsync(peer);
         await using SshClient client = await ConnectAsync(container);
         await using SshProcess echo = await StartEchoAsync(peer, client);
-        await using SshForward forward = await client.ForwardLocalPortAsync(null, "127.0.0.1", EchoPort, Ct);
+        await using SshLocalForward forward = await client.ForwardLocalPortAsync("127.0.0.1", EchoPort, Ct);
 
         await Task.WhenAll(Enumerable.Range(0, 4).Select(async _ =>
         {
@@ -236,7 +236,7 @@ public class PeerForwardingTests
         await using SshPeerContainer container = await StartAsync(peer);
         await using SshClient client = await ConnectAsync(container);
         await using SshProcess echo = await StartEchoAsync(peer, client);
-        await using SshForward proxy = await client.ForwardDynamicPortAsync(null, Ct);
+        await using SshLocalForward proxy = await client.ForwardDynamicPortAsync(null, Ct);
 
         foreach (byte[] target in new[] { ForwardingTests.AddressTarget(EchoPort), ForwardingTests.NameTarget("localhost", EchoPort) })
         {
@@ -262,7 +262,7 @@ public class PeerForwardingTests
     {
         await using SshPeerContainer container = await StartAsync(peer);
         await using SshClient client = await ConnectAsync(container);
-        await using SshForward proxy = await client.ForwardDynamicPortAsync(null, Ct);
+        await using SshLocalForward proxy = await client.ForwardDynamicPortAsync(null, Ct);
 
         using TcpClient connection = new();
         await connection.ConnectAsync(proxy.LocalEndPoint, Ct);
@@ -288,7 +288,7 @@ public class PeerForwardingTests
         await Assert.ThrowsAsync<SshException>(() => client.ForwardRemotePortAsync("127.0.0.1", 0, "127.0.0.1", 9, Ct));
 
         // A SOCKS proxy starts, but each request it carries is refused.
-        await using SshForward proxy = await client.ForwardDynamicPortAsync(null, Ct);
+        await using SshLocalForward proxy = await client.ForwardDynamicPortAsync(null, Ct);
         using TcpClient connection = new();
         await connection.ConnectAsync(proxy.LocalEndPoint, Ct);
         NetworkStream stream = connection.GetStream();

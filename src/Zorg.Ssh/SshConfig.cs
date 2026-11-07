@@ -113,7 +113,7 @@ public sealed record SshHostConfig
 public sealed partial class SshConfig
 {
     /// <summary>The largest config file accepted, in bytes.</summary>
-    public const int MaxFileLength = 1 << 20;
+    internal const int MaxFileLength = 1 << 20;
 
     private const int MaxLineLength = 16 * 1024;
     private const int MaxIncludeDepth = 16; // The same limit as ssh.

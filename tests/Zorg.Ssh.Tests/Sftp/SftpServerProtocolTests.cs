@@ -82,10 +82,10 @@ public sealed class SftpServerProtocolTests : IDisposable
             Assert.True(file.Attributes.IsRegularFile);
             Assert.True(entries.Single(e => e.Name == "sub").Attributes.IsDirectory);
 
-            SftpAttributes attributes = await sftp.GetAttributesAsync("dir/file.txt", cancellationToken: Ct);
+            SftpAttributes attributes = await sftp.GetAttributesAsync("dir/file.txt", Ct);
             Assert.Equal(5, attributes.Size);
             Assert.True(attributes.IsRegularFile);
-            Assert.True((await sftp.GetAttributesAsync("dir", cancellationToken: Ct)).IsDirectory);
+            Assert.True((await sftp.GetAttributesAsync("dir", Ct)).IsDirectory);
             Assert.True(await sftp.ExistsAsync("dir/file.txt", Ct));
             Assert.False(await sftp.ExistsAsync("dir/nothing", Ct));
             Assert.Equal("/dir/file.txt", await sftp.GetFullPathAsync("dir/./sub/../file.txt", Ct));

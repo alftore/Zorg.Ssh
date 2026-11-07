@@ -23,7 +23,7 @@ catch (SshNegotiationException ex)
 }
 catch (SshDisconnectedException ex)
 {
-    Console.Error.WriteLine($"The server hung up: {ex.ReasonCode} {ex.Description}");
+    Console.Error.WriteLine($"The server hung up: {ex.Reason} {ex.Description}");
 }
 catch (SshConnectionException ex)
 {
@@ -35,7 +35,7 @@ catch (SshException ex)
 }
 ```
 
-Catch the most derived type first. The hierarchy:
+Catch the most derived type first. The hierarchy, in which only `SshException`, `SshConnectionException`, `SshProtocolException` and `SftpException` have subclasses (the others are sealed):
 
 ```text
 SshException
@@ -136,7 +136,7 @@ The network failed or the connection closed. Connect again to continue: a client
 
 ## SshDisconnectedException
 
-The server ended the connection on purpose. It derives from `SshConnectionException`. `ReasonCode` is from RFC 4253 section 11.1, and `Description` is the server's text. Common causes are too many authentication failures, an idle timeout, and a server shutting down.
+The server ended the connection on purpose. It derives from `SshConnectionException`. `Reason` is the `SshDisconnectReason` from RFC 4253 section 11.1 (a code outside the list keeps its number), and `Description` is the server's text. Common causes are too many authentication failures, an idle timeout, and a server shutting down.
 
 ## SshNegotiationException
 
