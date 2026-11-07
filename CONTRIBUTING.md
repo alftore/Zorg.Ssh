@@ -129,7 +129,7 @@ It also opens a real connection: an in-memory client and server, a command, an S
 - **`CancellationToken` on every async method.**
 - **`Unsafe` in the name** of anything that weakens security.
 - **Exceptions say what to do next.** Peer-caused failures are `SshException` types, never `IndexOutOfRangeException` and the like.
-- **Public API changes** update `src/Zorg.Ssh/PublicAPI.Unshipped.txt`. The build fails otherwise.
+- **Public API changes** update `src/Zorg.Ssh/PublicAPI.Unshipped.txt`. The build fails otherwise. `PublicAPI.Shipped.txt` holds what the last released package had: a removal or change there is a breaking change, marked with `*REMOVED*` in the unshipped file. On a release, the unshipped lines move into the shipped file.
 - **BouncyCastle stays internal.** Its types never appear in the public API.
 - **Vertical slices.** Tests and docs land in the same commit as the code.
 - **Tests listen on loopback only** (`IPAddress.Loopback`, never `Any`), because anything wider prompts the Windows firewall. To test several source addresses, bind the client to 127.0.0.x and connect to 127.0.0.1. `ListenAddressGuardTests` enforces this.

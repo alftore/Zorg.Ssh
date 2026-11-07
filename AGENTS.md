@@ -15,7 +15,7 @@
 - A dead or stalled peer ends the connection with `SshConnectionException`, through `KeepAliveInterval` and `KeepAliveCountMax` (5 minutes and 3 by default, `TimeSpan.Zero` turns them off). A live peer can still take for ever: a long command and a zero window don't time out, so pass a `CancellationToken`.
 - For SFTP on a server, call `SftpServer.ServeAsync` from the `SessionHandler`, with `SftpServerOptions.RootDirectory`.
 - `SshServer.StartAsync` needs a host key, a `PasswordHandler` or `PublicKeyHandler`, and a `SessionHandler`. Load the key with `SshHostKey.Load`, because a generated one can't be saved.
-- These don't exist, so don't call them: SCP, compression, agent forwarding. `src/Zorg.Ssh/PublicAPI.Unshipped.txt` is the full API.
+- These don't exist, so don't call them: SCP, compression, agent forwarding. `src/Zorg.Ssh/PublicAPI.Shipped.txt` and `PublicAPI.Unshipped.txt` together are the full API.
 - It's pre-release and unreviewed. `docs/` has the details, and `docs/troubleshooting.md` covers each exception.
 
 ## Working on the repo
