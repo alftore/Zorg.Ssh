@@ -218,7 +218,7 @@ internal static class OpenSshKeyFormat
         byte[] d = Pad(scalar, curve.CoordinateLength);
         try
         {
-            return EcdsaPrivateKey.Adopt(curve, ECDsa.Create(new ECParameters { Curve = curve.Curve, Q = point, D = d }));
+            return EcdsaPrivateKey.Adopt(curve, ImportEcdsa(new ECParameters { Curve = curve.Curve, Q = point, D = d }));
         }
         finally
         {
@@ -261,7 +261,7 @@ internal static class OpenSshKeyFormat
         try
         {
             RsaKeyValues.EnsureConsistent(n, e, d, p, q, parameters.DP, parameters.DQ, iqmp);
-            return RsaPrivateKey.Adopt(RSA.Create(parameters));
+            return RsaPrivateKey.Adopt(ImportRsa(parameters));
         }
         finally
         {
@@ -271,6 +271,34 @@ internal static class OpenSshKeyFormat
             CryptographicOperations.ZeroMemory(parameters.InverseQ);
             CryptographicOperations.ZeroMemory(parameters.DP);
             CryptographicOperations.ZeroMemory(parameters.DQ);
+        }
+    }
+
+    /// <summary>
+    /// The platform decides what it will import, and it refuses some keys that are consistent, such as an RSA exponent
+    /// wider than 32 bits. Its exception type and message depend on the platform, so what the file said is a malformed key.
+    /// </summary>
+    private static RSA ImportRsa(RSAParameters parameters)
+    {
+        try
+        {
+            return RSA.Create(parameters);
+        }
+        catch (CryptographicException ex)
+        {
+            throw new SshKeyFileException(SshKeyFile.Malformed, ex);
+        }
+    }
+
+    private static ECDsa ImportEcdsa(ECParameters parameters)
+    {
+        try
+        {
+            return ECDsa.Create(parameters);
+        }
+        catch (CryptographicException ex)
+        {
+            throw new SshKeyFileException(SshKeyFile.Malformed, ex);
         }
     }
 
