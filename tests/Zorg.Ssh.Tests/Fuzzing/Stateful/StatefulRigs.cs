@@ -243,7 +243,7 @@ internal sealed class StatefulNotes
         if (executor.Canaries.Count > 0)
         {
             Reached("kex: a forbidden canary was injected behind the peer's KEXINIT");
-            Reached(peer.HasEnded ? "kex: the SUT ended the connection over the canary" : "kex: the connection survived a canary");
+            Reached("kex: the SUT ended the connection over the canary");
         }
 
         if (executor.SutRekeys > 0)
@@ -507,6 +507,7 @@ internal sealed class ServerRig : IDisposable
             executor = new SequenceExecutor(peer, app: null, Probe) { SutRekey = StartRekeyAsync };
             await executor.RunAsync(ops).ConfigureAwait(false);
             survived = await executor.BarrierAsync().ConfigureAwait(false);
+            await executor.RequireCanariesEndedAsync().ConfigureAwait(false);
             if (survived)
             {
                 memory = CheckBounds(Connection, 10);

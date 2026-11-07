@@ -427,6 +427,27 @@ internal sealed class SequenceExecutor
     /// Sends a message nothing uses and waits for the SUT's UNIMPLEMENTED for it. The SUT reads in order, so the answer proves it
     /// has dispatched everything sent before. It returns false if the connection ended first, and throws if neither happens in time.
     /// </summary>
+    /// <summary>
+    /// Requires that a canary ended the connection. The policy has only one answer to a connection message during the peer's key exchange, so a
+    /// connection that goes on has dropped or queued a message it must refuse. A reply to the canary is judged by the rigs; this catches silence.
+    /// </summary>
+    public async Task RequireCanariesEndedAsync()
+    {
+        if (_canaries.Count == 0)
+        {
+            return;
+        }
+
+        try
+        {
+            await _peer.Ended.WaitAsync(StatefulLimits.EndLimit).ConfigureAwait(false);
+        }
+        catch (TimeoutException)
+        {
+            throw new StatefulFindingException("GUARANTEE 1 BREACH", $"A message sent in the middle of the peer's key exchange did not end the connection within {StatefulLimits.EndLimit.TotalSeconds:0} s. {StatefulNotes.Describe(_peer)}");
+        }
+    }
+
     public async Task<bool> BarrierAsync()
     {
         if (_peer.HasEnded)
@@ -522,26 +543,31 @@ internal sealed class SequenceExecutor
             1 => Wire.ChannelOpen("direct-tcpip", id, Wire.DirectTcpExtra("127.0.0.1", 9)),
             _ => Wire.ChannelOpen("forwarded-tcpip", id, Wire.ForwardedTcpExtra("127.0.0.1", 9)),
         };
-        _canaries.Add(id);
         Injections++;
-        QueueIgnoringKex(message);
+        if (QueueIgnoringKex(message))
+        {
+            _canaries.Add(id);
+        }
+
         await Task.CompletedTask.ConfigureAwait(false);
     }
 
-    private void QueueIgnoringKex(byte[] payload)
+    private bool QueueIgnoringKex(byte[] payload)
     {
         if (payload.Length == 0 || payload.Length > 32 * 1024)
         {
-            return;
+            return false;
         }
 
         try
         {
             _peer.Transport.SendIgnoringKexForTests(payload);
+            return true;
         }
         catch (Exception ex) when (ex is SshException or ObjectDisposedException or InvalidOperationException)
         {
             // The connection is over, or the key exchange queue is full.
+            return false;
         }
     }
 

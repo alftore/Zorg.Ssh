@@ -98,6 +98,7 @@ internal sealed class ClientRig(Depth depth = Depth.Channel) : IDisposable
             };
             await executor.RunAsync(ops).ConfigureAwait(false);
             survived = await executor.BarrierAsync().ConfigureAwait(false);
+            await executor.RequireCanariesEndedAsync().ConfigureAwait(false);
             if (survived && connect.IsCompletedSuccessfully)
             {
                 memory = ServerRig.CheckBounds((await connect.ConfigureAwait(false)).Connection, 256);
