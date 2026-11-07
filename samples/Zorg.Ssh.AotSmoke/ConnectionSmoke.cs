@@ -108,6 +108,11 @@ internal static class ConnectionSmoke
         SshConfig config = SshConfig.Parse("Host web\n  HostName web.example.com\n  Port 2222\n  User deploy\n  IdentityFile ~/.ssh/id_web\n");
         SshHostConfig web = config.Resolve("web");
         check("ssh_config parse", web.HostName == "web.example.com" && web.Port == 2222 && web.User == "deploy" && web.IdentityFiles.Count == 1);
+
+        // First value wins, and a wildcard block fills in what the specific one left out.
+        SshConfig layered = SshConfig.Parse("Host web\n  Port 2200\nHost *\n  Port 22\n  User fallback\n");
+        SshHostConfig layeredWeb = layered.Resolve("web");
+        check("ssh_config precedence", layeredWeb.Port == 2200 && layeredWeb.User == "fallback" && layered.Resolve("other").Port == 22);
     }
 
     /// <summary>One pipe each way, so a client and a server can talk without a socket.</summary>
