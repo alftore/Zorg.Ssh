@@ -11,6 +11,9 @@ internal static partial class TransportLog
     [LoggerMessage(Level = LogLevel.Debug, Message = "Negotiated kex={Kex} hostkey={HostKey} send={SendCipher} mac={SendMac} receive={ReceiveCipher} mac={ReceiveMac} strict={Strict}")]
     public static partial void Negotiated(ILogger logger, string kex, string hostKey, string sendCipher, string sendMac, string receiveCipher, string receiveMac, bool strict);
 
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Using the legacy algorithm {Algorithm}, because the peer offers nothing better. Upgrade the peer if you can")]
+    public static partial void LegacyAlgorithm(ILogger logger, string algorithm);
+
     [LoggerMessage(Level = LogLevel.Debug, Message = "Starting a rekey after {Bytes} bytes and {Packets} packets")]
     public static partial void RekeyStarting(ILogger logger, long bytes, long packets);
 

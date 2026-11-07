@@ -6,7 +6,11 @@ using Zorg.Ssh.Protocol;
 
 namespace Zorg.Ssh.Crypto.Keys;
 
-/// <summary>An <c>ssh-rsa</c> public key, for <c>rsa-sha2-256</c> and <c>rsa-sha2-512</c> only (RFC 8332). SHA-1 isn't here.</summary>
+/// <summary>
+/// An <c>ssh-rsa</c> public key, for <c>rsa-sha2-256</c> and <c>rsa-sha2-512</c> (RFC 8332). <see cref="SupportsSignatureAlgorithm"/>
+/// and <see cref="Verify"/> never take SHA-1, so no generic path (certificates, the agent, a CA) can accept it. The legacy
+/// <c>ssh-rsa</c> signature has its own method, <see cref="VerifyLegacySha1"/>, called only where it was negotiated.
+/// </summary>
 internal sealed class RsaPublicKey : SshPublicKey
 {
     /// <summary>The key type.</summary>
@@ -135,9 +139,45 @@ internal sealed class RsaPublicKey : SshPublicKey
     /// <inheritdoc/>
     public override bool Verify(string signatureAlgorithm, ReadOnlySpan<byte> data, ReadOnlySpan<byte> signatureBlob)
     {
-        if (!SupportsSignatureAlgorithm(signatureAlgorithm)
-            || !SignatureBlob.TryRead(signatureAlgorithm, signatureBlob, out ReadOnlySpan<byte> signature)
-            || signature.Length > _modulus.Length)
+        if (!SupportsSignatureAlgorithm(signatureAlgorithm))
+        {
+            return false;
+        }
+
+        HashAlgorithmName hash = signatureAlgorithm == Sha512 ? HashAlgorithmName.SHA512 : HashAlgorithmName.SHA256;
+        try
+        {
+            return VerifyCore(signatureAlgorithm, hash, data, signatureBlob);
+        }
+        catch (CryptographicException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Checks a legacy <c>ssh-rsa</c> signature: PKCS#1 v1.5 with SHA-1. Only for a host key or user signature whose algorithm
+    /// was negotiated from a list that names <c>ssh-rsa</c>. Returns false for a bad signature. Platforms whose crypto
+    /// policy forbids SHA-1 signatures (RHEL 9 and later, at the DEFAULT policy) make the check itself throw, which becomes
+    /// <see cref="SshNegotiationException"/> saying so.
+    /// </summary>
+    public bool VerifyLegacySha1(ReadOnlySpan<byte> data, ReadOnlySpan<byte> signatureBlob)
+    {
+        try
+        {
+#pragma warning disable CA5350 // Legacy ssh-rsa, opt-in through SshAlgorithms.LegacyUnsafe or an explicit list only.
+            return VerifyCore(LegacyAlgorithms.RsaSha1, HashAlgorithmName.SHA1, data, signatureBlob);
+#pragma warning restore CA5350
+        }
+        catch (CryptographicException ex)
+        {
+            throw LegacyRsa.PolicyRefusal(ex);
+        }
+    }
+
+    private bool VerifyCore(string signatureAlgorithm, HashAlgorithmName hash, ReadOnlySpan<byte> data, ReadOnlySpan<byte> signatureBlob)
+    {
+        if (!SignatureBlob.TryRead(signatureAlgorithm, signatureBlob, out ReadOnlySpan<byte> signature) || signature.Length > _modulus.Length)
         {
             return false;
         }
@@ -145,16 +185,8 @@ internal sealed class RsaPublicKey : SshPublicKey
         // Some peers drop leading zero bytes from the signature, and OpenSSH accepts that. The BCL wants the full width.
         byte[] padded = new byte[_modulus.Length];
         signature.CopyTo(padded.AsSpan(padded.Length - signature.Length));
-        HashAlgorithmName hash = signatureAlgorithm == Sha512 ? HashAlgorithmName.SHA512 : HashAlgorithmName.SHA256;
-        try
-        {
-            using RSA rsa = RSA.Create(Parameters());
-            return rsa.VerifyData(data, padded, hash, RSASignaturePadding.Pkcs1);
-        }
-        catch (CryptographicException)
-        {
-            return false;
-        }
+        using RSA rsa = RSA.Create(Parameters());
+        return rsa.VerifyData(data, padded, hash, RSASignaturePadding.Pkcs1);
     }
 
     private static ReadOnlySpan<byte> TrimLeadingZeros(ReadOnlySpan<byte> value)
@@ -237,6 +269,24 @@ internal sealed class RsaPrivateKey : SshPrivateKey
         return SignatureBlob.Write(signatureAlgorithm, _key.SignData(data, hash, RSASignaturePadding.Pkcs1));
     }
 
+    /// <summary>
+    /// Makes a legacy <c>ssh-rsa</c> signature (PKCS#1 v1.5 with SHA-1), only where <c>ssh-rsa</c> was negotiated. A platform
+    /// crypto policy that forbids SHA-1 signatures becomes <see cref="SshNegotiationException"/> saying so.
+    /// </summary>
+    public byte[] SignLegacySha1(ReadOnlySpan<byte> data)
+    {
+        try
+        {
+#pragma warning disable CA5350 // Legacy ssh-rsa, opt-in through SshAlgorithms.LegacyUnsafe or an explicit list only.
+            return SignatureBlob.Write(LegacyAlgorithms.RsaSha1, _key.SignData(data, HashAlgorithmName.SHA1, RSASignaturePadding.Pkcs1));
+#pragma warning restore CA5350
+        }
+        catch (CryptographicException ex)
+        {
+            throw LegacyRsa.PolicyRefusal(ex);
+        }
+    }
+
     /// <inheritdoc/>
     protected override void Dispose(bool disposing)
     {
@@ -247,4 +297,30 @@ internal sealed class RsaPrivateKey : SshPrivateKey
 
         base.Dispose(disposing);
     }
+}
+
+/// <summary>
+/// The legacy <c>ssh-rsa</c> signature algorithm, RSA with SHA-1. Each caller checks that it was negotiated, or that its own
+/// options allow it, before it gets here: the key classes' generic signature methods never accept SHA-1.
+/// </summary>
+internal static class LegacyRsa
+{
+    /// <summary>Gets whether this private key can make an <c>ssh-rsa</c> signature: a plain RSA key, not a certificate.</summary>
+    public static bool CanSign(SshPrivateKey key) => key is RsaPrivateKey;
+
+    /// <summary>Gets whether this public key can check an <c>ssh-rsa</c> signature: a plain RSA key, not a certificate.</summary>
+    public static bool CanVerify(SshPublicKey key) => key is RsaPublicKey;
+
+    /// <summary>Signs with SHA-1. The key must pass <see cref="CanSign"/>.</summary>
+    public static byte[] Sign(SshPrivateKey key, ReadOnlySpan<byte> data) => ((RsaPrivateKey)key).SignLegacySha1(data);
+
+    /// <summary>Checks a SHA-1 signature. Returns false for any key that isn't plain RSA.</summary>
+    public static bool Verify(SshPublicKey key, ReadOnlySpan<byte> data, ReadOnlySpan<byte> signatureBlob) =>
+        key is RsaPublicKey rsa && rsa.VerifyLegacySha1(data, signatureBlob);
+
+    /// <summary>The failure when the platform refuses SHA-1 signatures. It carries no data, only what to do.</summary>
+    public static SshNegotiationException PolicyRefusal(CryptographicException inner) => new(
+        "The platform refused an ssh-rsa (RSA with SHA-1) signature. Its crypto policy probably forbids SHA-1 signatures, as RHEL 9 and later do by default. "
+        + "Upgrade the peer to rsa-sha2-256 or rsa-sha2-512, or allow SHA-1 in the system policy (on RHEL: update-crypto-policies --set DEFAULT:SHA1).",
+        inner);
 }

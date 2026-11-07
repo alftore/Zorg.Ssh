@@ -30,6 +30,12 @@ internal sealed class TransportOptions
 
     public IReadOnlyList<string> Macs { get; init; } = PacketCipherCatalog.DefaultMacs;
 
+    /// <summary>
+    /// Gets the creator of key exchange methods outside the default catalog: finite-field Diffie-Hellman, when
+    /// <see cref="SshAlgorithms"/> allows it. Null otherwise, and then no such name can be created.
+    /// </summary>
+    public KeyExchangeExtension? KeyExchangeExtension { get; init; }
+
     /// <summary>Gets the keys a server proves its identity with. Required for a server.</summary>
     public IReadOnlyList<SshPrivateKey> HostKeys { get; init; } = [];
 

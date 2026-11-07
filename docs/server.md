@@ -207,6 +207,8 @@ SshServerOptions options = new()
 
 `Banner` is text sent to clients before login. `LoggerFactory` takes a standard `ILoggerFactory`, and passwords and keys aren't logged.
 
+`Algorithms` narrows what the server offers, as on the client. For old clients, `SshAlgorithms.LegacyUnsafe` adds `ssh-rsa` (SHA-1) host key signatures, when a host key is RSA, `ssh-rsa` user signatures, and the `hmac-sha1` MACs. It doesn't add finite-field Diffie-Hellman: a client can make the server spend milliseconds of CPU per handshake on it before logging in, so the server offers `diffie-hellman-*` only when its `KeyExchange` list names them, as OpenSSH 10's sshd does. [security.md](security.md#legacy-algorithms) has the details.
+
 ### Keepalive
 
 Keepalive frees the slot of a client that has gone. It's on by default, and it starts after login. Before login, `LoginGraceTime` does that job.

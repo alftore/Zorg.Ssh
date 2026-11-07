@@ -34,7 +34,7 @@ The only skips left should be the platform ones: Windows rules, NTFS streams, na
 
 ## Fuzzing
 
-`tests/Zorg.Ssh.Tests/Fuzzing` attacks every decoder that reads bytes or text from a peer, a file or a local client: `SshReader`, `KexInitMessage.Parse`, `SshCertificate.ParseAny`, `OpenSshKeyFormat.Parse`, `SshKeyFile.Load`, `KnownHostsFile.Parse`, `SshConfig.Parse`, the SFTP response readers, `SocksHandshake`, `PacketReader`, the agent replies, `SftpServerSession.DispatchAsync` and `ServerAuthenticator.ParsePublicKey`. Seeds come from the keys, certificates and builders the other tests use. The mutator changes them with bit flips, truncation, splices and boundary values, and it knows where the length fields are, because a wrong length is what a parser has most to get right.
+`tests/Zorg.Ssh.Tests/Fuzzing` attacks every decoder that reads bytes or text from a peer, a file or a local client: `SshReader`, `KexInitMessage.Parse`, `SshCertificate.ParseAny`, `OpenSshKeyFormat.Parse`, `SshKeyFile.Load`, `KnownHostsFile.Parse`, `SshConfig.Parse`, the SFTP response readers, `SocksHandshake`, `PacketReader`, the agent replies, `SftpServerSession.DispatchAsync`, `ServerAuthenticator.ParsePublicKey` and the Diffie-Hellman peer value check. Seeds come from the keys, certificates and builders the other tests use. The mutator changes them with bit flips, truncation, splices and boundary values, and it knows where the length fields are, because a wrong length is what a parser has most to get right.
 
 Each input is checked for the three failures guarantee 3 rules out: an exception that isn't the decoder's documented type, a run past a time limit (5 seconds), and a small input that allocates a lot. `FuzzAllowedExceptions` in `FuzzTargets.cs` is the one table of allowed types. Don't add a type there to make a target pass.
 
@@ -132,7 +132,7 @@ It also opens a real connection: an in-memory client and server, a command, an S
 - **Vertical slices.** Tests and docs land in the same commit as the code.
 - **Tests listen on loopback only** (`IPAddress.Loopback`, never `Any`), because anything wider prompts the Windows firewall. To test several source addresses, bind the client to 127.0.0.x and connect to 127.0.0.1. `ListenAddressGuardTests` enforces this.
 - **New packages** go through the review in `docs/dependencies.md`.
-- **Legacy algorithms** live behind `SshAlgorithms.LegacyInsecure`, and weak-crypto analyzer suppressions stay in those files, with a reason.
+- **Legacy algorithms** live behind `SshAlgorithms.LegacyUnsafe`, and weak-crypto analyzer suppressions stay next to them, with a reason. Their names are in `Crypto/LegacyAlgorithms.cs`, and the finite-field code is reached only through `KeyExchangeExtension`, which only `LegacyUnsafe` and an explicit `KeyExchange` list create, so trimming can drop it. Never add group1, group exchange, `ssh-dss`, 3DES, arcfour, MD5 or CBC.
 
 ## Commits
 

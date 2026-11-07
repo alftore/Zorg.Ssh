@@ -116,7 +116,7 @@ internal static class ConnectionSmoke
     }
 
     /// <summary>One pipe each way, so a client and a server can talk without a socket.</summary>
-    private sealed class Duplex(Stream read, Stream write) : Stream
+    internal sealed class Duplex(Stream read, Stream write) : Stream
     {
         public static (Stream A, Stream B) CreatePair()
         {

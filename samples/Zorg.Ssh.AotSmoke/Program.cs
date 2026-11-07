@@ -25,5 +25,6 @@ CipherSmoke.Run(Check);
 KeySmoke.Run(Check);
 KeyFileSmoke.Run(Check);
 await ConnectionSmoke.RunAsync(Check);
+await LegacySmoke.RunAsync(Check);
 
 return failures == 0 ? 0 : 1;

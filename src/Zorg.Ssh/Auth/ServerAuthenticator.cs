@@ -5,6 +5,7 @@ using System.Security.Cryptography;
 using System.Threading;
 using System.Threading.Tasks;
 using Zorg.Ssh.Crypto;
+using Zorg.Ssh.Crypto.Keys;
 using Zorg.Ssh.Protocol;
 using Zorg.Ssh.Transport;
 
@@ -34,6 +35,9 @@ internal sealed class ServerAuthOptions
     public IReadOnlyList<string>? RequiredMethods { get; init; }
 
     public string? Banner { get; init; }
+
+    /// <summary>Gets whether a client may sign with legacy <c>ssh-rsa</c> (SHA-1): only when the server's algorithm list names it.</summary>
+    public bool AllowRsaSha1 { get; init; }
 }
 
 /// <summary>
@@ -290,7 +294,8 @@ internal sealed class ServerAuthenticator(SshTransport transport, ServerAuthOpti
             return AuthDecision.Reject;
         }
 
-        if (!key.SupportsSignatureAlgorithm(parsed.Algorithm))
+        bool rsaSha1 = options.AllowRsaSha1 && parsed.Algorithm == LegacyAlgorithms.RsaSha1 && LegacyRsa.CanVerify(key);
+        if (!rsaSha1 && !key.SupportsSignatureAlgorithm(parsed.Algorithm))
         {
             return AuthDecision.Reject;
         }
@@ -320,7 +325,10 @@ internal sealed class ServerAuthenticator(SshTransport transport, ServerAuthOpti
 
         // Guarantee 2: the handler's yes means nothing until the signature proves the client holds the key.
         byte[] signed = SignedData(request, parsed);
-        if (!key.Verify(parsed.Algorithm, signed, parsed.Signature))
+        bool valid = rsaSha1
+            ? LegacyRsa.Verify(key, signed, parsed.Signature)
+            : key.Verify(parsed.Algorithm, signed, parsed.Signature);
+        if (!valid)
         {
             return AuthDecision.Reject;
         }

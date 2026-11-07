@@ -55,6 +55,19 @@ SshClientOptions options = new()
 
 `Algorithms` narrows the algorithm lists, for example to meet a policy. The defaults need no tuning, and [security.md](security.md#algorithms) lists them. Against a server with no AEAD cipher and no EtM MAC, such as Dropbear or some appliances, the client uses AES-CTR with `hmac-sha2-512` or `hmac-sha2-256` (encrypt-and-MAC), which security.md explains.
 
+For old network equipment, BMCs and servers that offer only SHA-1 or finite-field key exchange, set `Algorithms = SshAlgorithms.LegacyUnsafe`. It appends `diffie-hellman-group14-sha256`, `diffie-hellman-group16-sha512` and `diffie-hellman-group14-sha1`, `ssh-rsa` host keys and signatures, and `hmac-sha1-etm@openssh.com` and `hmac-sha1` after the defaults, so a modern server still gets modern algorithms. Each legacy algorithm that is chosen logs a warning naming it. [security.md](security.md#legacy-algorithms) explains the cost of each. With it, an RSA key signs with `ssh-rsa` when the server sends no `server-sig-algs`, as OpenSSH does.
+
+```csharp
+SshClientOptions options = new()
+{
+    Host = "ilo.example",
+    UserName = "admin",
+    HostKeyPolicy = HostKeyPolicy.KnownHostsFile(),
+    Credentials = [SshCredential.FromPassword(password)],
+    Algorithms = SshAlgorithms.LegacyUnsafe,
+};
+```
+
 `client.ServerVersion` holds the server's identification line, such as `SSH-2.0-OpenSSH_10.6`. The server chooses that too, so don't base a security decision on it.
 
 Dispose the client to close the connection. Commands on one client can run at the same time.

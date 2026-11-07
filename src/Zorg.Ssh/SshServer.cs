@@ -71,8 +71,10 @@ public sealed partial class SshServer : IAsyncDisposable
             KeepAliveInterval = options.KeepAliveInterval,
             KeepAliveCountMax = options.KeepAliveCountMax,
             TimeProvider = options.TimeProvider,
-            KexAlgorithms = options.Algorithms.KeyExchange,
+            KexAlgorithms = options.Algorithms.ServerKeyExchange,
+            KeyExchangeExtension = options.Algorithms.KeyExchangeExtension,
             HostKeyAlgorithms = options.Algorithms.HostKeys,
+            ServerSignatureAlgorithms = options.Algorithms.ServerSignatureAlgorithms,
             Ciphers = options.Algorithms.Ciphers,
             Macs = options.Algorithms.Macs,
             Logger = _logger,
@@ -445,6 +447,7 @@ public sealed partial class SshServer : IAsyncDisposable
             Banner = options.Banner,
             MaxAttempts = options.MaxAuthAttempts,
             RequiredMethods = options.RequiredAuthMethods,
+            AllowRsaSha1 = options.Algorithms.AllowsRsaSha1,
             Password = options.PasswordHandler is { } password
                 ? (user, secret, ct) => CheckAsync(() => password(new SshPasswordRequest(user, secret), ct))
                 : null,

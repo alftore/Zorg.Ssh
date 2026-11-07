@@ -44,6 +44,11 @@ internal static class PacketCipherCatalog
         new(HmacSha512Etm, 64, IsEtm: true, HashAlgorithmName.SHA512),
         new(HmacSha256, 32, IsEtm: false, HashAlgorithmName.SHA256),
         new(HmacSha512, 64, IsEtm: false, HashAlgorithmName.SHA512),
+
+        // Legacy, never in the defaults: only SshAlgorithms.LegacyUnsafe or an explicit list can name them. HMAC doesn't
+        // rely on SHA-1's collision resistance, so neither has a practical forgery (RFC 6668 still lists hmac-sha1).
+        new(LegacyAlgorithms.HmacSha1Etm, 20, IsEtm: true, HashAlgorithmName.SHA1),
+        new(LegacyAlgorithms.HmacSha1, 20, IsEtm: false, HashAlgorithmName.SHA1),
     ];
 
     /// <summary>Gets the cipher preference order for this machine: AES-GCM first with AES hardware, otherwise ChaCha.</summary>

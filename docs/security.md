@@ -95,7 +95,26 @@ Why they're acceptable:
 
 Compression: `none` only.
 
-Not offered: `ssh-rsa` with SHA-1, `ssh-dss`, CBC ciphers, `diffie-hellman-*` key exchange and `hmac-sha1`. A server that offers only those fails with `SshNegotiationException`.
+Not offered by default: `ssh-rsa` with SHA-1, `diffie-hellman-*` key exchange and `hmac-sha1`. `SshAlgorithms.LegacyUnsafe` adds them, as the next section says. Never offered: `diffie-hellman-group1-sha1`, `diffie-hellman-group-exchange-*`, `ssh-dss`, `3des-cbc`, every CBC cipher, arcfour and MD5. A server that offers only those fails with `SshNegotiationException`, whose message points at `LegacyUnsafe` when that would help.
+
+### Legacy algorithms
+
+`SshAlgorithms.LegacyUnsafe` is the defaults with these appended, last in each list:
+
+- Key exchange: `diffie-hellman-group14-sha256`, `diffie-hellman-group16-sha512` (RFC 8268), `diffie-hellman-group14-sha1` (RFC 4253), on the RFC 3526 2048-bit and 4096-bit groups.
+- Host keys and user signatures: `ssh-rsa`, RSA with SHA-1.
+- MACs: `hmac-sha1-etm@openssh.com`, `hmac-sha1`.
+
+It's for network equipment, BMCs and old servers that have nothing better, such as HPE iLO 4 and 5, classic Cisco IOS, older Dropbear and RHEL 6. A peer that has anything better still gets it: the legacy names come last, and each side's `KEXINIT` is in the signed exchange hash, so a man in the middle can't strip the modern names. Choosing a legacy algorithm logs a warning that names it. A narrowed list can also name any of these directly.
+
+Why each is acceptable as an opt-in, and why it stays opt-in:
+
+- **Finite-field Diffie-Hellman.** The groups are 2048 and 4096 bits, which RFC 9142 still allows. `group14-sha1` puts SHA-1 in the exchange hash; a collision attack on it would need work before the session against values both sides randomise, so it isn't a real-time attack, but RFC 9142 grades it SHOULD NOT. The peer's value must satisfy 1 < f < p - 1 and be no wider than the group, or the exchange fails before any work is spent on it. The private exponent comes from `RandomNumberGenerator`, at OpenSSH's size: twice the bits of the largest key the session derives, at least 512 bits. The exponentiation is this library's own: Montgomery multiplication on fixed-width limbs with a fixed 4-bit window, every table entry read on every step, no branch or index on the exponent, and every buffer pinned and zeroed afterwards. `BigInteger` isn't used for secrets, because it can't be zeroed and `ModPow` isn't constant-time. No external review has checked that code yet, and its timing hasn't been measured.
+- **Its cost.** One handshake does two modular exponentiations: about 9 ms each for group 14 and 17 to 29 ms for group 16, measured on the development machine (x64, Release), a little faster than `BigInteger.ModPow`. A client can make a server spend that before logging in, so **a server offers Diffie-Hellman only when its `KeyExchange` list names it explicitly**, as OpenSSH 10's sshd does. `LegacyUnsafe` on a server adds `ssh-rsa` and the SHA-1 MACs, but no Diffie-Hellman.
+- **`ssh-rsa`.** SHA-1 chosen-prefix collisions are practical (Shambles, 2020), and they threaten long-lived signed data. A key exchange signature covers a hash of fresh values from both sides, so a precomputed collision doesn't help against it. The library accepts or makes a SHA-1 signature only where `ssh-rsa` was negotiated from a list that names it. Certificates signed by their CA with SHA-1 are refused whatever the lists say. Without `server-sig-algs`, a client with `ssh-rsa` allowed signs RSA user keys with it, as OpenSSH does; otherwise it uses `rsa-sha2-512`. Platforms whose crypto policy forbids SHA-1 signatures (RHEL 9 and later by default) refuse it, and that becomes `SshNegotiationException` saying so.
+- **HMAC-SHA-1.** HMAC doesn't depend on SHA-1's collision resistance, and there is no practical forgery. It's opt-in because policies forbid SHA-1.
+
+Trimming and Native AOT leave the finite-field code out of an application that never uses `LegacyUnsafe` and never sets `SshAlgorithms.KeyExchange` (checked with a trimmed publish: none of the finite-field types are left). The SHA-1 MAC and signature paths are a few lines in shared classes and stay.
 
 BouncyCastle provides Ed25519, X25519, ML-KEM, sntrup761 and ChaCha20-Poly1305 where the .NET libraries don't. Its code hasn't been reviewed as part of this project. See [dependencies.md](dependencies.md).
 
@@ -111,7 +130,7 @@ Not implemented in this version:
 - Following `ProxyJump` or `ProxyCommand` from a config file. `SshClientOptions.FromConfig` reads a subset of `~/.ssh/config` and refuses such a host. Use `SshClientOptions.JumpHost` instead.
 - `Match` blocks in a config file. They are never evaluated, and `FromConfig` throws when one that could apply sets a keyword that decides trust. `RevokedHostKeys`, `KnownHostsCommand` and `HostKeyAlias` also make it throw. `IdentityAgent` (except `none`), `CertificateFile`, `HostKeyAlgorithms` and `CASignatureAlgorithms` are ignored with a warning. [client.md](client.md#the-agent-certificates-and-sshconfig) has the table.
 - X11 forwarding, GSSAPI, host-based login, security keys (`sk-`), PKCS#11 and ML-DSA signatures.
-- Legacy algorithms. Old network equipment that needs them won't connect.
+- Older legacy algorithms than those in `LegacyUnsafe` (group1, group exchange, DSA, 3DES, CBC, arcfour, MD5). Equipment that needs only those won't connect.
 - Keyboard-interactive login and password changes on the server side.
 - Changing an expired password from the client: it fails with `SshAuthenticationException`.
 - SFTP versions other than 3.

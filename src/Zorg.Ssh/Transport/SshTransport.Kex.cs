@@ -142,7 +142,7 @@ internal sealed partial class SshTransport
 
         IReadOnlyList<string> hostKeys = client
             ? _options.HostKeyAlgorithms
-            : [.. _options.HostKeyAlgorithms.Where(a => _options.HostKeys.Any(k => k.SignatureAlgorithms.Contains(a)))];
+            : [.. _options.HostKeyAlgorithms.Where(a => _options.HostKeys.Any(k => CanSign(k, a)))];
 
         return new KexInitMessage
         {
@@ -201,6 +201,7 @@ internal sealed partial class SshTransport
         _ignoreNextKexPacket = negotiated.PeerGuessWrong;
         _kexMethod?.Dispose();
         _kexMethod = KeyExchangeCatalog.Create(negotiated.Kex)
+            ?? _options.KeyExchangeExtension?.Create(negotiated.Kex, KeyNeedBytes(negotiated))
             ?? throw new SshNegotiationException($"The negotiated key exchange {negotiated.Kex} isn't available.");
 
         bool client = _options.Role == SshRole.Client;
@@ -213,6 +214,13 @@ internal sealed partial class SshTransport
             client ? negotiated.CipherServerToClient : negotiated.CipherClientToServer,
             (client ? negotiated.MacServerToClient : negotiated.MacClientToServer) ?? "implicit",
             _strictKex);
+        foreach (string? name in new[] { negotiated.Kex, negotiated.HostKey, negotiated.MacClientToServer, negotiated.MacServerToClient }.Distinct())
+        {
+            if (LegacyAlgorithms.IsLegacy(name))
+            {
+                TransportLog.LegacyAlgorithm(_options.Logger, name!);
+            }
+        }
 
         if (client)
         {
@@ -277,13 +285,15 @@ internal sealed partial class SshTransport
         }
 
         NegotiatedAlgorithms negotiated = _negotiated!;
-        SshPrivateKey hostKey = _options.HostKeys.First(k => k.SignatureAlgorithms.Contains(negotiated.HostKey));
+        SshPrivateKey hostKey = _options.HostKeys.First(k => CanSign(k, negotiated.HostKey));
         byte[] hostKeyBlob = hostKey.PublicKey.Blob.ToArray();
         byte[] serverPublic = _kexMethod!.ServerRespond(clientPublic, out byte[] sharedSecret);
         try
         {
             byte[] exchangeHash = ComputeExchangeHash(hostKeyBlob, clientPublic, serverPublic, sharedSecret);
-            byte[] signature = hostKey.Sign(negotiated.HostKey, exchangeHash);
+            byte[] signature = negotiated.HostKey == LegacyAlgorithms.RsaSha1
+                ? LegacyRsa.Sign(hostKey, exchangeHash)
+                : hostKey.Sign(negotiated.HostKey, exchangeHash);
 
             byte[] reply;
             SshWriter writer = new(hostKeyBlob.Length + serverPublic.Length + signature.Length + 32);
@@ -325,7 +335,11 @@ internal sealed partial class SshTransport
 
         NegotiatedAlgorithms negotiated = _negotiated!;
         SshPublicKey hostKey = SshCertificate.ParseAny(hostKeyBlob);
-        if (!hostKey.SupportsSignatureAlgorithm(negotiated.HostKey))
+
+        // ssh-rsa is negotiated only from a list that names it (LegacyUnsafe, or explicit), and that is checked again here.
+        // It takes a plain RSA key: no certificate algorithm is ssh-rsa.
+        bool rsaSha1 = negotiated.HostKey == LegacyAlgorithms.RsaSha1 && _options.HostKeyAlgorithms.Contains(LegacyAlgorithms.RsaSha1);
+        if (rsaSha1 ? !LegacyRsa.CanVerify(hostKey) : !hostKey.SupportsSignatureAlgorithm(negotiated.HostKey))
         {
             throw new SshHostKeyException($"The server sent a {hostKey.KeyType} key, which doesn't match the negotiated {negotiated.HostKey}. This can mean an attack.");
         }
@@ -336,7 +350,10 @@ internal sealed partial class SshTransport
             byte[] exchangeHash = ComputeExchangeHash(hostKeyBlob, _clientPublicValue!, serverPublic, sharedSecret);
 
             // Guarantee 2: the signature proves the server holds the key, and then the key itself must be trusted.
-            if (!hostKey.Verify(negotiated.HostKey, exchangeHash, signature))
+            bool valid = rsaSha1
+                ? LegacyRsa.Verify(hostKey, exchangeHash, signature)
+                : hostKey.Verify(negotiated.HostKey, exchangeHash, signature);
+            if (!valid)
             {
                 throw new SshHostKeyException("The server's signature over the key exchange is invalid. This can mean an attack, so the connection was closed.");
             }
@@ -383,6 +400,33 @@ internal sealed partial class SshTransport
         }
 
         _peerHostKey = hostKey;
+    }
+
+    /// <summary>Gets whether a host key can sign with an algorithm. A server offers ssh-rsa only when its list names it.</summary>
+    private static bool CanSign(SshPrivateKey key, string algorithm) =>
+        key.SignatureAlgorithms.Contains(algorithm) || (algorithm == LegacyAlgorithms.RsaSha1 && LegacyRsa.CanSign(key));
+
+    /// <summary>
+    /// The longest key, IV or MAC key the session will derive, in bytes, or the AES block: what OpenSSH's
+    /// <c>kex->we_need</c> holds, and what sets the size of a finite-field exponent.
+    /// </summary>
+    private static int KeyNeedBytes(NegotiatedAlgorithms negotiated)
+    {
+        int need = 0;
+        foreach ((string cipherName, string? macName) in new[] { (negotiated.CipherClientToServer, negotiated.MacClientToServer), (negotiated.CipherServerToClient, negotiated.MacServerToClient) })
+        {
+            if (PacketCipherCatalog.FindCipher(cipherName) is { } cipher)
+            {
+                need = Math.Max(need, Math.Max(cipher.KeyLength, Math.Max(cipher.IvLength, 16)));
+            }
+
+            if (macName is not null && PacketCipherCatalog.FindMac(macName) is { } mac)
+            {
+                need = Math.Max(need, mac.KeyLength);
+            }
+        }
+
+        return need;
     }
 
     /// <summary>H = HASH(V_C || V_S || I_C || I_S || K_S || Q_C || Q_S || K), with K already encoded.</summary>

@@ -533,6 +533,7 @@ static Zorg.Ssh.Sftp.SftpFileSystemInfo.operator !=(Zorg.Ssh.Sftp.SftpFileSystem
 static Zorg.Ssh.Sftp.SftpFileSystemInfo.operator ==(Zorg.Ssh.Sftp.SftpFileSystemInfo? left, Zorg.Ssh.Sftp.SftpFileSystemInfo? right) -> bool
 static Zorg.Ssh.Sftp.SftpServer.ServeAsync(Zorg.Ssh.SshServerSession! session, Zorg.Ssh.Sftp.SftpServerOptions! options, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<int>!
 static Zorg.Ssh.SshAlgorithms.Default.get -> Zorg.Ssh.SshAlgorithms!
+static Zorg.Ssh.SshAlgorithms.LegacyUnsafe.get -> Zorg.Ssh.SshAlgorithms!
 static Zorg.Ssh.SshClient.ConnectAsync(Zorg.Ssh.SshClientOptions! options, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Zorg.Ssh.SshClient!>!
 static Zorg.Ssh.SshClient.ConnectOverStreamAsync(System.IO.Stream! stream, Zorg.Ssh.SshClientOptions! options, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Zorg.Ssh.SshClient!>!
 static Zorg.Ssh.SshClientOptions.FromConfig(string! hostAlias, Zorg.Ssh.SshConfig? config = null, Zorg.Ssh.HostKeyPolicy? hostKeyPolicy = null, System.Collections.Generic.IReadOnlyList<Zorg.Ssh.SshCredential!>? credentials = null, Microsoft.Extensions.Logging.ILoggerFactory? loggerFactory = null) -> Zorg.Ssh.SshClientOptions!

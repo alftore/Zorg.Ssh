@@ -19,7 +19,7 @@ internal static class CipherSmoke
                 continue;
             }
 
-            foreach (string mac in PacketCipherCatalog.DefaultMacs)
+            foreach (string mac in (string[])[.. PacketCipherCatalog.DefaultMacs, .. LegacyAlgorithms.Macs])
             {
                 check($"{cipher} with {mac}", RoundTrips(cipher, mac));
             }

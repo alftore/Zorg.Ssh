@@ -442,6 +442,22 @@ internal static class FuzzCorpus
         return packet;
     }
 
+    /// <summary>Diffie-Hellman public values, as mpint bodies, behind a byte that picks group 14 (even) or 16 (odd).</summary>
+    public static IReadOnlyList<FuzzSeed> DhPeerValues()
+    {
+        List<FuzzSeed> seeds = [];
+        foreach ((byte selector, Zorg.Ssh.Crypto.KeyExchange.DiffieHellmanGroup group) in new[] { ((byte)0, Zorg.Ssh.Crypto.KeyExchange.DiffieHellmanGroup.Group14), ((byte)1, Zorg.Ssh.Crypto.KeyExchange.DiffieHellmanGroup.Group16) })
+        {
+            System.Numerics.BigInteger p = new(group.Prime, isUnsigned: true, isBigEndian: true);
+            System.Numerics.BigInteger e = System.Numerics.BigInteger.ModPow(2, new System.Numerics.BigInteger(System.Security.Cryptography.SHA256.HashData([selector]), isUnsigned: true), p);
+            seeds.Add(FuzzSeed.Binary("dh value " + group.Bits, [selector, .. e.ToByteArray(isUnsigned: false, isBigEndian: true)]));
+            seeds.Add(FuzzSeed.Binary("dh p-2 " + group.Bits, [selector, .. (p - 2).ToByteArray(isUnsigned: false, isBigEndian: true)]));
+            seeds.Add(FuzzSeed.Binary("dh 2 " + group.Bits, [selector, 2]));
+        }
+
+        return seeds;
+    }
+
     // ssh-agent.
 
     public static IReadOnlyList<FuzzSeed> AgentFrames()

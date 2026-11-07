@@ -139,7 +139,14 @@ The server ended the connection on purpose. It derives from `SshConnectionExcept
 
 ## SshNegotiationException
 
-The two sides share no algorithm in one family. `Family` names it, and `LocalAlgorithms` and `PeerAlgorithms` list both sides. Usually the server is old and offers only algorithms that aren't supported here. You can't change the client's lists, so enable a shared algorithm on the server: see [security.md](security.md#algorithms). If the server can't change, Zorg.Ssh can't connect to it yet.
+The two sides share no algorithm in one family. `Family` names it, and `LocalAlgorithms` and `PeerAlgorithms` list both sides. Usually the server is old and offers only algorithms that aren't in the defaults. Enable a shared algorithm on the server if you can: see [security.md](security.md#algorithms).
+
+| Message says | What to do |
+|---|---|
+| The peer offers X, which `SshAlgorithms.LegacyUnsafe` enables | The server has only older algorithms. Upgrade it if you can. Otherwise set `Algorithms = SshAlgorithms.LegacyUnsafe` on the client, after reading [security.md](security.md#legacy-algorithms). A warning is logged each time a legacy algorithm is used. |
+| No common key exchange, with `diffie-hellman-*` on the client and a server from this library | A server offers finite-field Diffie-Hellman only when its `KeyExchange` list names it: `LegacyUnsafe` alone isn't enough there. |
+| The platform refused an ssh-rsa (RSA with SHA-1) signature | The operating system's crypto policy forbids SHA-1 signatures, as RHEL 9 and later do by default. Upgrade the peer to `rsa-sha2-256` or `rsa-sha2-512`. If you can't, allow SHA-1 in the system policy (on RHEL: `update-crypto-policies --set DEFAULT:SHA1`), which affects every program on the machine. |
+| `diffie-hellman-group1-sha1`, `diffie-hellman-group-exchange-*`, `ssh-dss`, `3des-cbc`, CBC, arcfour or MD5 | Not supported, and `LegacyUnsafe` doesn't add them. The peer must be upgraded or reconfigured. |
 
 ## SshProtocolException
 
@@ -147,6 +154,7 @@ The peer broke the SSH protocol, so the connection can't continue.
 
 - "Check that the port runs SSH", or a bad identification line: you've probably reached something other than an SSH server.
 - "Failed authentication" on a packet: the data was corrupted or tampered with. Reconnect, and check the network path if it repeats.
+- "An invalid Diffie-Hellman public value": the peer's `diffie-hellman-*` value was out of range (it must be between 1 and p - 1, exclusive) or wider than the group. A real implementation never sends one, so check what you're connected to.
 - Other messages: if the peer is a real server, this may be a bug in either side. Report it with the server's version string, and a log from `LoggerFactory` if you can. See [SECURITY.md](../SECURITY.md) if it looks exploitable.
 
 ## SshException

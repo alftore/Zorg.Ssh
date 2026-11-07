@@ -52,6 +52,21 @@ internal static class ClientExamples
         return options;
     }
 
+    public static SshClientOptions LegacyOptions(string password)
+    {
+        // doc:legacy
+        SshClientOptions options = new()
+        {
+            Host = "ilo.example",
+            UserName = "admin",
+            HostKeyPolicy = HostKeyPolicy.KnownHostsFile(),
+            Credentials = [SshCredential.FromPassword(password)],
+            Algorithms = SshAlgorithms.LegacyUnsafe,
+        };
+        // end-doc
+        return options;
+    }
+
     public static IReadOnlyList<SshCredential> Credentials(string passphrase, string password, string deployKey, string oneTimeCode)
     {
         // doc:credentials

@@ -316,11 +316,11 @@ public sealed partial class SshClient : IAsyncDisposable
             KeepAliveCountMax = options.KeepAliveCountMax,
             TimeProvider = options.TimeProvider,
             KexAlgorithms = options.Algorithms.KeyExchange,
+            KeyExchangeExtension = options.Algorithms.KeyExchangeExtension,
 
-            // An explicit list is the caller's. Otherwise the policy can put certificate algorithms first.
-            HostKeyAlgorithms = ReferenceEquals(options.Algorithms.HostKeys, SshAlgorithms.Default.HostKeys)
-                ? options.HostKeyPolicy.HostKeyAlgorithmsFor(options.Host, options.Port)
-                : options.Algorithms.HostKeys,
+            // An explicit list is the caller's. Otherwise the policy can put certificate algorithms first, and a preset's
+            // legacy names (ssh-rsa in LegacyUnsafe) follow everything else.
+            HostKeyAlgorithms = options.Algorithms.ClientHostKeys(() => options.HostKeyPolicy.HostKeyAlgorithmsFor(options.Host, options.Port)),
             Ciphers = options.Algorithms.Ciphers,
             Macs = options.Algorithms.Macs,
             HostKeyValidator = (key, ct) => options.HostKeyPolicy.CheckAsync(options.Host, options.Port, key, ct),
@@ -331,7 +331,7 @@ public sealed partial class SshClient : IAsyncDisposable
         try
         {
             transport = await SshTransport.StartAsync(stream, transportOptions, timeoutToken).ConfigureAwait(false);
-            ClientAuthenticator authenticator = new(transport, options.UserName, options.BannerHandler);
+            ClientAuthenticator authenticator = new(transport, options.UserName, options.BannerHandler, options.Algorithms.AllowsRsaSha1);
             await authenticator.AuthenticateAsync(options.Credentials, timeoutToken).ConfigureAwait(false);
             RemoteForwardTable remoteForwards = new();
             SshConnection connection = new(transport) { ForwardedChannelHandler = remoteForwards.HandleOpen };

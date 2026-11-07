@@ -132,12 +132,18 @@ public class SshNegotiationException : SshProtocolException
     /// <param name="localAlgorithms">What this side offered.</param>
     /// <param name="peerAlgorithms">What the peer offered.</param>
     public SshNegotiationException(string family, IReadOnlyList<string> localAlgorithms, IReadOnlyList<string> peerAlgorithms)
-        : base($"No common {family} algorithm. This side offers [{Summarise(localAlgorithms)}]; the peer offers [{Summarise(peerAlgorithms)}]. Enable a shared algorithm on either side.")
+        : base($"No common {family} algorithm. This side offers [{Summarise(localAlgorithms)}]; the peer offers [{Summarise(peerAlgorithms)}]. Enable a shared algorithm on either side.{LegacyHint(localAlgorithms, peerAlgorithms)}")
     {
         Family = family;
         LocalAlgorithms = localAlgorithms;
         PeerAlgorithms = peerAlgorithms;
     }
+
+    /// <summary>Points at LegacyUnsafe when the peer offers a legacy algorithm this side doesn't. Names only, from a fixed list.</summary>
+    private static string LegacyHint(IReadOnlyList<string> localAlgorithms, IReadOnlyList<string> peerAlgorithms) =>
+        peerAlgorithms.FirstOrDefault(name => Crypto.LegacyAlgorithms.IsLegacy(name) && !localAlgorithms.Contains(name)) is { } legacy
+            ? $" The peer offers {legacy}, which SshAlgorithms.LegacyUnsafe enables: read docs/security.md before using it."
+            : string.Empty;
 
     private static string Summarise(IReadOnlyList<string> names)
     {

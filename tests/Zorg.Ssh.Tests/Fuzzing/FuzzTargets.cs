@@ -41,6 +41,7 @@ internal static class FuzzAllowedExceptions
     public const string PacketsPlain = "PacketReader (unencrypted)";
     public const string PacketsSealed = "PacketReader (ChaCha20-Poly1305)";
     public const string PacketsEam = "PacketReader (AES-CTR, encrypt-and-MAC)";
+    public const string DhPeerValue = "FiniteFieldDhKeyExchange peer value";
     public const string Agent = "SshAgentConnection replies";
     public const string SftpServer = "SftpServerSession.DispatchAsync";
     public const string PublicKeyRequest = "ServerAuthenticator.ParsePublicKey";
@@ -78,6 +79,9 @@ internal static class FuzzAllowedExceptions
 
         // PacketReader: SshProtocolException for bad framing, SshConnectionException when the stream ends.
         PacketsPlain or PacketsSealed or PacketsEam => [typeof(SshProtocolException), typeof(SshConnectionException)],
+
+        // FiniteFieldDhKeyExchange.ReadPeerValue: "Anything else throws SshProtocolException."
+        DhPeerValue => [typeof(SshProtocolException)],
 
         // SshAgentConnection: "all it sends is untrusted", every failure is an SshAgentException.
         Agent => [typeof(SshAgentException)],
@@ -117,6 +121,7 @@ internal static class FuzzTargets
         [FuzzAllowedExceptions.PacketsPlain] = 3,
         [FuzzAllowedExceptions.PacketsSealed] = 1,
         [FuzzAllowedExceptions.PacketsEam] = 3,
+        [FuzzAllowedExceptions.DhPeerValue] = 2,
         [FuzzAllowedExceptions.Agent] = 4,
         [FuzzAllowedExceptions.SftpServer] = 30,
         [FuzzAllowedExceptions.PublicKeyRequest] = 2,
@@ -141,6 +146,7 @@ internal static class FuzzTargets
         PacketsPlainTarget(),
         PacketsSealedTarget(),
         PacketsEamTarget(),
+        DhPeerValueTarget(),
         AgentTarget(),
         SftpServerTarget(),
         PublicKeyRequestTarget(),
@@ -612,6 +618,31 @@ internal static class FuzzTargets
 
         FuzzNotes.Reached((input[0] & 1) == 0 ? "as sent" : "self-sealed");
         FuzzNotes.Reached("eam packets read: " + Math.Min(packets, 3));
+        return FuzzOutcome.Accepted;
+    }
+
+    // Finite-field Diffie-Hellman.
+
+    private static FuzzTarget DhPeerValueTarget() => Make(FuzzAllowedExceptions.DhPeerValue, FuzzCorpus.DhPeerValues(), RunDhPeerValue, 3000, t =>
+    {
+        t.MinAccepted = 0.05;
+        t.MinReasons = 1;
+    });
+
+    private static FuzzOutcome RunDhPeerValue(byte[] input)
+    {
+        if (input.Length == 0)
+        {
+            return FuzzOutcome.Skipped;
+        }
+
+        // The first byte picks the group; the rest is the mpint body a peer sent.
+        Zorg.Ssh.Crypto.KeyExchange.DiffieHellmanGroup group = (input[0] & 1) == 0 ? Zorg.Ssh.Crypto.KeyExchange.DiffieHellmanGroup.Group14 : Zorg.Ssh.Crypto.KeyExchange.DiffieHellmanGroup.Group16;
+        using Zorg.Ssh.Crypto.KeyExchange.FiniteFieldDhKeyExchange exchange = new(group, System.Security.Cryptography.HashAlgorithmName.SHA256, 32);
+        ulong[] value = exchange.ReadPeerValue(input.AsSpan(1));
+        Require(value.Length == group.Arithmetic.Limbs, "a peer value has the wrong width");
+        Require(Zorg.Ssh.Crypto.KeyExchange.MontgomeryModPow.ComparePublic(value, group.PrimeMinusOne) < 0, "a peer value at or above p - 1 was accepted");
+        FuzzNotes.Reached(group.Bits + "-bit value accepted");
         return FuzzOutcome.Accepted;
     }
 
