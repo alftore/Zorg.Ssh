@@ -85,8 +85,20 @@ internal sealed class SftpServerPaths
     /// <summary>
     /// Works out what to store for a new link at <paramref name="link"/>. The target must stay inside the root from
     /// where the link is. An absolute target means the client's root, so it's stored relative to the link: a real
-    /// absolute path would point outside. A relative target is stored as sent.
+    /// absolute path would point outside. A relative target is stored in one shape only: <c>..</c> as a leading run
+    /// that goes no higher than the root, then plain names that only go down.
     /// </summary>
+    /// <remarks>
+    /// The shape is what keeps a link inside the root whatever links are made later. Take the link's directory: it is
+    /// a real directory below the root, with no link in its path, because <see cref="Resolve"/> walked it. The leading
+    /// <c>..</c> run is no longer than its depth, so it ends at one of its ancestors, and that is inside the root. The
+    /// names only descend from there. A name can be another link, but that link was made under the same rule, so by
+    /// induction it ends inside the root too, wherever it sits. Nothing after a name can climb, so no later link can
+    /// change where <c>..</c> goes, which a check made against the disk at one moment could not promise (<c>m/..</c>
+    /// with <c>m</c> missing, then <c>m</c> made a link to <c>.</c>). The walk below still refuses names that pass
+    /// through a link the host planted that leads out. Moving a link or its directory is not covered: that can make
+    /// the leading run too long for its new place, and reading it there is refused.
+    /// </remarks>
     public string PrepareLinkTarget(string target, SftpServerResolved link)
     {
         if (target.Length is 0 or > MaxPathLength || target.Contains('\0', StringComparison.Ordinal))
@@ -94,25 +106,56 @@ internal sealed class SftpServerPaths
             throw Invalid();
         }
 
-        IReadOnlyList<string> directory = link.Parts.Take(link.Parts.Count - 1).ToList();
-        List<string> components;
+        List<string> directory = [.. link.Parts.Take(link.Parts.Count - 1)];
+        List<string> raw;
         if (target[0] == '/')
         {
-            components = RelativeTo(directory, Normalise(target));
+            raw = RelativeTo(directory, Normalise(target));
         }
         else
         {
-            components = [.. target.Split('/', StringSplitOptions.RemoveEmptyEntries)];
-            if (components.Exists(static c => c is not ("." or "..") && !IsPlainName(c)))
+            raw = [.. target.Split('/', StringSplitOptions.RemoveEmptyEntries)];
+            if (raw.Exists(static c => c is not ("." or "..") && !IsPlainName(c)))
             {
                 throw Invalid();
             }
         }
 
+        // Lexically: "." goes, "name/.." goes, and ".." that has no name before it stays, in front.
+        List<string> components = [];
+        foreach (string component in raw)
+        {
+            if (component == ".")
+            {
+                continue;
+            }
+
+            if (component == ".." && components.Count != 0 && components[^1] != "..")
+            {
+                components.RemoveAt(components.Count - 1);
+                continue;
+            }
+
+            components.Add(component);
+        }
+
+        int climbs = components.TakeWhile(static c => c == "..").Count();
+        if (climbs > directory.Count)
+        {
+            throw Escape();
+        }
+
+        // Empty, ".", or a way back to the link's own directory: a link that leads nowhere.
+        List<string> place = [.. directory.Take(directory.Count - climbs), .. components.Skip(climbs)];
+        if (components.Count == 0 || place.SequenceEqual(directory, StringComparer.FromComparison(RootComparison)))
+        {
+            throw Invalid();
+        }
+
         Stack<string> pending = new();
         PushReversed(pending, components);
         Walk([.. directory], pending, SftpServerFinalLink.Follow);
-        return components.Count == 0 ? "." : string.Join(Path.DirectorySeparatorChar, components);
+        return string.Join(Path.DirectorySeparatorChar, components);
     }
 
     /// <summary>
@@ -194,7 +237,7 @@ internal sealed class SftpServerPaths
         !component.Contains('\0', StringComparison.Ordinal) && (!OperatingSystem.IsWindows() || SftpLocalPath.IsSafeName(component));
 
     /// <summary>Writes <paramref name="target"/> as a path relative to <paramref name="directory"/>, both below the root.</summary>
-    private static List<string> RelativeTo(IReadOnlyList<string> directory, List<string> target)
+    private static List<string> RelativeTo(List<string> directory, List<string> target)
     {
         int common = 0;
         while (common < directory.Count && common < target.Count && directory[common] == target[common])

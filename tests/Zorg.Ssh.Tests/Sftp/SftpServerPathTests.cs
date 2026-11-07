@@ -601,6 +601,102 @@ public sealed class SftpServerPathTests : IDisposable
         await swapping;
     }
 
+    [Fact]
+    public async Task SYMLINK_refuses_a_target_that_a_later_link_could_turn_into_a_climb()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows() && !CanCreateLinks(), "Needs the privilege to create symbolic links.");
+        await using SftpServerHarness client = await StartAsync(Options);
+
+        // m doesn't exist, so m/.. looked like the root. Once m is a link to ".", m/.. is the root's parent.
+        Assert.Equal(Failure, (await client.RequestAsync(SftpMessage.SymLink, Path("m/..").Text("x"))).Status);
+        Assert.False(new FileInfo(_sandbox.InRoot("x")).Exists);
+
+        // The second request alone is harmless, and so is the pair without the first.
+        Assert.Equal(Failure, (await client.RequestAsync(SftpMessage.SymLink, Path(".").Text("m"))).Status);
+        Assert.False(new FileInfo(_sandbox.InRoot("m")).Exists);
+        AssertEveryLinkStaysInside();
+    }
+
+    [Fact]
+    public async Task SYMLINK_doesnt_let_a_climb_through_a_link_that_is_replaced_later_get_out()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows() && !CanCreateLinks(), "Needs the privilege to create symbolic links.");
+        Directory.CreateDirectory(_sandbox.InRoot("d/e"));
+        Directory.CreateDirectory(_sandbox.InRoot("s"));
+        await using SftpServerHarness client = await StartAsync(Options);
+
+        Assert.Equal(Ok, (await client.RequestAsync(SftpMessage.SymLink, Path("d/e").Text("y"))).Status);
+
+        // y/.. is d here, and y/../.. is the root's parent. It's refused at the top of the root.
+        Assert.Equal(PermissionDenied, (await client.RequestAsync(SftpMessage.SymLink, Path("y/../..").Text("x"))).Status);
+        Assert.False(new FileInfo(_sandbox.InRoot("x")).Exists);
+
+        // Below the top it's stored as the climb it was meant to be, with the name gone: it can't mean anything else later.
+        Assert.Equal(Ok, (await client.RequestAsync(SftpMessage.SymLink, Path("y/../..").Text("s/x"))).Status);
+        Assert.Equal("..", new FileInfo(_sandbox.InRoot("s/x")).LinkTarget);
+
+        Assert.Equal(Ok, (await client.RequestAsync(SftpMessage.Remove, Path("y"))).Status);
+        Directory.CreateDirectory(_sandbox.InRoot("y"));
+        Assert.Equal(Ok, (await client.RequestAsync(SftpMessage.SymLink, Path("../y").Text("s/z"))).Status);
+        AssertEveryLinkStaysInside();
+    }
+
+    [Theory]
+    [InlineData(".", "s/x")]
+    [InlineData("", "s/x")]
+    [InlineData("a/..", "s/x")]
+    [InlineData("../s", "s/x")]
+    [InlineData("../s/.", "s/x")]
+    public async Task SYMLINK_refuses_a_target_that_is_the_links_own_directory(string target, string link)
+    {
+        Directory.CreateDirectory(_sandbox.InRoot("s"));
+        await using SftpServerHarness client = await StartAsync(Options);
+        Assert.Equal(Failure, (await client.RequestAsync(SftpMessage.SymLink, Path(target).Text(link))).Status);
+        Assert.False(new FileInfo(_sandbox.InRoot(link)).Exists);
+    }
+
+    /// <summary>Asks the kernel, which follows every link there is, where each link in the root ends up.</summary>
+    private void AssertEveryLinkStaysInside()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        string root = new DirectoryInfo(_sandbox.Root).ResolveLinkTarget(returnFinalTarget: true)?.FullName ?? _sandbox.Root;
+        foreach (string path in EntriesWithoutFollowingLinks(_sandbox.Root))
+        {
+            // A link that leads nowhere can't be followed, so it can't lead out. (busybox realpath guesses for those.)
+            if (new FileInfo(path).LinkTarget is null || !(File.Exists(path) || Directory.Exists(path)))
+            {
+                continue;
+            }
+
+            using System.Diagnostics.Process process = System.Diagnostics.Process.Start(
+                new System.Diagnostics.ProcessStartInfo("realpath", [path]) { RedirectStandardOutput = true })!;
+            string resolved = process.StandardOutput.ReadToEnd().Trim();
+            process.WaitForExit();
+            Assert.True(
+                resolved == root || resolved.StartsWith(root + "/", StringComparison.Ordinal),
+                $"{path} resolves to {resolved}, outside {root}.");
+        }
+    }
+
+    private static IEnumerable<string> EntriesWithoutFollowingLinks(string directory)
+    {
+        foreach (string path in Directory.EnumerateFileSystemEntries(directory))
+        {
+            yield return path;
+            if (new FileInfo(path).LinkTarget is null && Directory.Exists(path))
+            {
+                foreach (string inner in EntriesWithoutFollowingLinks(path))
+                {
+                    yield return inner;
+                }
+            }
+        }
+    }
+
     private bool CanCreateLinks()
     {
         string probe = System.IO.Path.Combine(_sandbox.Base, "probe");
