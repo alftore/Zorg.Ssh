@@ -32,6 +32,29 @@ The only skips left should be the platform ones: Windows rules, NTFS streams, na
 
 `ZORG_REQUIRE_PEERS=1` turns every "isn't installed" skip into a failure: no `ssh`, `ssh-keygen`, `sftp` or container engine. `CI=true` does the same. The script sets it, and so does `.github/workflows/ci.yml`. A run that passes by skipping the OpenSSH tests proves nothing, so set it whenever you want a result you can trust. To see it work, run `scripts/test-linux.sh --hide-ssh`: it removes `ssh` from the container, and the run fails.
 
+## Fuzzing
+
+`tests/Zorg.Ssh.Tests/Fuzzing` attacks every decoder that reads bytes or text from a peer, a file or a local client: `SshReader`, `KexInitMessage.Parse`, `SshCertificate.ParseAny`, `OpenSshKeyFormat.Parse`, `SshKeyFile.Load`, `KnownHostsFile.Parse`, `SshConfig.Parse`, the SFTP response readers, `SocksHandshake`, `PacketReader`, the agent replies, `SftpServerSession.DispatchAsync` and `ServerAuthenticator.ParsePublicKey`. Seeds come from the keys, certificates and builders the other tests use. The mutator changes them with bit flips, truncation, splices and boundary values, and it knows where the length fields are, because a wrong length is what a parser has most to get right.
+
+Each input is checked for the three failures guarantee 3 rules out: an exception that isn't the decoder's documented type, a run past a time limit (5 seconds), and a small input that allocates a lot. `FuzzAllowedExceptions` in `FuzzTargets.cs` is the one table of allowed types. Don't add a type there to make a target pass.
+
+```
+dotnet test --project tests/Zorg.Ssh.Tests --no-build --filter-class "*FuzzTests"    # the short run, a few seconds, fixed seed
+ZORG_FUZZ_MINUTES=2 dotnet test --project tests/Zorg.Ssh.Tests --no-build --filter-class "*FuzzTests"   # a long run
+ZORG_FUZZ_SEED=123 ZORG_FUZZ_TARGET="KexInit" dotnet test --project tests/Zorg.Ssh.Tests --no-build --filter-class "*FuzzTests"   # replay
+ZORG_FUZZ_MINUTES=2 scripts/test-linux.sh --args "--filter-class *FuzzTests"    # a long run in the Linux container
+```
+
+`ZORG_FUZZ_MINUTES` gives every target that long, all at once, and starts from a seed taken from the clock. A summary of each target goes to the console and to `zorg-fuzz-report.txt` in the temp directory (`ZORG_FUZZ_REPORT` names another file). With none of the variables set, the run is short and uses one fixed seed. `ZORG_FUZZ_TARGET` limits a run to targets whose name contains the text, `ZORG_FUZZ_INPUT_SECONDS` changes the time limit, and `ZORG_FUZZ_VERBOSE=1` prints the refusal reasons and the stages reached. Run the test program directly (`tests/Zorg.Ssh.Tests/bin/Debug/net10.0/Zorg.Ssh.Tests -class Zorg.Ssh.Tests.Fuzzing.FuzzTests -showLiveOutput`) to see the console output of a passing run.
+
+A failure prints `target=<name> seed=<number>`, the input in base64, and the line to replay it. One number rebuilds the input, on any machine. After a hang the test process may keep a spinning thread, so run the replay in a fresh process. A stack overflow can't be caught: a long run keeps the seed it was on in `zorg-fuzz-last-seed-<pid>-<target>.bin` in the temp directory, as an 8-byte little-endian number.
+
+The corpus keys are generated at test time, never stored: RSA by BouncyCastle's key generator on a fixed-seed deterministic generator, ECDSA from a hash of a fixed label, Ed25519 from a fixed seed (`Fuzzing/FuzzKeys.cs`). A BouncyCastle upgrade can change the RSA key, which changes the inputs old seeds rebuild; `The_generated_keys_are_the_same_on_every_machine_and_load_in_every_format` pins a hash of the generated text and says when that happens.
+
+Every finding gets a fix in `src` and a named regression test with the input written out in the test, in `Fuzzing/FuzzRegressionTests.cs`. A finding that would weaken a guarantee, or needs a design choice, is recorded instead of fixed here.
+
+To add a target, write a corpus in `FuzzCorpus.cs`, add the target and its row in `FuzzAllowedExceptions` in `FuzzTargets.cs`, and say which stages it reaches with `FuzzNotes.Reached`. The tests insist that most seeds are accepted and that a share of mutated inputs get all the way through, so that a target can't quietly go shallow.
+
 ## AOT smoke test
 
 `samples/Zorg.Ssh.AotSmoke` is the Native AOT gate. BouncyCastle isn't marked AOT-compatible, so `VerifyReferenceAotCompatibility` is off and this sample takes its place: it's published with Native AOT and run, and it exercises every algorithm. Trimming keeps only what's used, so add each new algorithm to it. To run it yourself:

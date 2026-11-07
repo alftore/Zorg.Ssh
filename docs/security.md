@@ -111,7 +111,7 @@ What the tests do cover: the interop tests run against OpenSSH 10.x, OpenSSH 7.4
 What hasn't been checked:
 
 - **No external security review** of any part, including the transport and the server. There has been no penetration test or audit.
-- **No fuzzing.** Hostile-input tests are hand-written.
+- **Fuzzing is shallow.** Besides the hand-written hostile-input tests, a seeded fuzzer attacks the decoders that read bytes or text from a peer, a file or a local client (the packet reader, `KEXINIT`, public keys and certificates, key files, `known_hosts`, `ssh_config`, the SFTP readers and server dispatch, SOCKS, the agent replies and public key requests). It checks for a wrong exception type, a hang and a large allocation, and a normal test pass runs a short fixed-seed round of it. It isn't coverage-guided, each target has had minutes of runs rather than days, it never runs a whole handshake, and it can't see a stack overflow or an allocation made on another thread. `CONTRIBUTING.md` says how to run and replay it.
 - **Timing side channels** haven't been measured, in this code or in BouncyCastle.
 - **Zeroing** is done in code, but nothing proves that no copy remains, and a garbage collector can move memory.
 - **The server against scanners.** `ssh-audit` reports no failures, and tests check that. Terrapin-Scanner itself hasn't been run, though `ssh-audit` checks for the same flaw.
