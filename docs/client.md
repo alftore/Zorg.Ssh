@@ -179,6 +179,17 @@ HostKeyPolicy policy = HostKeyPolicy.Custom((key, ct) =>
 
 Return false to refuse the key. If the check throws, the key isn't trusted: the connection fails with `SshHostKeyException`, and your exception is its `InnerException`.
 
+Once connected, `client.HostKey` holds the key the server proved it has and the policy accepted, whatever the policy was. It's the same `SshHostKeyInfo` a `Custom` check is given, with `Host` and `Port` as you passed them, so you can log or show which key this connection is using.
+
+```csharp
+SshHostKeyInfo key = client.HostKey;
+Console.WriteLine($"Connected to {key.Host}:{key.Port}, {key.KeyType} {key.Sha256Fingerprint}");
+```
+
+- It never changes. A rekey that offers a different key ends the connection with `SshHostKeyException`.
+- Through a jump host, each client holds its own server's key: the bastion's on the bastion's client, and the inner host's on the inner client.
+- A server that sent a host certificate, which only `KnownHostsFile` can accept, is described by the certificate: its `KeyType` is the certificate type.
+
 Two choices weaken the check, so they carry `Unsafe` in their names.
 
 ```csharp

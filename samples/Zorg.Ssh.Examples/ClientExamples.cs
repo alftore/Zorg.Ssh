@@ -112,6 +112,14 @@ internal static class ClientExamples
         return policy;
     }
 
+    public static void ConnectedHostKey(SshClient client)
+    {
+        // doc:host-key-connected
+        SshHostKeyInfo key = client.HostKey;
+        Console.WriteLine($"Connected to {key.Host}:{key.Port}, {key.KeyType} {key.Sha256Fingerprint}");
+        // end-doc
+    }
+
     public static IReadOnlyList<HostKeyPolicy> UnsafePolicies()
     {
         // doc:host-key-unsafe

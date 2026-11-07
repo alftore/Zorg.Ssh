@@ -81,6 +81,39 @@ public class RekeyTests
         }
     }
 
+    [Fact]
+    public async Task T6_a_rekey_that_offers_another_host_key_ends_the_connection()
+    {
+        using SshPrivateKey other = SshPrivateKey.GenerateEd25519();
+        List<SshPrivateKey> serverKeys = [HostKey];
+        (SshTransport client, SshTransport server) = await ConnectAsync(ClientOptions(), ServerOptions(hostKeys: serverKeys), Ct);
+        await using (client)
+        await using (server)
+        {
+            MarkConnected(client, server);
+            byte[] accepted = client.PeerHostKey!.Blob.ToArray();
+
+            // The server now signs the next exchange with a different key, as an attacker who took over would.
+            serverKeys[0] = other;
+            using CancellationTokenSource stop = CancellationTokenSource.CreateLinkedTokenSource(Ct);
+            Task serverSide = DrainAsync(server, _ => { }, stop.Token);
+            client.RequestRekey();
+
+            SshHostKeyException refused = await Assert.ThrowsAsync<SshHostKeyException>(async () =>
+            {
+                while (true)
+                {
+                    await client.ReceiveAsync(Ct);
+                }
+            });
+
+            Assert.Contains("changed its host key during a rekey", refused.Message, StringComparison.Ordinal);
+            Assert.Equal(accepted, client.PeerHostKey!.Blob.ToArray());
+            Assert.Equal(1, client.CompletedKeyExchanges);
+            await Assert.ThrowsAnyAsync<SshException>(() => serverSide);
+        }
+    }
+
     [Theory]
     [MemberData(nameof(AllCiphers))]
     public async Task Many_automatic_rekeys_under_load_lose_nothing(string cipher, string? mac)

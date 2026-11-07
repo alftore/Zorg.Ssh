@@ -118,6 +118,10 @@ public sealed partial class SshClient : IAsyncDisposable
     {
         _connection = connection;
         _options = options;
+
+        // The key exchange that ConnectAsync waited for checked this key. A rekey must present the same one, or the
+        // transport ends the connection, so it can't change while the client lives.
+        HostKey = SshHostKeyInfo.From(options.Host, options.Port, connection.Transport.PeerHostKey!);
         _remoteForwards = remoteForwards;
         _logger = logger;
         _ = CloseForwardsWhenEndedAsync();
@@ -125,6 +129,24 @@ public sealed partial class SshClient : IAsyncDisposable
 
     /// <summary>Gets the server's identification string, for example <c>SSH-2.0-OpenSSH_10.6</c>. It's chosen by the server.</summary>
     public string ServerVersion => _connection.Transport.PeerIdentification;
+
+    /// <summary>
+    /// Gets the host key the server proved it holds when this connection was made, and that
+    /// <see cref="SshClientOptions.HostKeyPolicy"/> accepted. It's what a <see cref="HostKeyPolicy.Custom"/> check is
+    /// given: <see cref="SshClientOptions.Host"/> and <see cref="SshClientOptions.Port"/> as you passed them, the key
+    /// type, the fingerprint and the key itself. A server that sent a host certificate is described by the certificate.
+    /// </summary>
+    /// <remarks>
+    /// It never changes: a rekey that offers another key ends the connection with <see cref="SshHostKeyException"/>.
+    /// Through a <see cref="SshClientOptions.JumpHost"/>, each client has its own server's key.
+    /// </remarks>
+    /// <example>
+    /// <code>
+    /// await using SshClient client = await SshClient.ConnectAsync(options with { HostKeyPolicy = HostKeyPolicy.KnownHostsFile() }, cancellationToken);
+    /// Console.WriteLine($"Connected to {client.HostKey.Host}, {client.HostKey.KeyType} {client.HostKey.Sha256Fingerprint}");
+    /// </code>
+    /// </example>
+    public SshHostKeyInfo HostKey { get; }
 
     /// <summary>Connects, checks the server's host key, and logs in. With <see cref="SshClientOptions.JumpHost"/> set, the connection goes through that client.</summary>
     /// <param name="options">Where to connect, and how to log in.</param>

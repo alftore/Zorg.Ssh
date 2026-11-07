@@ -41,6 +41,16 @@ public sealed record SshHostKeyInfo
     /// </code>
     /// </example>
     public required string PublicKey { get; init; }
+
+    /// <summary>Describes a key the server offered, as every check and <see cref="SshClient.HostKey"/> see it.</summary>
+    internal static SshHostKeyInfo From(string host, int port, SshPublicKey key) => new()
+    {
+        Host = host,
+        Port = port,
+        KeyType = key.KeyType,
+        Sha256Fingerprint = HostKeyPolicy.ComputeFingerprint(key.Blob.Span),
+        PublicKey = $"{key.KeyType} {Convert.ToBase64String(key.Blob.Span)}",
+    };
 }
 
 /// <summary>
@@ -242,14 +252,5 @@ internal sealed class CustomHostKeyPolicy(Func<SshHostKeyInfo, CancellationToken
     internal override ValueTask<bool> CheckAsync(string host, int port, SshPublicKey key, CancellationToken cancellationToken) =>
         key is SshCertificate
             ? throw new SshHostKeyException("The server sent a host certificate, which only HostKeyPolicy.KnownHostsFile can check.")
-            : check(
-                new SshHostKeyInfo
-                {
-                    Host = host,
-                    Port = port,
-                    KeyType = key.KeyType,
-                    Sha256Fingerprint = ComputeFingerprint(key.Blob.Span),
-                    PublicKey = $"{key.KeyType} {Convert.ToBase64String(key.Blob.Span)}",
-                },
-                cancellationToken);
+            : check(SshHostKeyInfo.From(host, port, key), cancellationToken);
 }

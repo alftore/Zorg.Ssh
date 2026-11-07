@@ -30,6 +30,7 @@ Zorg.Ssh.Sftp.SftpTransferProgress.RemotePath.init -> void
 Zorg.Ssh.Sftp.SftpTransferProgress.SftpTransferProgress() -> void
 Zorg.Ssh.Sftp.SftpTransferProgress.TotalBytes.get -> long?
 Zorg.Ssh.Sftp.SftpTransferProgress.TotalBytes.init -> void
+Zorg.Ssh.SshClient.HostKey.get -> Zorg.Ssh.SshHostKeyInfo!
 override Zorg.Ssh.Sftp.SftpTransferOptions.Equals(object? obj) -> bool
 override Zorg.Ssh.Sftp.SftpTransferOptions.GetHashCode() -> int
 override Zorg.Ssh.Sftp.SftpTransferOptions.ToString() -> string!

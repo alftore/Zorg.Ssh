@@ -66,6 +66,7 @@ static async Task<int> RunAgainstAsync(string host, int port, string user, strin
     };
 
     await using SshClient client = await SshClient.ConnectAsync(options, token);
+    ClientExamples.ConnectedHostKey(client);
     await ClientExamples.Execute(client, token);
     await ClientExamples.Concurrent(client, token);
     await ClientExamples.Process(client, token);
