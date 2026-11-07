@@ -1,1 +1,2 @@
 #nullable enable
+Zorg.Ssh.Sftp.SftpEntry.HasValidName.get -> bool

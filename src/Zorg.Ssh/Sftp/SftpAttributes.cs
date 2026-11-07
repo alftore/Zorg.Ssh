@@ -281,9 +281,25 @@ public sealed record SftpEntry
     /// <summary>
     /// Gets the name exactly as the server sent it, so it's untrusted: it can hold <c>../</c>, a slash or a control
     /// character. Check <see cref="IsSafeName"/> before using it in a local path. Bytes that aren't valid UTF-8
-    /// become U+FFFD, so such a name can't be used to reach the file.
+    /// become U+FFFD, so such a name can't be used to reach the file: see <see cref="HasValidName"/>. Names are
+    /// bytes and are not normalised, so two names that look the same can differ (for example NFC and NFD).
     /// </summary>
     public required string Name { get; init; }
+
+    /// <summary>
+    /// Gets a value that is false when the server's bytes for the name aren't valid UTF-8: <see cref="Name"/> is
+    /// then shown with U+FFFD and can't be used as a path, and <see cref="IsSafeName"/> is false. Two different
+    /// invalid names can show the same text.
+    /// </summary>
+    /// <example>
+    /// <code>
+    /// if (!entry.HasValidName)
+    /// {
+    ///     Console.WriteLine($"Skipping a name that isn't UTF-8: {entry.Name}");
+    /// }
+    /// </code>
+    /// </example>
+    public bool HasValidName { get; internal init; } = true;
 
     /// <summary>Gets what the server said about the entry, without following symbolic links.</summary>
     public required SftpAttributes Attributes { get; init; }
@@ -291,6 +307,7 @@ public sealed record SftpEntry
     /// <summary>
     /// Gets a value saying whether <see cref="Name"/> is a plain file name on this machine: it isn't <c>.</c> or
     /// <c>..</c>, and has no slash, backslash, NUL or anything else this operating system would treat specially.
+    /// It's false too when <see cref="HasValidName"/> is false.
     /// </summary>
     /// <example>
     /// <code>
@@ -300,7 +317,7 @@ public sealed record SftpEntry
     /// }
     /// </code>
     /// </example>
-    public bool IsSafeName => SftpLocalPath.IsSafeName(Name);
+    public bool IsSafeName => HasValidName && SftpLocalPath.IsSafeName(Name);
 }
 
 /// <summary>What <see cref="SftpClient.GetFileSystemInfoAsync"/> reports, in the terms of POSIX <c>statvfs</c>. Every value is the server's.</summary>

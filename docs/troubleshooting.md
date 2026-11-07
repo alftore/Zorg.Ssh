@@ -195,6 +195,8 @@ The server refused an SFTP request. The session stays usable unless the message 
 
 `SftpFileNotFoundException` means nothing exists at the path, and `SftpPermissionDeniedException` means the account isn't allowed. Check the path, and the account's rights on it. With a relative path, remember that it starts from the home directory on OpenSSH: `GetFullPathAsync(".")` shows it.
 
+A path with an unpaired surrogate, such as half an emoji from a string cut in the wrong place, throws `ArgumentException` before anything is sent. Fix the string.
+
 Limits reached in the library also arrive as `SftpException`: raise `MaxReadAllBytes` or `MaxDirectoryEntries` in `SftpClientOptions`, or `maxTotalBytes`, if the size is expected.
 
 `CreateDirectoryAsync` on an existing directory usually gives `Failure`. Check with `ExistsAsync` first.
@@ -205,6 +207,7 @@ During `DownloadDirectoryAsync`, a name from the server couldn't safely become a
 
 - If the destination already held files, for example from an earlier run, clear it and try again.
 - Otherwise the server sent a name that tries to leave the destination. Don't trust that server.
+- A name that isn't valid UTF-8 stops the download too, for example one made on a Latin-1 system. `ListDirectoryAsync` shows it with `HasValidName` false. Rename it on the server, or list the directory yourself and download the other files one at a time.
 
 ## SFTP calls that end with SshConnectionException
 

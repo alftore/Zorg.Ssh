@@ -769,6 +769,18 @@ public sealed class SftpClient : IAsyncDisposable
         {
             throw new ArgumentException("A path can't contain a NUL character.", nameof(path));
         }
+
+        for (int i = 0; i < path.Length; i++)
+        {
+            if (char.IsHighSurrogate(path[i]) && i + 1 < path.Length && char.IsLowSurrogate(path[i + 1]))
+            {
+                i++;
+            }
+            else if (char.IsSurrogate(path[i]))
+            {
+                throw new ArgumentException($"The path has an unpaired surrogate at index {i}, which can't be encoded as UTF-8. Fix the string that built it.", nameof(path));
+            }
+        }
     }
 
     /// <summary>
@@ -1092,7 +1104,7 @@ public sealed class SftpClient : IAsyncDisposable
                 continue;
             }
 
-            string local = SftpLocalPath.Resolve(localDirectory, entry.Name) ?? throw UnsafeName(entry.Name, remoteDirectory);
+            string local = (entry.HasValidName ? SftpLocalPath.Resolve(localDirectory, entry.Name) : null) ?? throw UnsafeName(entry.Name, remoteDirectory);
             budget.TakeEntry(remoteDirectory);
             entries.Add((entry, local));
         }

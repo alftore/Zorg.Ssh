@@ -279,8 +279,81 @@ public sealed class SftpNamesTests : IDisposable
         });
 
         SftpEntry[] entries = await fake.Client.ListDirectoryAsync("/d", Ct).ToArrayAsync(Ct);
-        Assert.Equal("f�o", Assert.Single(entries).Name);
+        SftpEntry entry = Assert.Single(entries);
+        Assert.Equal("f�o", entry.Name);
+        Assert.False(entry.HasValidName);
+        Assert.False(entry.IsSafeName);
     }
+
+    [Fact(Timeout = Limit)]
+    public async Task Only_a_name_with_bad_bytes_is_marked_so_a_real_replacement_character_is_not()
+    {
+        // Latin-1 "fo" with an 0xE6, a different invalid name, a real U+FFFD (EF BF BD), æ in UTF-8 (C3 A6), a surrogate and an overlong slash.
+        byte[][] names = [[0x66, 0xE6, 0x6F], [0xC3, 0x28], [0x66, 0xEF, 0xBF, 0xBD, 0x6F], [0xC3, 0xA6], [0xED, 0xA0, 0x80], [0xC0, 0xAF]];
+        await using FakeSftpServer fake = await FakeSftpServer.StartAsync((server, request) => request.Type switch
+        {
+            SftpMessage.OpenDir => server.SendHandleAsync(request.Id, [1]),
+            SftpMessage.ReadDir when request.Id < 2 =>
+                server.SendAsync(names.Aggregate(new Packet().U8(SftpMessage.Name).U32(request.Id).U32((uint)names.Length), (packet, name) => packet.Entry(name)).ToFrame()),
+            SftpMessage.ReadDir => server.SendStatusAsync(request.Id, FakeSftpServer.StatusEof),
+            _ => server.SendStatusAsync(request.Id),
+        });
+
+        SftpEntry[] entries = await fake.Client.ListDirectoryAsync("/d", Ct).ToArrayAsync(Ct);
+        Assert.Equal([false, false, true, true, false, false], entries.Select(e => e.HasValidName));
+        Assert.Equal([false, false, true, true, false, false], entries.Select(e => e.IsSafeName));
+        Assert.Equal("f�o", entries[0].Name);
+        Assert.Equal("f�o", entries[2].Name);
+        Assert.Equal("æ", entries[3].Name);
+    }
+
+    [Fact(Timeout = Limit)]
+    public async Task A_download_stops_at_a_name_that_isnt_utf8_and_writes_nothing()
+    {
+        await using FakeSftpServer fake = await FakeSftpServer.StartAsync((server, request) => request.Type switch
+        {
+            SftpMessage.OpenDir => server.SendHandleAsync(request.Id, [1]),
+            SftpMessage.ReadDir when request.Id < 2 => server.SendAsync(new Packet().U8(SftpMessage.Name).U32(request.Id).U32(1).Entry([0x66, 0xE6, 0x6F]).ToFrame()),
+            SftpMessage.ReadDir => server.SendStatusAsync(request.Id, FakeSftpServer.StatusEof),
+            _ => server.SendStatusAsync(request.Id),
+        });
+
+        await Assert.ThrowsAsync<SftpUnsafeNameException>(() => fake.Client.DownloadDirectoryAsync("/d", Destination, long.MaxValue, Ct));
+        Assert.Empty(new DirectoryInfo(Destination).GetFileSystemInfos());
+    }
+
+    // The cases are indexes because a test runner can't carry a lone surrogate in its data: it turns into U+FFFD.
+    private static readonly string[] UnpairedSurrogatePaths = ["/a\uD800", "\uDC00/a", "/a\uD800b", "/a\uDC00\uD800"];
+
+    [Theory(Timeout = Limit)]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(3)]
+    public async Task A_path_with_an_unpaired_surrogate_is_refused_before_anything_is_sent(int index)
+    {
+        string path = UnpairedSurrogatePaths[index];
+
+        await using FakeSftpServer fake = await FakeSftpServer.StartAsync((server, request) => server.SendStatusAsync(request.Id));
+
+        await Assert.ThrowsAsync<ArgumentException>(() => fake.Client.ExistsAsync(path, Ct));
+        await Assert.ThrowsAsync<ArgumentException>(() => fake.Client.CreateDirectoryAsync(path, Ct));
+        await Assert.ThrowsAsync<ArgumentException>(() => fake.Client.RenameAsync("/ok", path, overwrite: false, Ct));
+        await Assert.ThrowsAsync<ArgumentException>(() => fake.Client.OpenAsync(path, FileMode.Open, FileAccess.Read, Ct));
+        await Assert.ThrowsAsync<ArgumentException>(async () => await fake.Client.ListDirectoryAsync(path, Ct).ToArrayAsync(Ct));
+    }
+
+    [Fact(Timeout = Limit)]
+    public async Task A_path_with_a_surrogate_pair_is_accepted()
+    {
+        await using FakeSftpServer fake = await FakeSftpServer.StartAsync((server, request) => server.SendStatusAsync(request.Id));
+
+        await fake.Client.CreateDirectoryAsync("/emoji-😀", Ct);
+    }
+
+    [Fact]
+    public void HasValidName_is_true_unless_the_parser_says_otherwise() =>
+        Assert.True(new SftpEntry { Name = "a", Attributes = new SftpAttributes() }.HasValidName);
 
     [Theory]
     [InlineData("file.txt", true)]

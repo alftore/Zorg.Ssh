@@ -67,6 +67,16 @@ await foreach (SftpEntry entry in sftp.ListDirectoryAsync("reports", cancellatio
 
 Names come back exactly as the server sent them, including `.` and `..`, and they can be hostile. Check `IsSafeName` before you build a local path from one. A listing that passes `SftpClientOptions.MaxDirectoryEntries`, by default 1,000,000, fails with `SftpException`.
 
+### Name encodings
+
+SFTP version 3 doesn't say how a name is encoded. OpenSSH sends the raw bytes the file system holds, so a name made on a Latin-1 system isn't valid UTF-8.
+
+- A name that is valid UTF-8 is decoded as it is. Zorg.Ssh doesn't normalise it, so `Å` as one character (NFC) and `A` plus a combining ring (NFD) are two different files that look the same. Compare and build paths with the string you got from the listing, not one you typed.
+- A name that isn't valid UTF-8 is shown with U+FFFD in place of each bad byte, and `HasValidName` is false. `IsSafeName` is false too. Such a name can't be used as a path, because it would encode to different bytes, and two different bad names can show the same text. Skip them, or tell a person.
+- A name that holds a real U+FFFD character is valid, and has `HasValidName` true.
+- `DownloadDirectoryAsync` treats a name with `HasValidName` false like any other unsafe name: it stops with `SftpUnsafeNameException`.
+- A path you pass in is encoded as UTF-8. A string with an unpaired surrogate can't be, so it throws `ArgumentException` instead of being sent as U+FFFD.
+
 ## Downloading a tree
 
 ```csharp

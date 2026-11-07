@@ -2,6 +2,7 @@ using System;
 using System.Buffers;
 using System.Buffers.Binary;
 using System.Text;
+using System.Text.Unicode;
 using Zorg.Ssh.Protocol;
 
 namespace Zorg.Ssh.Sftp;
@@ -259,7 +260,10 @@ internal static class SftpParser
     private const int MinNameEntryLength = 12;
     private const int MaxServerMessageLength = 256;
 
-    /// <summary>Decodes a name, or other text the server chose. Version 3 names are bytes, so bad UTF-8 is legal here.</summary>
+    /// <summary>
+    /// Decodes a name, or other text the server chose. Version 3 names are bytes, so bad UTF-8 is legal here: it
+    /// becomes U+FFFD. A caller that keeps a name checks <see cref="Utf8.IsValid"/> first.
+    /// </summary>
     public static string DecodeString(ReadOnlySpan<byte> bytes) => Encoding.UTF8.GetString(bytes);
 
     /// <summary>Reads a status as code and message. Servers older than the draft stop after the code.</summary>
@@ -314,9 +318,11 @@ internal static class SftpParser
         SftpEntry[] entries = new SftpEntry[count];
         for (int i = 0; i < entries.Length; i++)
         {
-            string name = DecodeString(reader.ReadBinary());
+            ReadOnlySpan<byte> nameBytes = reader.ReadBinary();
+            bool validName = Utf8.IsValid(nameBytes);
+            string name = DecodeString(nameBytes);
             reader.ReadBinary();
-            entries[i] = new SftpEntry { Name = name, Attributes = SftpAttributes.Read(ref reader) };
+            entries[i] = new SftpEntry { Name = name, HasValidName = validName, Attributes = SftpAttributes.Read(ref reader) };
         }
 
         return entries;

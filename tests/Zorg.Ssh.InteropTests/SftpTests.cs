@@ -137,6 +137,82 @@ public class SftpTests
 
     [InteropTheory]
     [MemberData(nameof(Peers))]
+    public async Task A_name_that_isnt_utf8_is_marked_and_cant_be_used_but_other_names_are_untouched(string peer)
+    {
+        await using SshPeerContainer container = await StartAsync(peer);
+        await using SshClient client = await ConnectAsync(container);
+        await using SftpClient sftp = await client.OpenSftpAsync(Ct);
+
+        // Two different invalid names, and a real U+FFFD, which all show as the same text.
+        await sftp.CreateDirectoryAsync("names", Ct);
+        SshCommandResult made = await client.ExecuteAsync(
+            "cd names && printf latin1 > \"$(printf 'f\\346o')\" && printf other > \"$(printf 'f\\351o')\" && printf real > \"$(printf 'f\\357\\277\\275o')\" && printf ascii > plain.txt",
+            Ct);
+        Assert.Equal(0, made.ExitCode);
+
+        SftpEntry[] entries = await sftp.ListDirectoryAsync("names", Ct).ToArrayAsync(Ct);
+        SftpEntry[] odd = [.. entries.Where(e => !e.HasValidName)];
+        Assert.Equal(2, odd.Length);
+        Assert.All(odd, e => Assert.False(e.IsSafeName));
+        Assert.All(odd, e => Assert.Equal("f�o", e.Name));
+        Assert.Equal([5L, 6L], odd.Select(e => e.Attributes.Size!.Value).Order());
+
+        SftpEntry real = entries.Single(e => e.HasValidName && e.Name == "f�o");
+        Assert.True(real.IsSafeName);
+        Assert.Equal(4, real.Attributes.Size);
+        Assert.True(entries.Single(e => e.Name == "plain.txt").IsSafeName);
+
+        // The shown text names the real U+FFFD file, never the Latin-1 one.
+        Assert.Equal("real", Encoding.UTF8.GetString(await sftp.ReadAllBytesAsync("names/" + real.Name, Ct)));
+
+        // A download refuses the whole directory rather than guess.
+        string destination = Path.Combine(Path.GetTempPath(), "zorg-names-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            await Assert.ThrowsAsync<SftpUnsafeNameException>(() => sftp.DownloadDirectoryAsync("names", destination, long.MaxValue, Ct));
+        }
+        finally
+        {
+            if (Directory.Exists(destination))
+            {
+                Directory.Delete(destination, recursive: true);
+            }
+        }
+    }
+
+    [InteropTheory]
+    [MemberData(nameof(Peers))]
+    public async Task Names_that_look_the_same_but_differ_in_normalisation_are_two_files(string peer)
+    {
+        await using SshPeerContainer container = await StartAsync(peer);
+        await using SshClient client = await ConnectAsync(container);
+        await using SftpClient sftp = await client.OpenSftpAsync(Ct);
+
+        string nfc = "Åse-æø-café.txt".Normalize(NormalizationForm.FormC);
+        string nfd = nfc.Normalize(NormalizationForm.FormD);
+        Assert.NotEqual(nfc, nfd);
+
+        await sftp.CreateDirectoryAsync("norm", Ct);
+        await sftp.WriteAllBytesAsync("norm/" + nfc, "composed"u8.ToArray(), Ct);
+        await sftp.WriteAllBytesAsync("norm/" + nfd, "decomposed"u8.ToArray(), Ct);
+
+        SftpEntry[] entries = [.. (await sftp.ListDirectoryAsync("norm", Ct).ToArrayAsync(Ct)).Where(e => e.Name is not ("." or ".."))];
+        Assert.Equal(2, entries.Length);
+        Assert.All(entries, e => Assert.True(e.HasValidName && e.IsSafeName));
+        Assert.Equal(new[] { nfc, nfd }.Order(StringComparer.Ordinal), entries.Select(e => e.Name).Order(StringComparer.Ordinal));
+
+        Assert.Equal("composed", Encoding.UTF8.GetString(await sftp.ReadAllBytesAsync("norm/" + nfc, Ct)));
+        Assert.Equal("decomposed", Encoding.UTF8.GetString(await sftp.ReadAllBytesAsync("norm/" + nfd, Ct)));
+
+        // An emoji (a surrogate pair) and CJK round trip too.
+        string emoji = "\U0001F600-日本.txt";
+        await sftp.WriteAllBytesAsync("norm/" + emoji, "x"u8.ToArray(), Ct);
+        Assert.Contains(emoji, (await sftp.ListDirectoryAsync("norm", Ct).ToArrayAsync(Ct)).Select(e => e.Name));
+        Assert.True(await sftp.ExistsAsync("norm/" + emoji, Ct));
+    }
+
+    [InteropTheory]
+    [MemberData(nameof(Peers))]
     public async Task Failures_are_typed(string peer)
     {
         await using SshPeerContainer container = await StartAsync(peer);
