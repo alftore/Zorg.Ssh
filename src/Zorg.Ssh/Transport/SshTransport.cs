@@ -484,7 +484,8 @@ internal sealed partial class SshTransport : IAsyncDisposable
                     return null;
                 case MessageNumber.Unimplemented:
                     // Malformed ones stay ignored, as they always were: there's nothing to act on.
-                    if (payload.Length >= 5)
+                    // It can complete a global request, so only once connected (MessagePolicy says why it is also legal during a rekey).
+                    if (payload.Length >= 5 && _phase == TransportPhase.Connected)
                     {
                         UnimplementedHandler?.Invoke(BinaryPrimitives.ReadUInt32BigEndian(payload.Span[1..]));
                     }
