@@ -21,10 +21,7 @@ internal static class SftpExamples
     public static async Task Transfer(SftpClient sftp, CancellationToken cancellationToken)
     {
         // doc:sftp-transfer
-        if (!await sftp.ExistsAsync("reports", cancellationToken))
-        {
-            await sftp.CreateDirectoryAsync("reports", cancellationToken);
-        }
+        await sftp.CreateDirectoryAsync("reports", recursive: true, cancellationToken);
 
         await using (FileStream source = File.OpenRead("report.pdf"))
         {
@@ -34,6 +31,21 @@ internal static class SftpExamples
         await using (FileStream destination = File.Create("copy.pdf"))
         {
             await sftp.DownloadFileAsync("reports/report.pdf", destination, cancellationToken);
+        }
+        // end-doc
+    }
+
+    public static async Task ClaimByRename(SftpClient sftp, CancellationToken cancellationToken)
+    {
+        // doc:sftp-claim
+        try
+        {
+            await sftp.RenameAsync("inbox/0001.csv", "work/0001.csv.7f3a", overwrite: false, cancellationToken);
+            // This client owns the file now.
+        }
+        catch (SftpException ex) when (ex.StatusCode is SftpStatusCode.Failure or SftpStatusCode.NoSuchFile)
+        {
+            // Another client took it first, or it is gone. Look at the next file.
         }
         // end-doc
     }
