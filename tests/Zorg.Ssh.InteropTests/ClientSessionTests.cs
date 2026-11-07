@@ -34,7 +34,7 @@ public class ClientSessionTests
         HostKeyPolicy = HostKeyPolicy.AcceptAnyUnsafe(),
     };
 
-    [Theory]
+    [InteropTheory]
     [MemberData(nameof(PasswordPeers))]
     public async Task Password_login_and_exec_work(string peer)
     {
@@ -47,7 +47,7 @@ public class ClientSessionTests
         Assert.Equal(7, result.ExitCode);
     }
 
-    [Fact]
+    [InteropFact]
     public async Task A_wrong_password_fails_with_a_useful_exception()
     {
         await using SshPeerContainer container = await StartAsync("openssh-10");
@@ -58,7 +58,7 @@ public class ClientSessionTests
         Assert.DoesNotContain("wrong", ex.Message);
     }
 
-    [Fact]
+    [InteropFact]
     public async Task A_host_key_mismatch_stops_before_any_credential_is_sent()
     {
         await using SshPeerContainer container = await StartAsync("openssh-10");
@@ -76,7 +76,7 @@ public class ClientSessionTests
         Assert.DoesNotContain("Accepted password", log);
     }
 
-    [Fact]
+    [InteropFact]
     public async Task Large_output_flows_through_the_window_intact()
     {
         await using SshPeerContainer container = await StartAsync("openssh-10");
@@ -88,7 +88,7 @@ public class ClientSessionTests
         Assert.Equal(0, result.ExitCode);
     }
 
-    [Fact]
+    [InteropFact]
     public async Task Stdin_round_trips_large_data_while_both_sides_stream()
     {
         await using SshPeerContainer container = await StartAsync("openssh-10");
@@ -132,7 +132,7 @@ public class ClientSessionTests
         Assert.Equal(0, process.ExitCode);
     }
 
-    [Fact]
+    [InteropFact]
     public async Task Many_channels_run_at_once()
     {
         await using SshPeerContainer container = await StartAsync("openssh-10");
@@ -142,7 +142,7 @@ public class ClientSessionTests
         Assert.Equal(Enumerable.Range(0, 8).Select(i => $"{i}\n"), results.Select(r => r.StandardOutput));
     }
 
-    [Fact]
+    [InteropFact]
     public async Task A_killed_process_reports_its_signal()
     {
         await using SshPeerContainer container = await StartAsync("openssh-10");
@@ -152,7 +152,7 @@ public class ClientSessionTests
         Assert.Equal("KILL", result.ExitSignal);
     }
 
-    [Fact]
+    [InteropFact]
     public async Task A_shell_with_a_terminal_works()
     {
         await using SshPeerContainer container = await StartAsync("openssh-10");
@@ -169,7 +169,7 @@ public class ClientSessionTests
     }
 
     // The M2 exit criterion: a rekey in the middle of a transfer, against real OpenSSH.
-    [Fact]
+    [InteropFact]
     public async Task A_rekey_during_a_transfer_loses_nothing()
     {
         await using SshPeerContainer container = await StartAsync("openssh-10");
@@ -202,7 +202,7 @@ public class ClientSessionTests
         Assert.True(client.CompletedKeyExchanges >= 3, $"{client.CompletedKeyExchanges} key exchanges ran.");
     }
 
-    [Fact]
+    [InteropFact]
     public async Task Rekeys_started_by_OpenSSH_are_answered_during_a_transfer()
     {
         PeerTools.RequireContainers();

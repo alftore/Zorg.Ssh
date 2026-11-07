@@ -71,7 +71,7 @@ public sealed class ServerSessionTests : IDisposable
         "-o", "LogLevel=ERROR", "alice@127.0.0.1", .. rest,
     ];
 
-    [Fact]
+    [InteropFact]
     public async Task Ssh_logs_in_with_a_key_runs_a_command_and_gets_the_exit_code()
     {
         string ssh = PeerTools.RequireSshClient();
@@ -102,7 +102,7 @@ public sealed class ServerSessionTests : IDisposable
         Assert.Equal(fingerprint, seen.KeyFingerprint);
     }
 
-    [Fact]
+    [InteropFact]
     public async Task Ssh_with_an_unknown_key_is_refused_and_the_handler_never_runs()
     {
         string ssh = PeerTools.RequireSshClient();
@@ -127,7 +127,7 @@ public sealed class ServerSessionTests : IDisposable
         Assert.False(ran);
     }
 
-    [Fact]
+    [InteropFact]
     public async Task Stdin_flows_through_the_server_both_ways()
     {
         string ssh = PeerTools.RequireSshClient();
@@ -153,7 +153,7 @@ public sealed class ServerSessionTests : IDisposable
         Assert.Equal(hex, output);
     }
 
-    [Fact]
+    [InteropFact]
     public async Task Our_client_and_server_work_together_end_to_end()
     {
         await using SshServer server = await SshServer.StartAsync(
@@ -189,7 +189,7 @@ public sealed class ServerSessionTests : IDisposable
         Assert.Equal(5, many.Count(r => r.ExitCode == 5));
     }
 
-    [Fact]
+    [InteropFact]
     public async Task A_throwing_handler_gives_exit_code_1_and_reveals_nothing()
     {
         await using SshServer server = await SshServer.StartAsync(

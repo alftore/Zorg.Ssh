@@ -68,7 +68,7 @@ public sealed class CertificateLoginTests : IDisposable
         return (user, userCertificate, hostCa, userCa, hostKey, hostCertificate);
     }
 
-    [Theory]
+    [InteropTheory]
     [InlineData("ed25519", "256")]
     [InlineData("ecdsa", "256")]
     [InlineData("ecdsa", "384")]
@@ -83,7 +83,7 @@ public sealed class CertificateLoginTests : IDisposable
         await AssertLogsInAsync(Options(container, knownHosts, SshCredential.FromPrivateKeyFile(made.User, null, made.UserCertificate)));
     }
 
-    [Theory]
+    [InteropTheory]
     [InlineData("rsa", "3072")]
     [InlineData("ecdsa", "384")]
     public async Task A_CA_of_another_type_works_for_users_and_hosts(string caType, string caBits)
@@ -99,7 +99,7 @@ public sealed class CertificateLoginTests : IDisposable
         await AssertLogsInAsync(Options(container, knownHosts, SshCredential.FromPrivateKeyFile(user, null, userCertificate)));
     }
 
-    [Fact]
+    [InteropFact]
     public async Task A_key_without_its_certificate_is_refused_by_sshd()
     {
         var made = await MakeAsync();
@@ -110,7 +110,7 @@ public sealed class CertificateLoginTests : IDisposable
             () => SshClient.ConnectAsync(Options(container, knownHosts, SshCredential.FromPrivateKeyFile(made.User)), Ct));
     }
 
-    [Fact]
+    [InteropFact]
     public async Task A_user_certificate_sshd_rejects_fails_the_login()
     {
         var made = await MakeAsync();
@@ -131,7 +131,7 @@ public sealed class CertificateLoginTests : IDisposable
         }
     }
 
-    [Fact]
+    [InteropFact]
     public async Task An_expired_host_certificate_from_sshd_is_refused()
     {
         var made = await MakeAsync(validity: "20200101:20200201");
@@ -143,7 +143,7 @@ public sealed class CertificateLoginTests : IDisposable
         Assert.Contains("has expired", refused.Message);
     }
 
-    [Fact]
+    [InteropFact]
     public async Task A_host_certificate_not_yet_valid_from_sshd_is_refused()
     {
         var made = await MakeAsync(validity: "20990101:21000101");
@@ -155,7 +155,7 @@ public sealed class CertificateLoginTests : IDisposable
         Assert.Contains("isn't valid yet", refused.Message);
     }
 
-    [Fact]
+    [InteropFact]
     public async Task Host_certificate_refusals_from_sshd()
     {
         var made = await MakeAsync(principal: "server.example.com,127.0.0.1");
@@ -187,7 +187,7 @@ public sealed class CertificateLoginTests : IDisposable
         await AssertLogsInAsync(Options(container, good, credential));
     }
 
-    [Fact]
+    [InteropFact]
     public async Task With_no_CA_line_the_plain_host_key_is_asked_for()
     {
         var made = await MakeAsync();

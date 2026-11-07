@@ -10,7 +10,7 @@ public class PythonPeerTests
 {
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
-    [Theory]
+    [InteropTheory]
     [InlineData("server_asyncssh.py", "asyncssh ")]
     [InlineData("server_paramiko.py", "paramiko ")]
     public async Task Login_and_exec_work_against_python_servers(string script, string expectedOutput)

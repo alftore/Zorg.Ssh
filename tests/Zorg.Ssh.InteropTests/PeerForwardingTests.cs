@@ -80,7 +80,7 @@ public class PeerForwardingTests
         }
     }
 
-    [Theory]
+    [InteropTheory]
     [MemberData(nameof(Peers))]
     public async Task A_stream_reads_the_servers_own_banner(string peer)
     {
@@ -95,7 +95,7 @@ public class PeerForwardingTests
         Assert.StartsWith(container.Banner, Encoding.ASCII.GetString(buffer, 0, read), StringComparison.Ordinal);
     }
 
-    [Theory]
+    [InteropTheory]
     [MemberData(nameof(Peers))]
     public async Task A_stream_carries_data_past_the_window_both_ways(string peer)
     {
@@ -107,7 +107,7 @@ public class PeerForwardingTests
         await ForwardingTests.AssertEchoesAsync(stream, 8_000_000);
     }
 
-    [Theory]
+    [InteropTheory]
     [MemberData(nameof(Peers))]
     public async Task A_local_forward_carries_several_connections_at_once(string peer)
     {
@@ -124,7 +124,7 @@ public class PeerForwardingTests
         }));
     }
 
-    [Theory]
+    [InteropTheory]
     [MemberData(nameof(Peers))]
     public async Task A_rekey_during_a_forwarded_transfer_loses_nothing(string peer)
     {
@@ -141,7 +141,7 @@ public class PeerForwardingTests
         Assert.True(client.CompletedKeyExchanges >= 3, $"{client.CompletedKeyExchanges} key exchanges ran.");
     }
 
-    [Theory]
+    [InteropTheory]
     [MemberData(nameof(Peers))]
     public async Task A_stream_to_a_closed_port_is_refused_and_the_connection_lives(string peer)
     {
@@ -152,7 +152,7 @@ public class PeerForwardingTests
         Assert.Equal(0, (await client.ExecuteAsync("true", Ct)).ExitCode);
     }
 
-    [Theory]
+    [InteropTheory]
     [MemberData(nameof(Peers))]
     public async Task A_remote_forward_on_a_chosen_port_carries_data_both_ways(string peer)
     {
@@ -176,7 +176,7 @@ public class PeerForwardingTests
         }
     }
 
-    [Theory]
+    [InteropTheory]
     [MemberData(nameof(Peers))]
     public async Task A_remote_forward_on_a_fixed_port_serves_connections_at_once_and_closes(string peer)
     {
@@ -209,7 +209,7 @@ public class PeerForwardingTests
         }
     }
 
-    [Theory]
+    [InteropTheory]
     [MemberData(nameof(Peers))]
     public async Task A_remote_forward_to_a_dead_target_refuses_the_connection_and_stays_up(string peer)
     {
@@ -229,7 +229,7 @@ public class PeerForwardingTests
         Assert.Equal(0, (await client.ExecuteAsync("true", Ct)).ExitCode);
     }
 
-    [Theory]
+    [InteropTheory]
     [MemberData(nameof(Peers))]
     public async Task A_SOCKS_client_reaches_a_service_by_address_and_by_name(string peer)
     {
@@ -256,7 +256,7 @@ public class PeerForwardingTests
         }
     }
 
-    [Theory]
+    [InteropTheory]
     [MemberData(nameof(Peers))]
     public async Task A_SOCKS_request_for_a_closed_port_gets_a_refusal(string peer)
     {
@@ -277,7 +277,7 @@ public class PeerForwardingTests
 
     // Both servers can refuse forwarding by configuration. That is the refusal path of the library against a real peer,
     // and for Dropbear it is the only one: the build in Alpine supports every forwarding type.
-    [Theory]
+    [InteropTheory]
     [MemberData(nameof(Peers))]
     public async Task A_server_that_forbids_forwarding_refuses_all_three_kinds_and_the_connection_lives(string peer)
     {
@@ -302,7 +302,7 @@ public class PeerForwardingTests
         Assert.Equal(0, (await client.ExecuteAsync("true", Ct)).ExitCode);
     }
 
-    [Theory]
+    [InteropTheory]
     [MemberData(nameof(Peers))]
     public async Task A_privileged_port_is_refused_and_the_connection_lives(string peer)
     {

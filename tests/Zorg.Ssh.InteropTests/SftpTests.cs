@@ -51,7 +51,7 @@ public class SftpTests
         return result.StandardOutput.Split(' ')[0].ToUpperInvariant();
     }
 
-    [Theory]
+    [InteropTheory]
     [MemberData(nameof(Peers))]
     public async Task A_large_file_survives_upload_and_download(string peer)
     {
@@ -74,7 +74,7 @@ public class SftpTests
         Assert.Equal(data.Length, (await sftp.GetAttributesAsync("big.bin", cancellationToken: Ct)).Size);
     }
 
-    [Theory]
+    [InteropTheory]
     [MemberData(nameof(Peers))]
     public async Task ReadAllBytes_and_WriteAllBytes_round_trip(string peer)
     {
@@ -93,7 +93,7 @@ public class SftpTests
         Assert.Empty(await sftp.ReadAllBytesAsync("empty.bin", Ct));
     }
 
-    [Theory]
+    [InteropTheory]
     [MemberData(nameof(Peers))]
     public async Task Directories_can_be_created_listed_and_removed(string peer)
     {
@@ -135,7 +135,7 @@ public class SftpTests
         Assert.False(await sftp.ExistsAsync("dir", Ct));
     }
 
-    [Theory]
+    [InteropTheory]
     [MemberData(nameof(Peers))]
     public async Task Failures_are_typed(string peer)
     {
@@ -163,7 +163,7 @@ public class SftpTests
     }
 
     // OpenSSH's SSH_FXP_SYMLINK takes its arguments the other way round from the draft.
-    [Theory]
+    [InteropTheory]
     [MemberData(nameof(Peers))]
     public async Task Symbolic_links_point_the_right_way(string peer)
     {
@@ -188,7 +188,7 @@ public class SftpTests
         Assert.True(await sftp.ExistsAsync("dangling", Ct));
     }
 
-    [Theory]
+    [InteropTheory]
     [MemberData(nameof(Peers))]
     public async Task Rename_overwrites_only_when_asked(string peer)
     {
@@ -211,7 +211,7 @@ public class SftpTests
         Assert.True(await sftp.ExistsAsync("c", Ct));
     }
 
-    [Theory]
+    [InteropTheory]
     [MemberData(nameof(Peers))]
     public async Task A_big_listing_arrives_whole(string peer)
     {
@@ -232,7 +232,7 @@ public class SftpTests
         Assert.Equal(Count + 2, names.Count);
     }
 
-    [Theory]
+    [InteropTheory]
     [MemberData(nameof(Peers))]
     public async Task Concurrent_transfers_share_a_session(string peer)
     {
@@ -264,7 +264,7 @@ public class SftpTests
         Assert.Equal(files.Select(f => Hash(f)), await Task.WhenAll(downloads));
     }
 
-    [Theory]
+    [InteropTheory]
     [MemberData(nameof(Peers))]
     public async Task Several_sessions_share_a_connection(string peer)
     {
@@ -282,7 +282,7 @@ public class SftpTests
         Assert.Equal(0, (await client.ExecuteAsync("true", Ct)).ExitCode);
     }
 
-    [Theory]
+    [InteropTheory]
     [MemberData(nameof(Peers))]
     public async Task A_rekey_in_the_middle_of_transfers_loses_nothing(string peer)
     {
@@ -311,7 +311,7 @@ public class SftpTests
         Assert.Equal(Hash(data), Hash(received.GetBuffer().AsSpan(0, (int)received.Length)));
     }
 
-    [Theory]
+    [InteropTheory]
     [MemberData(nameof(Peers))]
     public async Task Files_seek_read_and_write_like_streams(string peer)
     {
@@ -369,7 +369,7 @@ public class SftpTests
         Assert.Equal(new byte[] { 0, 0, 0, 7 }, await sftp.ReadAllBytesAsync("new.bin", Ct));
     }
 
-    [Theory]
+    [InteropTheory]
     [MemberData(nameof(Peers))]
     public async Task Attributes_can_be_set(string peer)
     {
@@ -397,7 +397,7 @@ public class SftpTests
         Assert.Equal("640\n", (await client.ExecuteAsync("stat -c %a attr.bin", Ct)).StandardOutput);
     }
 
-    [Theory]
+    [InteropTheory]
     [MemberData(nameof(Peers))]
     public async Task OpenSsh_extensions_work(string peer)
     {
@@ -419,7 +419,7 @@ public class SftpTests
         await file.SyncAsync(Ct);
     }
 
-    [Fact]
+    [InteropFact]
     public async Task The_newest_server_reports_limits_and_copies_on_the_server()
     {
         await using SshPeerContainer container = await StartAsync("openssh-10");
@@ -437,7 +437,7 @@ public class SftpTests
         await sftp.CopyFileAsync("copy-a.bin", "copy-b.bin", overwrite: true, Ct);
     }
 
-    [Fact]
+    [InteropFact]
     public async Task The_oldest_server_has_no_copy_data_and_says_so()
     {
         await using SshPeerContainer container = await StartAsync("openssh-7.4");
@@ -449,7 +449,7 @@ public class SftpTests
         Assert.Equal(SftpStatusCode.OperationUnsupported, ex.StatusCode);
     }
 
-    [Theory]
+    [InteropTheory]
     [MemberData(nameof(Peers))]
     public async Task A_tree_downloads_without_following_links(string peer)
     {
@@ -479,7 +479,7 @@ public class SftpTests
         }
     }
 
-    [Theory]
+    [InteropTheory]
     [MemberData(nameof(Peers))]
     public async Task A_killed_server_fails_calls_with_an_ssh_exception(string peer)
     {
@@ -509,7 +509,7 @@ public class SftpTests
 
     // Alpine's sshd serves SFTP from inside itself, so this is the openssh-10 run of the separate sftp-server program.
     // It also writes well past the 2 MiB window to stderr first, which nothing reads: that must not stall the session.
-    [Fact]
+    [InteropFact]
     public async Task The_real_sftp_server_program_works_and_its_stderr_cant_stall_the_window()
     {
         PeerTools.RequireContainers();
@@ -533,7 +533,7 @@ public class SftpTests
     }
 
     // Reports speed when a log file is named, so the numbers are real but never gate a run.
-    [Theory]
+    [InteropTheory]
     [MemberData(nameof(Peers))]
     public async Task Throughput_is_measured(string peer)
     {
