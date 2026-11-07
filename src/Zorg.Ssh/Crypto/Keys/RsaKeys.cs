@@ -41,11 +41,13 @@ internal sealed class RsaPublicKey : SshPublicKey
     /// <summary>Makes a key from big-endian magnitudes, checking them as peer data.</summary>
     /// <param name="exponent">The public exponent.</param>
     /// <param name="modulus">The modulus.</param>
-    /// <param name="receivedBlob">
-    /// The blob as the peer sent it, if any. It's kept as it came because mpints can carry redundant zeros, and
-    /// the exchange hash and the rekey comparison both need the peer's exact bytes.
-    /// </param>
-    public static RsaPublicKey FromParameters(ReadOnlySpan<byte> exponent, ReadOnlySpan<byte> modulus, ReadOnlySpan<byte> receivedBlob = default)
+    /// <remarks>
+    /// The blob is always rebuilt in canonical form, without redundant leading zeros (RFC 4251 section 5). OpenSSH accepts
+    /// such zeros on the wire and compares keys by value, so this does too: one key has one <see cref="Blob"/>, and
+    /// equality, known_hosts matching, <c>@revoked</c> and fingerprints can not be dodged by re-encoding. Code that needs
+    /// the peer's exact bytes, as the exchange hash does, keeps what it received.
+    /// </remarks>
+    public static RsaPublicKey FromParameters(ReadOnlySpan<byte> exponent, ReadOnlySpan<byte> modulus)
     {
         exponent = TrimLeadingZeros(exponent);
         modulus = TrimLeadingZeros(modulus);
@@ -70,7 +72,7 @@ internal sealed class RsaPublicKey : SshPublicKey
             writer.WriteUtf8String(Name);
             writer.WriteMPInt(exponent);
             writer.WriteMPInt(modulus);
-            byte[] blob = receivedBlob.IsEmpty ? writer.ToArray() : receivedBlob.ToArray();
+            byte[] blob = writer.ToArray();
             RsaPublicKey key = new(exponent.ToArray(), modulus.ToArray(), blob);
             key.EnsurePlatformAccepts();
             return key;
@@ -81,13 +83,50 @@ internal sealed class RsaPublicKey : SshPublicKey
         }
     }
 
-    /// <summary>Reads the body of a blob, after the key type. <paramref name="blob"/> is the whole blob.</summary>
-    public static RsaPublicKey ParseBody(ref SshReader reader, ReadOnlySpan<byte> blob)
+    /// <summary>
+    /// Gives the canonical form of an <c>ssh-rsa</c> blob, or the input if it isn't one or can't be read. No other check
+    /// is made, so a weak or odd key still gets one spelling. known_hosts lines go through this, so that a line spelled
+    /// with redundant zeros means the same key as the canonical blob.
+    /// </summary>
+    public static byte[] Canonicalize(ReadOnlySpan<byte> blob)
+    {
+        try
+        {
+            SshReader reader = new(blob);
+            if (reader.ReadUtf8String() != Name)
+            {
+                return blob.ToArray();
+            }
+
+            ReadOnlySpan<byte> exponent = reader.ReadMPInt();
+            ReadOnlySpan<byte> modulus = reader.ReadMPInt();
+            reader.EnsureEnd();
+            SshWriter writer = new(modulus.Length + exponent.Length + 32);
+            try
+            {
+                writer.WriteUtf8String(Name);
+                writer.WriteMPInt(exponent);
+                writer.WriteMPInt(modulus);
+                return writer.ToArray();
+            }
+            finally
+            {
+                writer.Dispose();
+            }
+        }
+        catch (SshProtocolException)
+        {
+            return blob.ToArray();
+        }
+    }
+
+    /// <summary>Reads the body of a blob, after the key type.</summary>
+    public static RsaPublicKey ParseBody(ref SshReader reader)
     {
         ReadOnlySpan<byte> exponent = reader.ReadMPInt();
         ReadOnlySpan<byte> modulus = reader.ReadMPInt();
         reader.EnsureEnd();
-        return FromParameters(exponent, modulus, blob);
+        return FromParameters(exponent, modulus);
     }
 
     /// <inheritdoc/>

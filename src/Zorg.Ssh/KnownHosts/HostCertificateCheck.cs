@@ -30,7 +30,8 @@ internal static class HostCertificateCheck
             throw new SshHostKeyException($"{subject} is for a key marked revoked in {pathText}. Don't connect until the administrator has replaced it.");
         }
 
-        ReadOnlyMemory<byte> ca = certificate.SignatureKeyBlob;
+        // By value: the CA signed over the bytes it sent, but the CA's identity is its key, however its mpints are spelled.
+        ReadOnlyMemory<byte> ca = RsaPublicKey.Canonicalize(certificate.SignatureKeyBlob.Span);
         if (files.Any(file => file.IsRevoked(host, port, ca.Span)))
         {
             throw new SshHostKeyException($"{subject} was signed by a CA marked revoked in {pathText}. Don't connect until the administrator has reissued it.");

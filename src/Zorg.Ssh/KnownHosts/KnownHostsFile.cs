@@ -355,7 +355,8 @@ internal sealed class KnownHostsEntry
             return false;
         }
 
-        byte[] blob = blobBuffer.AsSpan(0, written).ToArray();
+        // Keys are compared by value, as OpenSSH does, so a line that spells an RSA mpint with extra zeros means the same key.
+        byte[] blob = Crypto.Keys.RsaPublicKey.Canonicalize(blobBuffer.AsSpan(0, written));
         string keyTypeText = keyType.ToString();
         if (!BlobHasType(blob, keyTypeText))
         {
