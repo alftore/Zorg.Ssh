@@ -21,7 +21,6 @@ Zorg.Ssh.Sftp.SftpAttributes.Uid.get -> uint?
 Zorg.Ssh.Sftp.SftpAttributes.Uid.init -> void
 Zorg.Ssh.Sftp.SftpClient
 Zorg.Ssh.Sftp.SftpClient.CopyFileAsync(string! sourcePath, string! destinationPath, bool overwrite = false, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
-Zorg.Ssh.Sftp.SftpClient.CreateDirectoryAsync(string! path, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
 Zorg.Ssh.Sftp.SftpClient.CreateHardLinkAsync(string! linkPath, string! targetPath, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
 Zorg.Ssh.Sftp.SftpClient.CreateSymbolicLinkAsync(string! linkPath, string! targetPath, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
 Zorg.Ssh.Sftp.SftpClient.DeleteDirectoryAsync(string! path, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
@@ -600,3 +599,6 @@ static Zorg.Ssh.SshPublicKeyRequest.operator ==(Zorg.Ssh.SshPublicKeyRequest? le
 static Zorg.Ssh.SshServer.StartAsync(Zorg.Ssh.SshServerOptions! options, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Zorg.Ssh.SshServer!>!
 static Zorg.Ssh.SshServerOptions.operator !=(Zorg.Ssh.SshServerOptions? left, Zorg.Ssh.SshServerOptions? right) -> bool
 static Zorg.Ssh.SshServerOptions.operator ==(Zorg.Ssh.SshServerOptions? left, Zorg.Ssh.SshServerOptions? right) -> bool
+Zorg.Ssh.Sftp.SftpEntry.HasValidName.get -> bool
+Zorg.Ssh.Sftp.SftpClient.CreateDirectoryAsync(string! path, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task!
+Zorg.Ssh.Sftp.SftpClient.CreateDirectoryAsync(string! path, bool recursive = false, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
