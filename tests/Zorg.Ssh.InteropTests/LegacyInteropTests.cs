@@ -131,7 +131,7 @@ public sealed class LegacyInteropTests : IDisposable
         // ssh-rsa only) has no image here; OpenSSH 10 offering only ssh-rsa stands in for it above.
         await using SshPeerContainer container = await StartDropbearRsaOnlyAsync();
         SshNegotiationException refused = await Assert.ThrowsAsync<SshNegotiationException>(
-            () => ConnectAsync(container, new SshAlgorithms { HostKeys = ["ssh-rsa"] }, null));
+            () => ConnectAsync(container, SshAlgorithms.LegacyUnsafe with { HostKeys = ["ssh-rsa"] }, null));
 
         Assert.Equal(["rsa-sha2-256"], refused.PeerAlgorithms);
     }
@@ -140,7 +140,7 @@ public sealed class LegacyInteropTests : IDisposable
     public async Task Dropbear_completes_a_finite_field_group()
     {
         await using SshPeerContainer container = await StartDropbearRsaOnlyAsync();
-        InteropLog log = await AssertSessionAsync(container, new SshAlgorithms { KeyExchange = ["diffie-hellman-group14-sha256"] });
+        InteropLog log = await AssertSessionAsync(container, SshAlgorithms.LegacyUnsafe with { KeyExchange = ["diffie-hellman-group14-sha256"] });
 
         AssertLogged(log, "kex=diffie-hellman-group14-sha256 ");
     }
@@ -155,7 +155,7 @@ public sealed class LegacyInteropTests : IDisposable
             new SshServerOptions
             {
                 HostKeys = [hostKey],
-                Algorithms = new SshAlgorithms
+                Algorithms = SshAlgorithms.LegacyUnsafe with
                 {
                     KeyExchange = ["diffie-hellman-group14-sha256", "diffie-hellman-group14-sha1"],
                     HostKeys = ["ssh-rsa"],

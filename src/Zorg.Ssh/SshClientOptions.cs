@@ -2,11 +2,16 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text;
 using Microsoft.Extensions.Logging;
 
 namespace Zorg.Ssh;
 
-/// <summary>What <see cref="SshClient.ConnectAsync"/> needs. Host, user name and host key policy are required, so that no connection is accidentally unverified.</summary>
+/// <summary>
+/// What <see cref="SshClient.ConnectAsync"/> needs. Host, user name and host key policy are required, so that no
+/// connection is accidentally unverified. Use <c>with</c> to change a copy, for example one from <see cref="FromConfig"/>.
+/// <see cref="ToString"/> shows only the host, port and user name, so logging options can't leak a credential.
+/// </summary>
 /// <example>
 /// <code>
 /// SshClientOptions options = new()
@@ -16,9 +21,10 @@ namespace Zorg.Ssh;
 ///     Credentials = [SshCredential.FromPassword(password)],
 ///     HostKeyPolicy = HostKeyPolicy.Fingerprint(knownFingerprint),
 /// };
+/// SshClientOptions patient = options with { ConnectTimeout = TimeSpan.FromMinutes(2) };
 /// </code>
 /// </example>
-public sealed class SshClientOptions
+public sealed record SshClientOptions
 {
     /// <summary>Gets the host name or address to connect to.</summary>
     public required string Host { get; init; }
@@ -108,6 +114,13 @@ public sealed class SshClientOptions
 
     /// <summary>Gets the logger factory. Secrets are never logged.</summary>
     public ILoggerFactory? LoggerFactory { get; init; }
+
+    /// <summary>Prints the host, port and user name only. Guarantee 4: credentials and handlers never reach a string.</summary>
+    private bool PrintMembers(StringBuilder builder)
+    {
+        builder.Append("Host = ").Append(Host).Append(", Port = ").Append(Port).Append(", UserName = ").Append(UserName);
+        return true;
+    }
 
     /// <summary>
     /// Makes options from an OpenSSH config file, for the host as you'd name it to <c>ssh</c>. Credentials are the agent,

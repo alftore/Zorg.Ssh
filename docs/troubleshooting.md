@@ -144,7 +144,7 @@ The two sides share no algorithm in one family. `Family` names it, and `LocalAlg
 | Message says | What to do |
 |---|---|
 | The peer offers X, which `SshAlgorithms.LegacyUnsafe` enables | The server has only older algorithms. Upgrade it if you can. Otherwise set `Algorithms = SshAlgorithms.LegacyUnsafe` on the client, after reading [security.md](security.md#legacy-algorithms). A warning is logged each time a legacy algorithm is used. |
-| No common key exchange, with `diffie-hellman-*` on the client and a server from this library | A server offers finite-field Diffie-Hellman only when its `KeyExchange` list names it: `LegacyUnsafe` alone isn't enough there. |
+| No common key exchange, with `diffie-hellman-*` on the client and a server from this library | A server offers finite-field Diffie-Hellman only when its `KeyExchange` list names it: `LegacyUnsafe` alone isn't enough there. Use `SshAlgorithms.LegacyUnsafe with { KeyExchange = [...] }`. |
 | The platform refused an ssh-rsa (RSA with SHA-1) signature | The operating system's crypto policy forbids SHA-1 signatures, as RHEL 9 and later do by default. Upgrade the peer to `rsa-sha2-256` or `rsa-sha2-512`. If you can't, allow SHA-1 in the system policy (on RHEL: `update-crypto-policies --set DEFAULT:SHA1`), which affects every program on the machine. |
 | `diffie-hellman-group1-sha1`, `diffie-hellman-group-exchange-*`, `ssh-dss`, `3des-cbc`, CBC, arcfour or MD5 | Not supported, and `LegacyUnsafe` doesn't add them. The peer must be upgraded or reconfigured. |
 

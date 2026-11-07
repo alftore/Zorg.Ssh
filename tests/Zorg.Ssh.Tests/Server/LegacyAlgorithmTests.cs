@@ -62,7 +62,61 @@ public sealed class LegacyAlgorithmTests : IDisposable
     [InlineData("HostKeys", "ssh-rsa")]
     [InlineData("Macs", "hmac-sha1")]
     [InlineData("Macs", "hmac-sha1-etm@openssh.com")]
-    public void A_legacy_name_may_be_named_explicitly(string family, string name) => Build(family, name).Validate();
+    public void A_legacy_name_may_be_named_on_a_copy_of_LegacyUnsafe(string family, string name) => Build(family, name, SshAlgorithms.LegacyUnsafe).Validate();
+
+    [Theory]
+    [InlineData("KeyExchange", "diffie-hellman-group14-sha256")]
+    [InlineData("KeyExchange", "diffie-hellman-group16-sha512")]
+    [InlineData("KeyExchange", "diffie-hellman-group14-sha1")]
+    [InlineData("HostKeys", "ssh-rsa")]
+    [InlineData("Macs", "hmac-sha1")]
+    [InlineData("Macs", "hmac-sha1-etm@openssh.com")]
+    public void A_legacy_name_in_a_plain_list_is_refused_and_the_message_points_at_LegacyUnsafe(string family, string name)
+    {
+        ArgumentException failure = Assert.Throws<ArgumentException>(() => Build(family, name).Validate());
+        Assert.Contains($"'{name}' is a legacy algorithm", failure.Message, StringComparison.Ordinal);
+        Assert.Contains($"SshAlgorithms.LegacyUnsafe with {{ {family} = [...] }}", failure.Message, StringComparison.Ordinal);
+
+        // A copy of the defaults is no way round it either.
+        Assert.Throws<ArgumentException>(() => Build(family, name, SshAlgorithms.Default).Validate());
+    }
+
+    [Fact]
+    public void A_copy_of_LegacyUnsafe_stays_legacy_through_every_with_and_keeps_its_explicit_flags()
+    {
+        SshAlgorithms narrowed = SshAlgorithms.LegacyUnsafe with { Ciphers = ["aes128-ctr"] };
+        Assert.True(narrowed.AllowsLegacy);
+        Assert.False(narrowed.KeyExchangeIsExplicit);
+        Assert.False(narrowed.HostKeysIsExplicit);
+        Assert.Equal(SshAlgorithms.LegacyUnsafe.KeyExchange, narrowed.KeyExchange);
+
+        SshAlgorithms dh = narrowed with { KeyExchange = ["diffie-hellman-group14-sha256"] };
+        SshAlgorithms again = dh with { Macs = ["hmac-sha1"] };
+        Assert.True(again.AllowsLegacy);
+        Assert.True(again.KeyExchangeIsExplicit);
+        Assert.False(again.HostKeysIsExplicit);
+        Assert.Equal(["diffie-hellman-group14-sha256"], again.ServerKeyExchange);
+        Assert.NotNull(again.KeyExchangeExtension);
+        again.Validate();
+
+        SshAlgorithms plain = new() { HostKeys = ["ssh-ed25519"] };
+        SshAlgorithms plainCopy = plain with { Ciphers = ["aes128-ctr"] };
+        Assert.False(plainCopy.AllowsLegacy);
+        Assert.True(plainCopy.HostKeysIsExplicit);
+        Assert.False(plainCopy.KeyExchangeIsExplicit);
+    }
+
+    [Fact]
+    public void Algorithms_print_their_names_and_compare_by_value()
+    {
+        string text = SshAlgorithms.LegacyUnsafe.ToString();
+        Assert.Contains("Macs = [", text, StringComparison.Ordinal);
+        Assert.Contains("ssh-rsa", text, StringComparison.Ordinal);
+        Assert.Contains("LegacyUnsafe = true", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("System.", SshAlgorithms.Default.ToString(), StringComparison.Ordinal);
+        Assert.Equal(SshAlgorithms.Default, SshAlgorithms.Default with { });
+        Assert.NotEqual(SshAlgorithms.Default, SshAlgorithms.LegacyUnsafe);
+    }
 
     [Theory]
     [InlineData("KeyExchange", "diffie-hellman-group1-sha1")]
@@ -89,11 +143,12 @@ public sealed class LegacyAlgorithmTests : IDisposable
     }
 
     [Fact]
-    public void Only_an_explicit_key_exchange_list_or_the_preset_can_reach_finite_field_code()
+    public void Only_the_preset_and_its_copies_can_reach_finite_field_code()
     {
         Assert.Null(new SshAlgorithms { Ciphers = ["aes128-ctr"] }.KeyExchangeExtension);
-        Assert.NotNull(new SshAlgorithms { KeyExchange = ["curve25519-sha256"] }.KeyExchangeExtension);
+        Assert.Null(new SshAlgorithms { KeyExchange = ["curve25519-sha256"] }.KeyExchangeExtension);
         Assert.NotNull(SshAlgorithms.LegacyUnsafe.KeyExchangeExtension);
+        Assert.NotNull((SshAlgorithms.LegacyUnsafe with { KeyExchange = ["curve25519-sha256"] }).KeyExchangeExtension);
         Assert.False(SshAlgorithms.LegacyUnsafe.KeyExchangeIsExplicit);
     }
 
@@ -102,7 +157,7 @@ public sealed class LegacyAlgorithmTests : IDisposable
     {
         Assert.DoesNotContain(SshAlgorithms.LegacyUnsafe.ServerKeyExchange, LegacyAlgorithms.IsFiniteFieldDh);
         Assert.Equal(KeyExchangeCatalog.Default, SshAlgorithms.LegacyUnsafe.ServerKeyExchange);
-        Assert.Equal(["diffie-hellman-group14-sha1"], new SshAlgorithms { KeyExchange = ["diffie-hellman-group14-sha1"] }.ServerKeyExchange);
+        Assert.Equal(["diffie-hellman-group14-sha1"], (SshAlgorithms.LegacyUnsafe with { KeyExchange = ["diffie-hellman-group14-sha1"] }).ServerKeyExchange);
     }
 
     [Fact]
@@ -124,7 +179,7 @@ public sealed class LegacyAlgorithmTests : IDisposable
     public async Task A_legacy_client_logs_in_to_a_server_that_names_Diffie_Hellman_and_warns(string kex)
     {
         CaptureLoggerFactory logs = new();
-        await using SshServer server = await StartAsync(new SshAlgorithms { KeyExchange = [kex] }, _ed25519);
+        await using SshServer server = await StartAsync(SshAlgorithms.LegacyUnsafe with { KeyExchange = [kex] }, _ed25519);
         await using SshClient client = await SshClient.ConnectAsync(ClientOptions(server, _ed25519, SshAlgorithms.LegacyUnsafe, logs), Ct);
 
         Assert.Equal(0, (await client.ExecuteAsync("x", Ct)).ExitCode);
@@ -137,7 +192,7 @@ public sealed class LegacyAlgorithmTests : IDisposable
     {
         await using SshServer server = await StartAsync(SshAlgorithms.LegacyUnsafe, _ed25519);
         SshNegotiationException failure = await Assert.ThrowsAsync<SshNegotiationException>(
-            () => SshClient.ConnectAsync(ClientOptions(server, _ed25519, new SshAlgorithms { KeyExchange = ["diffie-hellman-group14-sha256"] }), Ct));
+            () => SshClient.ConnectAsync(ClientOptions(server, _ed25519, SshAlgorithms.LegacyUnsafe with { KeyExchange = ["diffie-hellman-group14-sha256"] }), Ct));
 
         Assert.Equal("key exchange", failure.Family);
         Assert.DoesNotContain(failure.PeerAlgorithms, LegacyAlgorithms.IsFiniteFieldDh);
@@ -146,7 +201,7 @@ public sealed class LegacyAlgorithmTests : IDisposable
     [Fact]
     public async Task A_default_client_against_a_legacy_only_server_is_told_about_LegacyUnsafe()
     {
-        await using SshServer server = await StartAsync(new SshAlgorithms { KeyExchange = ["diffie-hellman-group14-sha1"] }, _ed25519);
+        await using SshServer server = await StartAsync(SshAlgorithms.LegacyUnsafe with { KeyExchange = ["diffie-hellman-group14-sha1"] }, _ed25519);
         SshNegotiationException failure = await Assert.ThrowsAsync<SshNegotiationException>(
             () => SshClient.ConnectAsync(ClientOptions(server, _ed25519, SshAlgorithms.Default), Ct));
 
@@ -159,7 +214,7 @@ public sealed class LegacyAlgorithmTests : IDisposable
     public async Task The_SHA_1_MACs_carry_a_session_and_warn(string mac)
     {
         CaptureLoggerFactory logs = new();
-        await using SshServer server = await StartAsync(new SshAlgorithms { Ciphers = ["aes128-ctr"], Macs = [mac] }, _ed25519);
+        await using SshServer server = await StartAsync(SshAlgorithms.LegacyUnsafe with { Ciphers = ["aes128-ctr"], Macs = [mac] }, _ed25519);
         await using SshClient client = await SshClient.ConnectAsync(ClientOptions(server, _ed25519, SshAlgorithms.LegacyUnsafe, logs), Ct);
 
         client.RequestRekey();
@@ -172,7 +227,7 @@ public sealed class LegacyAlgorithmTests : IDisposable
     public async Task An_ssh_rsa_host_key_works_only_for_a_client_that_allows_it()
     {
         using SshHostKey rsa = new(SshPrivateKey.GenerateRsa(2048));
-        await using SshServer server = await StartAsync(new SshAlgorithms { HostKeys = ["ssh-rsa"] }, rsa);
+        await using SshServer server = await StartAsync(SshAlgorithms.LegacyUnsafe with { HostKeys = ["ssh-rsa"] }, rsa);
 
         SshNegotiationException refused = await Assert.ThrowsAsync<SshNegotiationException>(
             () => SshClient.ConnectAsync(ClientOptions(server, rsa, SshAlgorithms.Default), Ct));
@@ -361,13 +416,17 @@ public sealed class LegacyAlgorithmTests : IDisposable
         return writer.ToArray();
     }
 
-    private static SshAlgorithms Build(string family, string name) => family switch
+    private static SshAlgorithms Build(string family, string name, SshAlgorithms? from = null)
     {
-        "KeyExchange" => new SshAlgorithms { KeyExchange = [name] },
-        "HostKeys" => new SshAlgorithms { HostKeys = [name] },
-        "Ciphers" => new SshAlgorithms { Ciphers = [name] },
-        _ => new SshAlgorithms { Macs = [name] },
-    };
+        SshAlgorithms start = from ?? new SshAlgorithms();
+        return family switch
+        {
+            "KeyExchange" => start with { KeyExchange = [name] },
+            "HostKeys" => start with { HostKeys = [name] },
+            "Ciphers" => start with { Ciphers = [name] },
+            _ => start with { Macs = [name] },
+        };
+    }
 
     private static Task<SshServer> StartAsync(SshAlgorithms algorithms, SshHostKey hostKey) => SshServer.StartAsync(
         new SshServerOptions

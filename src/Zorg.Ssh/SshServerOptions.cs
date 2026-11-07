@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Net;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
@@ -229,7 +230,10 @@ public enum SshForwardDecision
 /// </example>
 public sealed record SshDirectTcpRequest(SshPrincipal Principal, string Host, int Port, string OriginatorAddress, int OriginatorPort);
 
-/// <summary>What <see cref="SshServer.StartAsync"/> needs. It listens on loopback unless told otherwise.</summary>
+/// <summary>
+/// What <see cref="SshServer.StartAsync"/> needs. It listens on loopback unless told otherwise. Use <c>with</c> to
+/// change a copy. <see cref="ToString"/> shows only the address and port, so logging options can't leak a key.
+/// </summary>
 /// <example>
 /// <code>
 /// SshServerOptions options = new()
@@ -241,7 +245,7 @@ public sealed record SshDirectTcpRequest(SshPrincipal Principal, string Host, in
 /// };
 /// </code>
 /// </example>
-public sealed class SshServerOptions
+public sealed record SshServerOptions
 {
     /// <summary>Gets the address to listen on. The default is loopback, so exposing a server is a deliberate choice.</summary>
     public IPAddress Address { get; init; } = IPAddress.Loopback;
@@ -375,4 +379,11 @@ public sealed class SshServerOptions
 
     /// <summary>Gets the logger factory. Passwords and keys are never logged.</summary>
     public ILoggerFactory? LoggerFactory { get; init; }
+
+    /// <summary>Prints the address and port only. Guarantee 4: host keys and handlers never reach a string.</summary>
+    private bool PrintMembers(StringBuilder builder)
+    {
+        builder.Append("Address = ").Append(Address).Append(", Port = ").Append(Port);
+        return true;
+    }
 }

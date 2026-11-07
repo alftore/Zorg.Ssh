@@ -67,6 +67,14 @@ internal static class ClientExamples
         return options;
     }
 
+    public static SshAlgorithms LegacyNarrowed()
+    {
+        // doc:legacy-narrowed
+        SshAlgorithms algorithms = SshAlgorithms.LegacyUnsafe with { KeyExchange = ["curve25519-sha256", "diffie-hellman-group14-sha256"] };
+        // end-doc
+        return algorithms;
+    }
+
     public static IReadOnlyList<SshCredential> Credentials(string passphrase, string password, string deployKey, string oneTimeCode)
     {
         // doc:credentials
