@@ -400,6 +400,66 @@ public class ForwardingTests
         Assert.True((await sftp.ReadAllBytesAsync("/etc/passwd", Ct)).Length > 0);
     }
 
+    // The inner connection's packets travel as channel data inside the outer one. A rekey of either must neither
+    // lose nor reorder a byte of the other, and the two can be in their key exchanges at the same time.
+    [Fact]
+    public async Task Rekeys_of_the_outer_and_inner_connections_during_a_transfer_through_a_jump_lose_nothing()
+    {
+        await using SshPeerContainer outer = await StartAsync();
+        await using SshPeerContainer inner = await StartAsync();
+        string address = await ContainerAddressAsync(inner);
+
+        await using SshClient jump = await ConnectAsync(outer);
+        await using SshClient client = await SshClient.ConnectAsync(Options(address, 22, jump), Ct);
+        await using SshProcess echo = await StartEchoAsync(client);
+        await using Stream stream = await client.OpenTcpStreamAsync("127.0.0.1", EchoPort, Ct);
+        int outerBefore = jump.CompletedKeyExchanges;
+        int innerBefore = client.CompletedKeyExchanges;
+
+        // One at a time, in the middle of a chunk: the outer one, the inner one, then both together.
+        await AssertEchoesAsync(stream, 3_000_000, jump.RequestRekey);
+        await AssertEchoesAsync(stream, 3_000_000, client.RequestRekey);
+        await AssertEchoesAsync(stream, 3_000_000, () =>
+        {
+            jump.RequestRekey();
+            client.RequestRekey();
+        });
+
+        // Then a steady stream of requests from a second thread for as long as the transfer lasts.
+        using CancellationTokenSource done = CancellationTokenSource.CreateLinkedTokenSource(Ct);
+        Task rekeying = Task.Run(
+            async () =>
+            {
+                try
+                {
+                    while (true)
+                    {
+                        jump.RequestRekey();
+                        await Task.Delay(40, done.Token);
+                        client.RequestRekey();
+                        await Task.Delay(40, done.Token);
+                    }
+                }
+                catch (OperationCanceledException)
+                {
+                    // The transfer ended.
+                }
+            },
+            CancellationToken.None);
+        await AssertEchoesAsync(stream, 12_000_000);
+        await done.CancelAsync();
+        await rekeying;
+
+        int outerRuns = jump.CompletedKeyExchanges - outerBefore;
+        int innerRuns = client.CompletedKeyExchanges - innerBefore;
+        Assert.True(outerRuns >= 4, $"The outer connection ran {outerRuns} key exchanges.");
+        Assert.True(innerRuns >= 4, $"The inner connection ran {innerRuns} key exchanges.");
+
+        // Both connections still work after all of it.
+        Assert.Equal(inner.Id[..12], (await client.ExecuteAsync("hostname", Ct)).StandardOutput.Trim());
+        Assert.Equal(outer.Id[..12], (await jump.ExecuteAsync("hostname", Ct)).StandardOutput.Trim());
+    }
+
     [Fact]
     public async Task A_jump_to_the_same_container_by_loopback_works()
     {
