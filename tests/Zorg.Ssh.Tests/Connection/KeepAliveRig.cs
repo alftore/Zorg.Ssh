@@ -72,6 +72,24 @@ internal sealed class ManualClock : TimeProvider
         }
     }
 
+    /// <summary>Waits until a timer is armed to fire <paramref name="due"/> after the clock's current time.</summary>
+    public async Task WaitForTimerDueAsync(TimeSpan due)
+    {
+        using CancellationTokenSource limit = new(Limit);
+        while (true)
+        {
+            lock (_lock)
+            {
+                if (_timers.Any(t => t.Due == _now + due.Ticks))
+                {
+                    return;
+                }
+            }
+
+            await Task.Delay(1, limit.Token);
+        }
+    }
+
     /// <summary>
     /// Moves the clock, stopping at each timer on the way. After a timer fires, this waits for its owner to arm the
     /// next one or for <paramref name="finished"/>, so a tick is never skipped because the test ran ahead of it.
@@ -344,7 +362,22 @@ internal sealed class KeepAliveRig : IAsyncDisposable
         connection.Start();
         if (options.KeepAliveInterval > TimeSpan.Zero)
         {
-            await clock.WaitForTimerAsync();
+            // The monitor's first sleep starts on its own task. If the clock moved before it began, its timer would
+            // be due an interval after that later time, and the test would stop advancing short of it. Another timer
+            // (a key exchange deadline) may exist too, so wait for the one that's due an interval from now.
+            await clock.WaitForTimerDueAsync(options.KeepAliveInterval);
+        }
+
+        // The send loop clears the transport's key exchange hold only after our NEWKEYS is on the wire, which can be
+        // a moment after the peer has seen it and StartAsync has returned. The monitor sends no probe while the hold
+        // is up, so a test that moved the clock first would find its one probe skipped and nothing to prompt another.
+        using (CancellationTokenSource limit = CancellationTokenSource.CreateLinkedTokenSource(token))
+        {
+            limit.CancelAfter(Limit);
+            while (ourTransport.KeyExchangeRunning)
+            {
+                await Task.Delay(1, limit.Token);
+            }
         }
 
         return new KeepAliveRig(clock, link, peerLink, connection, peer, token);
@@ -367,8 +400,20 @@ internal sealed class KeepAliveRig : IAsyncDisposable
         return Assert.IsType<SshConnectionException>(ex.InnerException).Message;
     }
 
-    public async Task<string> NextGlobalRequestAsync() =>
-        await _globalRequests.Reader.ReadAsync(_token).AsTask().WaitAsync(Limit, _token);
+    public async Task<string> NextGlobalRequestAsync()
+    {
+        try
+        {
+            return await _globalRequests.Reader.ReadAsync(_token).AsTask().WaitAsync(Limit, _token);
+        }
+        catch (TimeoutException)
+        {
+            // Say where the connection was, because a probe that never came leaves nothing else to go on.
+            throw new TimeoutException(
+                $"No global request arrived. Probes sent {Monitor.ProbesSent}, one outstanding {Monitor.ProbeOutstanding}, ended {Ended}, " +
+                $"key exchange running {Connection.Transport.KeyExchangeRunning}, write pending for {Connection.Transport.WritePendingFor}.");
+        }
+    }
 
     public async Task<uint> NextOpenAsync() =>
         await _opens.Reader.ReadAsync(_token).AsTask().WaitAsync(Limit, _token);

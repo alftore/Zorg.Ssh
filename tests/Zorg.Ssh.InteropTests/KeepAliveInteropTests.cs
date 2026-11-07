@@ -21,6 +21,10 @@ public sealed class KeepAliveInteropTests : IDisposable
     private static readonly TimeSpan Interval = TimeSpan.FromSeconds(1);
     private static readonly TimeSpan Quiet = TimeSpan.FromSeconds(6);
 
+    // About one probe a second is the best case, and a container on a loaded machine can answer late, so the test
+    // that wants at least three allows ten seconds, as the silent-command test does.
+    private static readonly TimeSpan IdleStretch = TimeSpan.FromSeconds(10);
+
     private readonly string _directory = Directory.CreateTempSubdirectory("zorg-ssh-keepalive").FullName;
     private readonly SshHostKey _hostKey = SshHostKey.GenerateEd25519();
 
@@ -59,7 +63,7 @@ public sealed class KeepAliveInteropTests : IDisposable
         await using SshPeerContainer container = await StartAsync(peer);
         await using SshClient client = await SshClient.ConnectAsync(ClientOptions(container), TestContext.Current.CancellationToken);
 
-        await Task.Delay(Quiet, Ct);
+        await Task.Delay(IdleStretch, Ct);
 
         int answered = client.Connection.KeepAlive!.ProbesAnswered;
         Assert.True(answered >= 3, $"{peer} answered {answered} probes.");
