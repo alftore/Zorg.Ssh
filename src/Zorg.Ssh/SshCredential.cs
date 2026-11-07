@@ -139,12 +139,32 @@ public abstract class SshCredential
             optionalName: path);
     }
 
-    private static Crypto.SshPrivateKey LoadKey(string path, string? passphrase) =>
-        Crypto.KeyFiles.SshKeyFile.Load(ReadKeyFile(path, "key"), passphrase);
+    /// <summary>
+    /// Loads a key file. The text of the private key goes from the file into a byte buffer and a char buffer, and both
+    /// are zeroed after use (guarantee 4). A passphrase given as a string is the caller's string, which can't be zeroed.
+    /// </summary>
+    private static Crypto.SshPrivateKey LoadKey(string path, string? passphrase)
+    {
+        byte[] bytes = ReadKeyFile(path, "key");
+        char[] chars = new char[System.Text.Encoding.UTF8.GetMaxCharCount(bytes.Length)];
+        byte[] passphraseBytes = string.IsNullOrEmpty(passphrase) ? [] : System.Text.Encoding.UTF8.GetBytes(passphrase);
+        try
+        {
+            int length = System.Text.Encoding.UTF8.GetChars(bytes, chars);
+            return Crypto.KeyFiles.SshKeyFile.Load(chars.AsSpan(0, length), passphraseBytes);
+        }
+        finally
+        {
+            System.Security.Cryptography.CryptographicOperations.ZeroMemory(bytes);
+            System.Security.Cryptography.CryptographicOperations.ZeroMemory(System.Runtime.InteropServices.MemoryMarshal.AsBytes(chars.AsSpan()));
+            System.Security.Cryptography.CryptographicOperations.ZeroMemory(passphraseBytes);
+        }
+    }
 
     private static Crypto.Keys.CertifiedPrivateKey LoadCertifiedKey(string path, string? passphrase, string certificatePath)
     {
-        string certificate = ReadKeyFile(certificatePath, "certificate");
+        // A certificate is public, so it can be a string.
+        string certificate = System.Text.Encoding.UTF8.GetString(ReadKeyFile(certificatePath, "certificate"));
         Crypto.SshPrivateKey key = LoadKey(path, passphrase);
         try
         {
@@ -157,13 +177,14 @@ public abstract class SshCredential
         }
     }
 
-    private static string ReadKeyFile(string path, string what)
+    /// <summary>Reads a key or certificate file as bytes, which the caller zeroes. Only a regular file, and at most 1 MiB.</summary>
+    private static byte[] ReadKeyFile(string path, string what)
     {
         try
         {
-            return System.IO.File.ReadAllText(ExpandHome(path));
+            return LocalFile.ReadAllBytes(ExpandHome(path), Crypto.KeyFiles.SshKeyFile.MaxFileLength);
         }
-        catch (Exception ex) when (ex is System.IO.IOException or UnauthorizedAccessException)
+        catch (Exception ex) when (ex is System.IO.IOException or UnauthorizedAccessException or NotSupportedException or ArgumentException)
         {
             throw new SshKeyFileException($"Couldn't read the {what} file {path}: {ex.Message}", ex);
         }

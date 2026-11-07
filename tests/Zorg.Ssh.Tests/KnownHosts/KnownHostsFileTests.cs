@@ -260,11 +260,10 @@ public class KnownHostsFileTests
     }
 
     [Fact]
-    public void An_overlong_line_is_skipped()
+    public void An_overlong_line_fails_and_is_not_skipped()
     {
-        string longHosts = string.Join(',', Enumerable.Repeat("host.example", KnownHostsFile.MaxLineLength / 12));
-        KnownHostsFile file = Parse(Line(longHosts, Key) + Line("example.com", Key));
-        Assert.Single(file.Entries);
+        string longHosts = string.Join(',', Enumerable.Repeat("host.example", (KnownHostsFile.MaxLineLength / 12) + 1));
+        Assert.Throws<SshHostKeyException>(() => Parse(Line(longHosts, Key) + Line("example.com", Key)));
     }
 
     // Reading part of it could drop a @revoked line, and turn Revoked into Unknown.

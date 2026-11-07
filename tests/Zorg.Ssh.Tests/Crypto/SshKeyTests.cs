@@ -396,9 +396,10 @@ public class SshKeyTests
         Assert.Throws<SshProtocolException>(() => SshPublicKey.Parse(blob));
     }
 
-    // K_S is hashed as received, so Blob must not be a tidied-up copy of what the peer sent.
+    // OpenSSH accepts redundant zeros and compares keys by value, so Blob is canonical (M5 review T1). The exchange
+    // hash is computed over the bytes as received, which the transport keeps itself.
     [Fact]
-    public void An_RSA_blob_with_redundant_zeros_keeps_the_peers_bytes()
+    public void An_RSA_blob_with_redundant_zeros_gets_the_canonical_blob_and_still_verifies()
     {
         SshPrivateKey key = SharedRsa.Value;
         SshReader reader = new(key.PublicKey.Blob.Span);
@@ -413,8 +414,8 @@ public class SshKeyTests
         }, (exponent, modulus));
 
         SshPublicKey parsed = SshPublicKey.Parse(blob);
-        Assert.Equal(blob, parsed.Blob.ToArray());
-        Assert.NotEqual(key.PublicKey.Blob.ToArray(), parsed.Blob.ToArray());
+        Assert.NotEqual(blob, parsed.Blob.ToArray());
+        Assert.Equal(key.PublicKey.Blob.ToArray(), parsed.Blob.ToArray());
         Assert.True(parsed.Verify("rsa-sha2-256", Message, key.Sign("rsa-sha2-256", Message)));
     }
 

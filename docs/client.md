@@ -146,7 +146,7 @@ HostKeyPolicy ownFile = HostKeyPolicy.KnownHostsFile("/etc/myapp/known_hosts");
 HostKeyPolicy pinned = HostKeyPolicy.Fingerprint("SHA256:n4cHVJ8c0vCpJiQJCbOgLEUxOkKrDhVJzcEKHnSSd9E");
 ```
 
-- `KnownHostsFile` reads an OpenSSH `known_hosts` file, by default `~/.ssh/known_hosts`. It understands hashed host names, `[host]:port` entries and `@revoked`. An unknown host is refused, and so is a host whose key has changed. A file that doesn't exist counts as empty, so every host is unknown.
+- `KnownHostsFile` reads an OpenSSH `known_hosts` file, by default `~/.ssh/known_hosts`. It understands hashed host names, `[host]:port` entries and `@revoked`. An unknown host is refused, and so is a host whose key has changed. A file that doesn't exist counts as empty, so every host is unknown. One that exists but isn't a regular file, or is too large, throws `SshHostKeyException`. `@cert-authority` lines make host certificates trusted: see [the agent, certificates and config](#the-agent-certificates-and-sshconfig).
 - `Fingerprint` trusts one key. It's the strictest policy when you know the key. Get the value on the server with `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`. It's compared exactly, including the `SHA256:` prefix.
 - `Custom` runs your own check, once, during connection.
 
@@ -167,7 +167,7 @@ HostKeyPolicy trustOnFirstUse = HostKeyPolicy.KnownHostsFile(addUnknownHostsUnsa
 HostKeyPolicy noCheckAtAll = HostKeyPolicy.AcceptAnyUnsafe();
 ```
 
-`addUnknownHostsUnsafe` trusts a host the first time it's seen and records it, as `ssh -o StrictHostKeyChecking=accept-new` does. A first connection can be intercepted without anyone noticing, but a changed key is still refused. `AcceptAnyUnsafe` removes the protection entirely. Use it only in tests against a machine you control.
+`addUnknownHostsUnsafe` trusts a host the first time it's seen and records it, as `ssh -o StrictHostKeyChecking=accept-new` does. A first connection can be intercepted without anyone noticing, but a changed key is still refused. A host that a `@cert-authority` line covers is never recorded, so offering a plain key can't step around the CA, and a file that can't keep what is written to it (`/dev/null`, `NUL`) makes the connection fail. `AcceptAnyUnsafe` removes the protection entirely. Use it only in tests against a machine you control.
 
 ## Running a command
 
@@ -323,6 +323,35 @@ await shell.WaitForExitAsync(cancellationToken);
 
 Output from a shell with a terminal holds prompts and control sequences. To run a known command, use `ExecuteAsync` instead.
 
+## The agent, certificates and `~/.ssh/config`
+
+**The agent.** `SshCredential.FromAgent` and `FromConfig` log in with the keys in a running ssh-agent: the Unix socket in `SSH_AUTH_SOCK`, or on Windows the named pipe `\\.\pipe\openssh-ssh-agent`. A pipe name must be a plain name under `\\.\pipe\`: a slash, a backslash or a `..` in it is an `SshAgentException`, because it could be normalised into a pipe on another machine. On Windows the client also checks who serves the pipe, and refuses unless that process runs as you or as LocalSystem (or is the `ssh-agent` service, when its account can't be read from an ordinary account). Every signature is checked against the key the agent listed. Agent forwarding isn't supported.
+
+**Certificates.** A host certificate is accepted when a `@cert-authority` line for the host names its CA, it is a host certificate, it is in date, it has a principal that matches the host and it has no critical options. The host name is lower-cased and each principal is a case-sensitive pattern of `*` and `?`, as in OpenSSH, so a principal with capitals never matches. A certificate with no principals is refused, although OpenSSH reads that as any host. A user certificate beside a private key (`id_ed25519-cert.pub`) is used for login. The server refuses user certificates.
+
+**Keys are compared by value.** An RSA key can be written with redundant leading zeros in its numbers, and OpenSSH reads those as the same key. So do known_hosts matching, `@revoked`, `@cert-authority` and the fingerprints you are shown (`SshHostKeyInfo.Sha256Fingerprint`, and the one the server gives `PublicKeyHandler`): they all use one canonical form.
+
+**`SshClientOptions.FromConfig`** reads a subset of `ssh_config`: `Host`, `Include`, `HostName`, `Port`, `User`, `IdentityFile`, `IdentitiesOnly`, `UserKnownHostsFile`, `GlobalKnownHostsFile`, `StrictHostKeyChecking`, `ProxyJump`, `ServerAliveInterval`, `ServerAliveCountMax` and `ConnectTimeout`. The first value wins, as in `ssh`. Its rule is that what it can't honour never weakens a check without telling you: it throws `SshConfigException`, and the message says what to do.
+
+| In the config | What `FromConfig` does |
+|---|---|
+| `StrictHostKeyChecking no` | Throws, unless you pass your own `HostKeyPolicy`. |
+| `StrictHostKeyChecking accept-new` with a first known hosts file that isn't a regular file (`/dev/null`, `NUL`, a directory) | Throws: nothing could be recorded, so every connection would trust any key. |
+| `ProxyJump`, `ProxyCommand` (other than `none`) | Throws. Connect through the bastion yourself with `SshClientOptions.JumpHost`. |
+| `RevokedHostKeys`, `KnownHostsCommand`, `HostKeyAlias` | Throws, unless you pass your own `HostKeyPolicy`: ignoring them would change who is trusted. |
+| A `Match` block that could apply to the host and sets `StrictHostKeyChecking`, `UserKnownHostsFile`, `GlobalKnownHostsFile`, `HostKeyAlias`, `RevokedHostKeys`, `KnownHostsCommand`, `ProxyCommand`, `ProxyJump`, `HostKeyAlgorithms`, `CASignatureAlgorithms`, `HostName`, `Port`, `IdentitiesOnly`, `IdentityFile`, `IdentityAgent`, `CertificateFile` or `PubkeyAuthentication` | Throws: `Match` isn't supported for those keywords. Move the setting into a `Host` block. |
+| Any other keyword in a `Match` block | Ignored. `Match` blocks are never evaluated, and a note is logged. |
+| `GlobalKnownHostsFile` | Read for `@revoked` and `@cert-authority` lines, and never written to. The default is `/etc/ssh/ssh_known_hosts` and `ssh_known_hosts2`, or `%ProgramData%\ssh\ssh_known_hosts` on Windows. `none` reads none. |
+| `IdentityAgent none` | No agent is used. |
+| `IdentityAgent` with a path, `CertificateFile`, `HostKeyAlgorithms`, `CASignatureAlgorithms`, `PubkeyAuthentication` | Not supported: a warning is logged that names the keyword. |
+| `ServerAliveInterval N`, `ServerAliveCountMax N` | Become `KeepAliveInterval` (in seconds; `0` turns keepalive off, as in OpenSSH) and `KeepAliveCountMax`. A value that isn't a number throws. When the config is silent, the library's defaults stay. |
+| `ConnectTimeout N` | Becomes `ConnectTimeout` in seconds. It covers connecting, key exchange and login together. `0` keeps the library's 30 seconds. |
+| Any other keyword | Ignored. |
+
+`HostKeyPolicy.KnownHostsFile` takes `globalPaths` for the same read-only files. It reads none by default, so its result depends only on the files you name.
+
+The known_hosts, config, `Include` and key files must be regular files (not a FIFO, device or directory) and are read with a size limit: 16 MiB for known_hosts, 1 MiB for config and key files. A known_hosts line may be up to 1 MiB, as in OpenSSH, and a longer one throws `SshHostKeyException` instead of being skipped, because skipping it could drop a revocation. Private key text is read into buffers that are zeroed after use. `FromPrivateKey` and `SshHostKey.Load` take the key as a string from you, which can't be zeroed.
+
 ## What's not here
 
-The client has no SSH agent, certificates or `~/.ssh/config` parsing. See [security.md](security.md#out-of-scope).
+The client has no agent forwarding, no SCP and no compression. See [security.md](security.md#out-of-scope).

@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.IO.Pipes;
+using System.Linq;
 using System.Net.Sockets;
 using System.Security.Principal;
 using System.Threading;
@@ -43,10 +44,13 @@ internal static class SshAgentEndpoint
             ?? throw new SshAgentException($"No ssh-agent is available: {Variable} isn't set. Start one with: eval \"$(ssh-agent)\"");
         try
         {
-            string normalized = where.Replace('/', '\\');
-            return OperatingSystem.IsWindows() && normalized.StartsWith(PipePrefix, StringComparison.OrdinalIgnoreCase)
-                ? await ConnectPipeAsync(normalized[PipePrefix.Length..], cancellationToken).ConfigureAwait(false)
-                : await ConnectSocketAsync(where, cancellationToken).ConfigureAwait(false);
+            // A bad pipe name throws SshAgentException here, which the catch below doesn't wrap.
+            if (OperatingSystem.IsWindows() && PipeNameOf(where) is { } pipeName)
+            {
+                return await ConnectPipeAsync(pipeName, where, cancellationToken).ConfigureAwait(false);
+            }
+
+            return await ConnectSocketAsync(where, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is IOException or SocketException or TimeoutException or UnauthorizedAccessException or ArgumentException)
         {
@@ -62,7 +66,31 @@ internal static class SshAgentEndpoint
             : message;
     }
 
-    private static async ValueTask<Stream> ConnectPipeAsync(string name, CancellationToken cancellationToken)
+    /// <summary>
+    /// Gets the pipe name if <paramref name="where"/> is a path under <c>\\.\pipe\</c>, or null if it isn't one. The name must be
+    /// a plain one: after the prefix, a <c>\</c>, <c>/</c> or a name that is <c>.</c> or <c>..</c> would let the path be
+    /// normalised out of <c>\\.\pipe\</c>, for example to <c>\\.\UNC\host\pipe\x</c>, a pipe on another machine. That throws
+    /// <see cref="SshAgentException"/>.
+    /// </summary>
+    internal static string? PipeNameOf(string where)
+    {
+        string normalized = where.Replace('/', '\\');
+        if (!normalized.StartsWith(PipePrefix, StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        string name = normalized[PipePrefix.Length..];
+        if (name.Length == 0 || name is "." or ".." || name.Contains('\\', StringComparison.Ordinal) || name.Any(char.IsControl))
+        {
+            throw new SshAgentException($"The agent path {where} isn't a plain named pipe under {PipePrefix}: after the prefix it needs one name with no slashes, backslashes or dot segments. Name the pipe directly, for example {WindowsDefault}.");
+        }
+
+        return name;
+    }
+
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    private static async ValueTask<Stream> ConnectPipeAsync(string name, string where, CancellationToken cancellationToken)
     {
         // The OpenSSH service identifies its caller from the pipe, so it needs this level. It runs as SYSTEM, so
         // PipeOptions.CurrentUserOnly would refuse it.
@@ -70,6 +98,9 @@ internal static class SshAgentEndpoint
         try
         {
             await pipe.ConnectAsync((int)ConnectTimeout.TotalMilliseconds, cancellationToken).ConfigureAwait(false);
+
+            // Pipe names are machine-wide and anyone can create the default one while the service is off.
+            PipeServerCheck.Ensure(pipe.SafePipeHandle, where);
             return pipe;
         }
         catch

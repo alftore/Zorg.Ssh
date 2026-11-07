@@ -6,7 +6,7 @@ An async SSH client and server library for .NET 10, with an SFTP client, written
 
 ## What it does
 
-- Client: password, public key and keyboard-interactive login, `known_hosts` and pinned host keys, commands, processes with streams, and shells.
+- Client: password, public key (also through ssh-agent, and with user certificates) and keyboard-interactive login, `known_hosts` with `@revoked` and `@cert-authority` host certificates, pinned host keys, a subset of `ssh_config`, commands, processes with streams, and shells.
 - SFTP version 3 client: pipelined transfers, file streams, directory listing, safe recursive download, and the OpenSSH extensions.
 - Server: password and public key login, your own handlers for exec, shell and subsystem sessions, and an SFTP server rooted at a directory.
 - Current algorithms only, including ML-KEM and sntrup761 hybrid key exchange, and strict key exchange against Terrapin. `SshAlgorithms` narrows the lists.

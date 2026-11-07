@@ -48,6 +48,12 @@ public abstract class HostKeyPolicy
     /// does. <b>A first connection can then be intercepted without anyone noticing.</b> A changed key is still refused.
     /// </param>
     /// <param name="timeProvider">The clock for checking host certificates. The default is the system clock.</param>
+    /// <param name="globalPaths">
+    /// More files to read, as OpenSSH reads <c>/etc/ssh/ssh_known_hosts</c>, where an administrator puts <c>@revoked</c>
+    /// and <c>@cert-authority</c> lines. They are looked up and never written to: a new host is recorded in <paramref name="path"/>.
+    /// The default, null, reads none, so that the result depends only on the files you name. <see cref="SshClientOptions.FromConfig"/>
+    /// reads the OpenSSH defaults.
+    /// </param>
     /// <returns>The policy.</returns>
     /// <remarks>
     /// A host certificate is accepted when a <c>@cert-authority</c> line for the host names its CA, and it's a host
@@ -61,10 +67,18 @@ public abstract class HostKeyPolicy
     /// HostKeyPolicy policy = HostKeyPolicy.KnownHostsFile();
     /// </code>
     /// </example>
-    public static HostKeyPolicy KnownHostsFile(string path = "~/.ssh/known_hosts", bool addUnknownHostsUnsafe = false, TimeProvider? timeProvider = null)
+    public static HostKeyPolicy KnownHostsFile(
+        string path = "~/.ssh/known_hosts",
+        bool addUnknownHostsUnsafe = false,
+        TimeProvider? timeProvider = null,
+        IReadOnlyList<string>? globalPaths = null)
     {
         ArgumentException.ThrowIfNullOrEmpty(path);
-        return new KnownHostsPolicy([SshCredential.ExpandHome(path)], addUnknownHostsUnsafe, timeProvider ?? TimeProvider.System);
+        return new KnownHostsPolicy(
+            [SshCredential.ExpandHome(path)],
+            addUnknownHostsUnsafe,
+            timeProvider ?? TimeProvider.System,
+            globalPaths is null ? null : [.. globalPaths.Select(SshCredential.ExpandHome)]);
     }
 
     /// <summary>Trusts only the key with this fingerprint, the safest choice when you know it.</summary>
@@ -118,9 +132,11 @@ public abstract class HostKeyPolicy
 }
 
 /// <summary>A check against a known_hosts file. It explains itself by exception, because "not trusted" alone is no help here.</summary>
-internal sealed class KnownHostsPolicy(IReadOnlyList<string> paths, bool addUnknown, TimeProvider timeProvider) : HostKeyPolicy
+internal sealed class KnownHostsPolicy(IReadOnlyList<string> paths, bool addUnknown, TimeProvider timeProvider, IReadOnlyList<string>? globalPaths = null) : HostKeyPolicy
 {
-    private string PathText => paths.Count == 0 ? "the known hosts files (there are none)" : string.Join(", ", paths);
+    private string PathText => AllPaths.Length == 0 ? "the known hosts files (there are none)" : string.Join(", ", AllPaths);
+
+    private string[] AllPaths => [.. paths, .. globalPaths ?? []];
 
     internal override IReadOnlyList<string> HostKeyAlgorithmsFor(string host, int port)
     {
@@ -131,7 +147,7 @@ internal sealed class KnownHostsPolicy(IReadOnlyList<string> paths, bool addUnkn
                 return [.. SshCertificate.HostKeyAlgorithmNames, .. HostKeyAlgorithms.Default];
             }
         }
-        catch (Exception ex) when (ex is SshHostKeyException or IOException or UnauthorizedAccessException or ArgumentException)
+        catch (Exception ex) when (ex is SshHostKeyException or IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
         {
             // Plain algorithms never trust anything by themselves, and the check itself reports this failure.
         }
@@ -175,7 +191,7 @@ internal sealed class KnownHostsPolicy(IReadOnlyList<string> paths, bool addUnkn
         throw new SshHostKeyException($"{host} isn't in {PathText}. Its key is {key.KeyType} {fingerprint}. Check that with the server's administrator, then add it, for example by connecting once with ssh.");
     }
 
-    private KnownHosts.KnownHostsFile[] Load() => [.. paths.Select(KnownHosts.KnownHostsFile.Load)];
+    private KnownHosts.KnownHostsFile[] Load() => [.. AllPaths.Select(KnownHosts.KnownHostsFile.Load)];
 }
 
 /// <summary>A check based on a delegate.</summary>

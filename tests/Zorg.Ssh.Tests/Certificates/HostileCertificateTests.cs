@@ -159,11 +159,20 @@ public sealed class HostileCertificateTests : IDisposable
         Assert.Contains("other.example.com", message);
     }
 
+    // OpenSSH lower-cases the host name it connects to (sshconnect.c, ssh_login: lowercase(host)), then matches each
+    // principal as a case-sensitive pattern against it (sshkey.c, sshkey_cert_check_authority: match_pattern(name,
+    // principal), and match.c match_pattern, which only knows * and ?). So the name's case doesn't matter, and the
+    // principal's does. See M5 review T9.
     [Fact]
-    public async Task Principals_ignore_case_and_may_be_wildcards_as_in_OpenSSH()
+    public async Task The_host_name_is_lower_cased_and_principals_are_case_sensitive_wildcard_patterns_as_in_OpenSSH()
     {
         Assert.True(await TrustingCa().CheckAsync("HOST.Example.COM", 22, Good().Parse(), Ct));
         Assert.True(await TrustingCa().CheckAsync(Host, 22, new CertificateBuilder(Subject, Ca) { Principals = ["*.example.com"] }.Parse(), Ct));
+
+        // A principal with capitals can never match, because the name it is matched against is lower case.
+        SshCertificate capitals = new CertificateBuilder(Subject, Ca) { Principals = ["HOST.example.com"] }.Parse();
+        Assert.Contains("isn't valid for this host name", await RefusedAsync(capitals));
+        Assert.Contains("isn't valid for this host name", await RefusedAsync(capitals, host: "HOST.example.com"));
     }
 
     [Fact]

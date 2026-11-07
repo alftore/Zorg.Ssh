@@ -25,7 +25,8 @@ internal abstract class SshPublicKey
     public abstract bool Verify(string signatureAlgorithm, ReadOnlySpan<byte> data, ReadOnlySpan<byte> signatureBlob);
 
     /// <summary>
-    /// Reads a public key blob. Anything malformed or unsupported, including trailing data and an RSA modulus
+    /// Reads a public key blob. <see cref="Blob"/> of the result is canonical, so it can differ from the input when an RSA
+    /// mpint carried redundant zeros, which OpenSSH accepts too. Anything malformed or unsupported, including trailing data and an RSA modulus
     /// below 2048 bits, throws <see cref="SshProtocolException"/>.
     /// </summary>
     public static SshPublicKey Parse(ReadOnlySpan<byte> blob)
@@ -39,7 +40,7 @@ internal abstract class SshPublicKey
 
         if (keyType == RsaPublicKey.Name)
         {
-            return RsaPublicKey.ParseBody(ref reader, blob);
+            return RsaPublicKey.ParseBody(ref reader);
         }
 
         // The peer's text stays out of the message: it's unchecked, and messages reach logs.

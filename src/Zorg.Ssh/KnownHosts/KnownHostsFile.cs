@@ -47,8 +47,12 @@ internal sealed class KnownHostsFile
     /// <summary>The largest file accepted, in characters or bytes. Real files are well under a megabyte.</summary>
     public const int MaxFileLength = 16 * 1024 * 1024;
 
-    /// <summary>The longest line accepted, in characters. A longer one is skipped as malformed.</summary>
-    public const int MaxLineLength = 64 * 1024;
+    /// <summary>
+    /// The longest line accepted, in characters: OpenSSH's <c>SSH_MAX_PUBKEY_BYTES</c>, 1 MiB. A certificate can be
+    /// 128 KiB, about 175 KiB as base64, so a <c>@revoked</c> line for one has to fit. A longer line throws, because
+    /// skipping it could drop a revocation.
+    /// </summary>
+    public const int MaxLineLength = 1024 * 1024;
 
     private const int DefaultPort = 22;
     private const int HashLength = 20;
@@ -79,7 +83,12 @@ internal sealed class KnownHostsFile
             int end = text.IndexOf('\n');
             ReadOnlySpan<char> line = end < 0 ? text : text[..end];
             text = end < 0 ? default : text[(end + 1)..];
-            if (line.Length <= MaxLineLength && KnownHostsEntry.TryParse(line, out KnownHostsEntry? entry))
+            if (line.Length > MaxLineLength)
+            {
+                throw new SshHostKeyException($"A line of the known_hosts file is over {MaxLineLength} characters, so the file can't be checked: skipping it could drop a revocation. Remove or shorten that line.");
+            }
+
+            if (KnownHostsEntry.TryParse(line, out KnownHostsEntry? entry))
             {
                 entries.Add(entry);
             }
@@ -88,20 +97,24 @@ internal sealed class KnownHostsFile
         return new KnownHostsFile(entries);
     }
 
-    /// <summary>Reads a file. A file that doesn't exist reads as empty, so every host is unknown.</summary>
+    /// <summary>
+    /// Reads a file. A file that doesn't exist reads as empty, so every host is unknown. Anything else that can't be read
+    /// throws <see cref="SshHostKeyException"/>: a directory, device or pipe, an over-long file, or an I/O error. Such a
+    /// file would otherwise make every host look unknown, or block.
+    /// </summary>
     public static KnownHostsFile Load(string path)
     {
         try
         {
-            using FileStream stream = new(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-            EnsureSize(stream.Length);
-            byte[] bytes = new byte[(int)stream.Length];
-            int read = stream.ReadAtLeast(bytes, bytes.Length, throwOnEndOfStream: false);
-            return Parse(Encoding.UTF8.GetString(bytes, 0, read));
+            return Parse(Encoding.UTF8.GetString(LocalFile.ReadAllBytes(path, MaxFileLength)));
         }
         catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
         {
             return new KnownHostsFile([]);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or ArgumentException or System.Security.SecurityException)
+        {
+            throw new SshHostKeyException($"The known_hosts file {path} can't be read, so no host can be checked against it: {ex.Message}", ex);
         }
     }
 
@@ -122,18 +135,45 @@ internal sealed class KnownHostsFile
     public static void Append(string path, string host, int port, SshPublicKey key, bool hashed = true)
     {
         byte[] line = Encoding.UTF8.GetBytes(FormatLine(host, port, key, hashed) + "\n");
-        using FileStream stream = new(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.Read);
-        if (stream.Length > 0)
+
+        // Guarantee 2: recording is what makes the next connection a "known" one. A device such as /dev/null takes
+        // every write and keeps none, which would make every connection a first one that trusts any key.
+        if (LocalFile.GetKind(path) == LocalFileKind.Other)
         {
-            // A last line with no ending would otherwise swallow this one.
-            stream.Seek(-1, SeekOrigin.End);
-            if (stream.ReadByte() != '\n')
-            {
-                stream.WriteByte((byte)'\n');
-            }
+            throw new SshHostKeyException($"{path} isn't a regular file, so a new host key can't be recorded in it. Name an ordinary file for the known hosts, or connect with a policy that doesn't record keys.");
         }
 
-        stream.Write(line);
+        try
+        {
+            using (FileStream stream = new(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.Read))
+            {
+                if (!stream.CanSeek)
+                {
+                    throw new SshHostKeyException($"{path} can't be seeked, so a new host key can't be recorded in it. Name an ordinary file for the known hosts.");
+                }
+
+                if (stream.Length > 0)
+                {
+                    // A last line with no ending would otherwise swallow this one.
+                    stream.Seek(-1, SeekOrigin.End);
+                    if (stream.ReadByte() != '\n')
+                    {
+                        stream.WriteByte((byte)'\n');
+                    }
+                }
+
+                stream.Write(line);
+            }
+
+            if (!LocalFile.ReadAllBytes(path, MaxFileLength).AsSpan().EndsWith(line))
+            {
+                throw new SshHostKeyException($"{path} didn't keep the host key that was written to it, so the key isn't trusted. Name an ordinary file for the known hosts.");
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
+        {
+            throw new SshHostKeyException($"The known_hosts file {path} can't be written, so the new host key isn't trusted: {ex.Message}", ex);
+        }
     }
 
     /// <summary>
@@ -355,7 +395,8 @@ internal sealed class KnownHostsEntry
             return false;
         }
 
-        byte[] blob = blobBuffer.AsSpan(0, written).ToArray();
+        // Keys are compared by value, as OpenSSH does, so a line that spells an RSA mpint with extra zeros means the same key.
+        byte[] blob = Crypto.Keys.RsaPublicKey.Canonicalize(blobBuffer.AsSpan(0, written));
         string keyTypeText = keyType.ToString();
         if (!BlobHasType(blob, keyTypeText))
         {

@@ -116,7 +116,18 @@ public sealed class SshClientOptions
     /// <c>StrictHostKeyChecking no</c> throws <see cref="SshConfigException"/> unless
     /// <paramref name="hostKeyPolicy"/> is given, because a config file mustn't silently weaken security. The check
     /// can be dropped only by passing <see cref="HostKeyPolicy.AcceptAnyUnsafe"/> here.
-    /// A host with <c>ProxyJump</c> throws <see cref="SshConfigException"/>: this method can't follow it, and going direct could bypass a required bastion.
+    /// A host with <c>ProxyJump</c> or <c>ProxyCommand</c> throws <see cref="SshConfigException"/>: this method can't follow
+    /// it, and going direct could bypass a required bastion. Whatever the config leaves unsaid, anything it says that this
+    /// method can't honour and that decides who is trusted throws too, and never weakens the check silently:
+    /// <c>RevokedHostKeys</c>, <c>KnownHostsCommand</c> and <c>HostKeyAlias</c>; <c>StrictHostKeyChecking accept-new</c>
+    /// when the first known hosts file isn't a regular file (<c>/dev/null</c>, <c>NUL</c>, a directory), because no key
+    /// could then be recorded; and a <c>Match</c> block that could apply to the host and sets a keyword that decides trust.
+    /// <c>GlobalKnownHostsFile</c> (by default <c>/etc/ssh/ssh_known_hosts</c> and <c>ssh_known_hosts2</c>, or
+    /// <c>%ProgramData%\ssh\ssh_known_hosts</c> on Windows) is read for <c>@revoked</c> and <c>@cert-authority</c> lines and
+    /// never written. <c>IdentityAgent</c> (except <c>none</c>), <c>CertificateFile</c>, <c>HostKeyAlgorithms</c>,
+    /// <c>CASignatureAlgorithms</c> and <c>PubkeyAuthentication</c> are not supported and log a warning. <c>ServerAliveInterval</c>
+    /// (0 turns keepalive off), <c>ServerAliveCountMax</c> and <c>ConnectTimeout</c> (in seconds; 0 keeps the default) are
+    /// mapped when set; a value that isn't a number throws.
     /// </summary>
     /// <param name="hostAlias">The host name or <c>Host</c> alias.</param>
     /// <param name="config">The config. The default is <c>~/.ssh/config</c>.</param>
@@ -141,19 +152,57 @@ public sealed class SshClientOptions
         ArgumentException.ThrowIfNullOrEmpty(hostAlias);
         ILogger? logger = loggerFactory?.CreateLogger<SshConfig>();
         SshHostConfig host = (config ?? SshConfig.Load(logger: logger)).Resolve(hostAlias);
+        if (host.MatchTrustKeywords.Count > 0)
+        {
+            // Match blocks are never evaluated, so one that sets such a keyword could be tightening or loosening what a Host block says.
+            throw new SshConfigException($"A Match block in the config sets {string.Join(", ", host.MatchTrustKeywords)} and could apply to {hostAlias}. Match isn't supported for {(host.MatchTrustKeywords.Count == 1 ? "that keyword" : "those keywords")}. Move the setting into a Host block, or build SshClientOptions yourself.");
+        }
+
         if (host.ProxyJump is not null)
         {
             // Connecting directly could bypass the bastion the config requires, so it isn't a quiet fallback.
             throw new SshConfigException($"{hostAlias} uses ProxyJump, which FromConfig can't follow. Connect to the jump host yourself, then connect through it.");
         }
 
-        if (hostKeyPolicy is null && host.StrictHostKeyChecking == SshStrictHostKeyChecking.No)
+        if (host.ProxyCommand is not null)
         {
-            throw new SshConfigException($"The config says StrictHostKeyChecking no for {hostAlias}, which would remove protection against interception. A config file can't do that here. Change it to yes or accept-new, or pass HostKeyPolicy.AcceptAnyUnsafe() to FromConfig if you mean it.");
+            // Just as ProxyJump: ProxyCommand ssh -W %h:%p bastion is the older way to say the same thing.
+            throw new SshConfigException($"{hostAlias} uses ProxyCommand, which FromConfig can't run. Connect through the proxy yourself (for a bastion, with SshClientOptions.JumpHost), or remove ProxyCommand.");
+        }
+
+        if (hostKeyPolicy is null)
+        {
+            if (host.StrictHostKeyChecking == SshStrictHostKeyChecking.No)
+            {
+                throw new SshConfigException($"The config says StrictHostKeyChecking no for {hostAlias}, which would remove protection against interception. A config file can't do that here. Change it to yes or accept-new, or pass HostKeyPolicy.AcceptAnyUnsafe() to FromConfig if you mean it.");
+            }
+
+            if (host.UnhonouredTrustKeywords.Count > 0)
+            {
+                // Ignoring these would change who is trusted: a revoked key accepted, or a host looked up under the wrong name.
+                throw new SshConfigException($"The config sets {string.Join(", ", host.UnhonouredTrustKeywords)} for {hostAlias}, which FromConfig doesn't support, and ignoring it would change which host keys are trusted. Remove it, or pass your own HostKeyPolicy to FromConfig.");
+            }
+
+            if (host.StrictHostKeyChecking == SshStrictHostKeyChecking.AcceptNew)
+            {
+                // A device takes every write and keeps none, so every connection would count as the first and trust any key.
+                if (host.UserKnownHostsFiles.Count > 0 && LocalFile.GetKind(host.UserKnownHostsFiles[0]) == LocalFileKind.Other)
+                {
+                    throw new SshConfigException($"The config says StrictHostKeyChecking accept-new for {hostAlias} with UserKnownHostsFile {host.UserKnownHostsFiles[0]}, which isn't a regular file, so no key could be recorded and every connection would trust any key. Name an ordinary file, or use StrictHostKeyChecking yes.");
+                }
+            }
+        }
+
+        foreach (string keyword in host.IgnoredKeywords)
+        {
+            if (logger is not null)
+            {
+                ConfigLog.KeywordIgnored(logger, keyword);
+            }
         }
 
         List<SshCredential> all = [];
-        if (!host.IdentitiesOnly)
+        if (!host.IdentitiesOnly && !host.AgentDisabled)
         {
             all.Add(new AgentCredential(
                 ct => Agent.SshAgentEndpoint.ConnectAsync(null, ct),
@@ -163,6 +212,7 @@ public sealed class SshClientOptions
 
         all.AddRange(host.IdentityFiles.Where(File.Exists).Select(SshCredential.FromIdentityFile));
         all.AddRange(credentials ?? []);
+        SshClientOptions defaults = new() { Host = host.HostName, UserName = host.User, HostKeyPolicy = HostKeyPolicy.AcceptAnyUnsafe() };
         return new SshClientOptions
         {
             Host = host.HostName,
@@ -172,8 +222,14 @@ public sealed class SshClientOptions
             HostKeyPolicy = hostKeyPolicy ?? new KnownHostsPolicy(
                 host.UserKnownHostsFiles,
                 host.StrictHostKeyChecking == SshStrictHostKeyChecking.AcceptNew,
-                TimeProvider.System),
+                TimeProvider.System,
+                host.GlobalKnownHostsFiles),
             LoggerFactory = loggerFactory,
+
+            // Only what the config sets. ServerAliveInterval 0 means off, as in ssh. ConnectTimeout 0 keeps the library's own limit.
+            KeepAliveInterval = host.ServerAliveInterval is { } interval ? TimeSpan.FromSeconds(interval) : defaults.KeepAliveInterval,
+            KeepAliveCountMax = host.ServerAliveCountMax ?? defaults.KeepAliveCountMax,
+            ConnectTimeout = host.ConnectTimeout is > 0 and var seconds ? TimeSpan.FromSeconds(seconds) : defaults.ConnectTimeout,
         };
     }
 }
