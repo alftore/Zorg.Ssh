@@ -55,6 +55,16 @@ Every finding gets a fix in `src` and a named regression test with the input wri
 
 To add a target, write a corpus in `FuzzCorpus.cs`, add the target and its row in `FuzzAllowedExceptions` in `FuzzTargets.cs`, and say which stages it reaches with `FuzzNotes.Reached`. The tests insist that most seeds are accepted and that a share of mutated inputs get all the way through, so that a target can't quietly go shallow.
 
+## Coverage-guided fuzzing
+
+`tests/Zorg.Ssh.Fuzz` holds three libFuzzer targets for the wire decoders: `packet-reader` (identification line and packet framing), `kex-init` and `sftp-response`. SharpFuzz instruments `Zorg.Ssh.dll` in a container (Ubuntu, glibc), so nothing is installed on your machine.
+
+```
+scripts/fuzz.sh kex-init 300      # target, then seconds (default 60)
+```
+
+The corpus and any crash inputs stay in the volume `zorg-ssh-fuzz`, so the next run starts where the last stopped. A crash prints its bytes, and the run fails. The only exception a target swallows is `SshException`, as guarantee 3 says. Seed inputs come from `Zorg.Ssh.Fuzz --seed`. Instrumented code faults outside libFuzzer, so don't run an instrumented `Zorg.Ssh.dll` by hand.
+
 ## AOT smoke test
 
 `samples/Zorg.Ssh.AotSmoke` is the Native AOT gate. BouncyCastle isn't marked AOT-compatible, so `VerifyReferenceAotCompatibility` is off and this sample takes its place: it's published with Native AOT and run, and it exercises every algorithm. Trimming keeps only what's used, so add each new algorithm to it. To run it yourself:
