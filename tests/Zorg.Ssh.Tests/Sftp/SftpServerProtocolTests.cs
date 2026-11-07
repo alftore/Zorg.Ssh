@@ -750,6 +750,60 @@ public sealed class SftpServerProtocolTests : IDisposable
     }
 
     [Fact]
+    public async Task A_name_with_an_unpaired_surrogate_is_listed_as_a_name_that_cant_be_used()
+    {
+        // Only NTFS holds a name that isn't Unicode as UTF-16. Sent as U+FFFD it would look valid to a client and lead
+        // nowhere, or to another file whose name really has U+FFFD in it.
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "Only Windows names can hold an unpaired surrogate.");
+        string bad = "bad\uD800.txt";
+        await File.WriteAllTextAsync(_sandbox.InRoot(bad), "planted", Ct);
+        await File.WriteAllTextAsync(_sandbox.InRoot("bad�.txt"), "the other file", Ct);
+        Directory.CreateDirectory(_sandbox.InRoot("dir\uDC00"));
+
+        (SftpClient sftp, Task<int> serving) = await StartClientAsync();
+        await using (sftp)
+        {
+            List<SftpEntry> entries = [];
+            await foreach (SftpEntry entry in sftp.ListDirectoryAsync("/", Ct))
+            {
+                entries.Add(entry);
+            }
+
+            SftpEntry[] invalid = [.. entries.Where(e => !e.HasValidName)];
+            Assert.Equal(2, invalid.Length);
+            Assert.All(invalid, e => Assert.False(e.IsSafeName));
+            Assert.Contains(invalid, e => e.Attributes.IsRegularFile && e.Attributes.Size == 7);
+            Assert.Contains(invalid, e => e.Attributes.IsDirectory);
+
+            // The file that really has U+FFFD in its name is still listed, valid, and is the one its name reaches.
+            SftpEntry genuine = Assert.Single(entries, e => e.HasValidName && e.Name == "bad�.txt");
+            Assert.Equal(14, genuine.Attributes.Size);
+            Assert.Equal("the other file"u8.ToArray(), await sftp.ReadAllBytesAsync("bad�.txt", Ct));
+        }
+
+        Assert.Equal(0, await serving.WaitAsync(TimeSpan.FromSeconds(10), Ct));
+
+        // On the wire: the surrogate's three bytes, which no strict UTF-8 decoder accepts, in the name and the long name.
+        await using SftpServerHarness client = await StartAsync(Options);
+        byte[] handle = (await client.RequestAsync(SftpMessage.OpenDir, Path("/"))).Handle;
+        byte[] body = (await client.RequestAsync(SftpMessage.ReadDir, Empty().Bytes(handle))).Body;
+        byte[] wtf8 = [.. "bad"u8, 0xED, 0xA0, 0x80, .. ".txt"u8];
+        Assert.Equal(2, CountOccurrences(body, wtf8));
+        Assert.Equal(2, CountOccurrences(body, [.. "bad"u8, 0xEF, 0xBF, 0xBD, .. ".txt"u8]));
+    }
+
+    private static int CountOccurrences(byte[] haystack, byte[] needle)
+    {
+        int count = 0;
+        for (int at = haystack.AsSpan().IndexOf(needle); at >= 0; at = haystack.AsSpan(at + 1).IndexOf(needle) is int next and >= 0 ? at + 1 + next : -1)
+        {
+            count++;
+        }
+
+        return count;
+    }
+
+    [Fact]
     public async Task A_missing_root_or_bad_limit_is_a_clear_error_for_the_host()
     {
         (Stream client, Stream server) = DuplexStream.CreatePair();

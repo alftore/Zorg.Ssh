@@ -174,6 +174,7 @@ The client sees `RootDirectory` as `/`, and paths and symlinks that lead out of 
 What a client sees comes from .NET's view of the directory, which differs from OpenSSH's in a few places:
 
 - On Linux, a FIFO, socket or device is reported with its real type, so `IsRegularFile` is false, as OpenSSH reports it. On other Unix systems .NET can't tell them from files, and they're reported as regular files. Opening one can block, so the session ends after the open has waited 10 seconds.
+- A Windows name with an unpaired surrogate isn't Unicode, so it can't be sent as UTF-8. It's sent as the three bytes of the surrogate (WTF-8), which a client can't decode, as it can't decode a name that isn't UTF-8 from OpenSSH. Our client reports it with `HasValidName` false. **Known limit:** on Unix, .NET turns the bad bytes of a name that isn't UTF-8 into U+FFFD before the server sees them, so such an entry is listed with a valid-looking name that leads nowhere, or to another entry whose name really has U+FFFD in it. Don't serve a tree that can hold such names.
 
 ## Limits
 

@@ -4,6 +4,7 @@ using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.IO;
 using System.Security;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
@@ -771,9 +772,73 @@ internal sealed partial class SftpServerSession : IAsyncDisposable
 
     private static void WriteName(ref SshWriter writer, string name, SftpAttributes attributes)
     {
-        writer.WriteUtf8String(name);
-        writer.WriteUtf8String(SftpServerAttributes.LongName(name, attributes));
+        WriteFileName(ref writer, name);
+        WriteFileName(ref writer, SftpServerAttributes.LongName(name, attributes));
         attributes.WriteWithFileType(ref writer);
+    }
+
+    /// <summary>
+    /// Writes a name from the file system. A Windows name can hold an unpaired surrogate, which isn't Unicode, so UTF-8
+    /// can't say it, and <see cref="SshWriter.WriteUtf8String"/> would send U+FFFD: a client would then see a valid name
+    /// that leads nowhere, or to another file whose name really has U+FFFD in it. Such a name goes as the generalised
+    /// UTF-8 of the surrogate instead (three bytes, as WTF-8 has it). No strict decoder accepts those bytes, so a client
+    /// sees a name it can't use, as it does for the bytes of a name that isn't UTF-8 on a Unix server. Our client
+    /// reports it with <see cref="SftpEntry.HasValidName"/> false, and a path naming it can't reach the server either.
+    /// </summary>
+    internal static void WriteFileName(ref SshWriter writer, string name)
+    {
+        if (!HasUnpairedSurrogate(name))
+        {
+            writer.WriteUtf8String(name);
+            return;
+        }
+
+        byte[] bytes = ArrayPool<byte>.Shared.Rent(name.Length * 3);
+        try
+        {
+            int length = 0;
+            for (int i = 0; i < name.Length; i++)
+            {
+                char c = name[i];
+                if (char.IsHighSurrogate(c) && i + 1 < name.Length && char.IsLowSurrogate(name[i + 1]))
+                {
+                    length += new Rune(c, name[++i]).EncodeToUtf8(bytes.AsSpan(length));
+                }
+                else if (char.IsSurrogate(c))
+                {
+                    bytes[length++] = (byte)(0xE0 | (c >> 12));
+                    bytes[length++] = (byte)(0x80 | ((c >> 6) & 0x3F));
+                    bytes[length++] = (byte)(0x80 | (c & 0x3F));
+                }
+                else
+                {
+                    length += new Rune(c).EncodeToUtf8(bytes.AsSpan(length));
+                }
+            }
+
+            writer.WriteBinary(bytes.AsSpan(0, length));
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(bytes);
+        }
+    }
+
+    private static bool HasUnpairedSurrogate(string name)
+    {
+        for (int i = 0; i < name.Length; i++)
+        {
+            if (char.IsHighSurrogate(name[i]) && i + 1 < name.Length && char.IsLowSurrogate(name[i + 1]))
+            {
+                i++;
+            }
+            else if (char.IsSurrogate(name[i]))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private void Remove(uint id, ReadOnlySpan<byte> body)
@@ -1070,8 +1135,8 @@ internal sealed partial class SftpServerSession : IAsyncDisposable
         try
         {
             writer.WriteUInt32(1);
-            writer.WriteUtf8String(name);
-            writer.WriteUtf8String(name);
+            WriteFileName(ref writer, name);
+            WriteFileName(ref writer, name);
             writer.WriteUInt32(0);
             Finish(ref writer, SftpMessage.Name, id);
         }
