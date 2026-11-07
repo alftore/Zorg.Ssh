@@ -484,16 +484,78 @@ public sealed class SftpServerPathTests : IDisposable
     }
 
     [Fact]
-    public async Task A_relative_link_moved_so_it_points_out_stops_working()
+    public async Task A_relative_link_isnt_moved_somewhere_too_shallow_for_it()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows() && !CanCreateLinks(), "Needs the privilege to create symbolic links.");
+        Directory.CreateDirectory(_sandbox.InRoot("a/b"));
+        await File.WriteAllTextAsync(_sandbox.InRoot("x"), "x", TestContext.Current.CancellationToken);
+        await File.WriteAllTextAsync(_sandbox.InRoot("a/x"), "x", TestContext.Current.CancellationToken);
+        await using SftpServerHarness client = await StartAsync(Options);
+
+        Assert.Equal(Ok, (await client.RequestAsync(SftpMessage.SymLink, Path("../../x").Text("a/b/l"))).Status);
+
+        // To the root, and to a/, it would climb out. The same depth and a deeper place are fine.
+        Assert.Equal(PermissionDenied, (await client.RequestAsync(SftpMessage.Rename, Path("a/b/l").Text("moved"))).Status);
+        Assert.Equal(PermissionDenied, (await client.ExtendedAsync("posix-rename@openssh.com", Path("a/b/l").Text("moved"))).Status);
+        Assert.Equal(PermissionDenied, (await client.RequestAsync(SftpMessage.Rename, Path("a/b/l").Text("a/moved"))).Status);
+        Assert.False(new FileInfo(_sandbox.InRoot("moved")).Exists);
+        Assert.True(new FileInfo(_sandbox.InRoot("a/b/l")).Exists);
+
+        Assert.Equal(Ok, (await client.RequestAsync(SftpMessage.Rename, Path("a/b/l").Text("a/b/l2"))).Status);
+        Directory.CreateDirectory(_sandbox.InRoot("a/b/c"));
+        Assert.Equal(Ok, (await client.RequestAsync(SftpMessage.Rename, Path("a/b/l2").Text("a/b/c/l3"))).Status);
+        AssertEveryLinkStaysInside();
+    }
+
+    [Fact]
+    public async Task A_directory_with_a_climbing_link_isnt_moved_up_but_one_without_is()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows() && !CanCreateLinks(), "Needs the privilege to create symbolic links.");
+        Directory.CreateDirectory(_sandbox.InRoot("a/b/c/d"));
+        Directory.CreateDirectory(_sandbox.InRoot("a/plain/sub"));
+        await File.WriteAllTextAsync(_sandbox.InRoot("a/plain/sub/f.txt"), "x", TestContext.Current.CancellationToken);
+        await File.WriteAllTextAsync(_sandbox.InRoot("x"), "x", TestContext.Current.CancellationToken);
+        await using SftpServerHarness client = await StartAsync(Options);
+
+        // a/b/c/d/l climbs three levels, to the root. Moving a/b/c to the root leaves d/l one level too shallow.
+        Assert.Equal(Ok, (await client.RequestAsync(SftpMessage.SymLink, Path("../../../x").Text("a/b/c/d/l"))).Status);
+        Assert.Equal(PermissionDenied, (await client.RequestAsync(SftpMessage.Rename, Path("a/b/c").Text("c"))).Status);
+        Assert.Equal(PermissionDenied, (await client.ExtendedAsync("posix-rename@openssh.com", Path("a/b/c").Text("c"))).Status);
+        Assert.True(Directory.Exists(_sandbox.InRoot("a/b/c")));
+
+        // Level, or one down, is fine, and so is a directory with no links.
+        Assert.Equal(Ok, (await client.RequestAsync(SftpMessage.Rename, Path("a/b/c").Text("a/c"))).Status);
+        Assert.Equal(PermissionDenied, (await client.RequestAsync(SftpMessage.Rename, Path("a/c").Text("c"))).Status);
+        Assert.Equal(Ok, (await client.RequestAsync(SftpMessage.Rename, Path("a/plain").Text("plain"))).Status);
+        Assert.True(File.Exists(_sandbox.InRoot("plain/sub/f.txt")));
+        AssertEveryLinkStaysInside();
+    }
+
+    [Fact]
+    public async Task A_directory_too_big_to_check_isnt_moved_up()
+    {
+        Directory.CreateDirectory(_sandbox.InRoot("a/big"));
+        for (int i = 0; i <= SftpServerPaths.MaxMoveScanEntries; i++)
+        {
+            await File.WriteAllBytesAsync(_sandbox.InRoot($"a/big/{i}"), [], TestContext.Current.CancellationToken);
+        }
+
+        await using SftpServerHarness client = await StartAsync(Options);
+        Assert.Equal(Failure, (await client.RequestAsync(SftpMessage.Rename, Path("a/big").Text("big"))).Status);
+        Assert.True(Directory.Exists(_sandbox.InRoot("a/big")));
+        Assert.Equal(Ok, (await client.RequestAsync(SftpMessage.Rename, Path("a/big").Text("a/big2"))).Status);
+    }
+
+    [Fact]
+    public async Task There_is_no_hard_link_request_to_give_a_link_a_second_name()
     {
         Assert.SkipWhen(OperatingSystem.IsWindows() && !CanCreateLinks(), "Needs the privilege to create symbolic links.");
         Directory.CreateDirectory(_sandbox.InRoot("a/b"));
         await using SftpServerHarness client = await StartAsync(Options);
-
         Assert.Equal(Ok, (await client.RequestAsync(SftpMessage.SymLink, Path("../../x").Text("a/b/l"))).Status);
-        Assert.Equal(Ok, (await client.RequestAsync(SftpMessage.Rename, Path("a/b/l").Text("moved"))).Status);
-        Assert.Equal(PermissionDenied, (await client.OpenAsync("moved", OpenRead)).Status);
-        Assert.Equal(PermissionDenied, (await client.RequestAsync(SftpMessage.ReadLink, Path("moved"))).Status);
+
+        Assert.Equal(Unsupported, (await client.ExtendedAsync("hardlink@openssh.com", Path("a/b/l").Text("hard"))).Status);
+        Assert.False(new FileInfo(_sandbox.InRoot("hard")).Exists);
     }
 
     /// <summary>

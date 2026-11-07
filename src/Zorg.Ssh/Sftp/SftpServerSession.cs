@@ -886,6 +886,7 @@ internal sealed partial class SftpServerSession : IAsyncDisposable
             throw Refuse(SftpStatusCode.Failure);
         }
 
+        SftpServerPaths.CheckMove(source, target);
         Move(source, target, overwrite);
         BuildStatus(id, SftpStatusCode.Ok);
     }

@@ -96,8 +96,8 @@ internal sealed class SftpServerPaths
     /// induction it ends inside the root too, wherever it sits. Nothing after a name can climb, so no later link can
     /// change where <c>..</c> goes, which a check made against the disk at one moment could not promise (<c>m/..</c>
     /// with <c>m</c> missing, then <c>m</c> made a link to <c>.</c>). The walk below still refuses names that pass
-    /// through a link the host planted that leads out. Moving a link or its directory is not covered: that can make
-    /// the leading run too long for its new place, and reading it there is refused.
+    /// through a link the host planted that leads out. A move keeps the rule true: <see cref="CheckMove"/> refuses one
+    /// that would leave a leading run longer than the depth of its new directory.
     /// </remarks>
     public string PrepareLinkTarget(string target, SftpServerResolved link)
     {
@@ -156,6 +156,86 @@ internal sealed class SftpServerPaths
         PushReversed(pending, components);
         Walk([.. directory], pending, SftpServerFinalLink.Follow);
         return string.Join(Path.DirectorySeparatorChar, components);
+    }
+
+    /// <summary>The most entries <see cref="CheckMove"/> looks at below a directory before it refuses the move.</summary>
+    internal const int MaxMoveScanEntries = 10_000;
+
+    /// <summary>
+    /// Refuses a rename that would break the shape <see cref="PrepareLinkTarget"/> gives a link. A link moved to a
+    /// directory too shallow for its leading <c>..</c> run would lead out of the root for any other program. A
+    /// directory moved to a shallower place needs every link below it checked the same way, without following any.
+    /// If there are too many entries to check, the move is refused. Run this under the namespace gate, before the move.
+    /// </summary>
+    public static void CheckMove(SftpServerResolved source, SftpServerResolved target)
+    {
+        List<string> newDirectory = [.. target.Parts.Take(target.Parts.Count - 1)];
+        if (source.IsLink)
+        {
+            string? stored = new FileInfo(source.RealPath).LinkTarget;
+            if (stored is not null && ClimbsOutOf(stored, newDirectory.Count, newDirectory))
+            {
+                throw Escape();
+            }
+
+            return;
+        }
+
+        if (!source.IsDirectory || target.Parts.Count >= source.Parts.Count)
+        {
+            return;
+        }
+
+        int budget = MaxMoveScanEntries;
+        ScanMoved(source.RealPath, target.Parts.Count, ref budget);
+    }
+
+    private static void ScanMoved(string directory, int depth, ref int budget)
+    {
+        foreach (string path in Directory.EnumerateFileSystemEntries(directory))
+        {
+            if (--budget < 0)
+            {
+                throw Invalid();
+            }
+
+            string? stored = new FileInfo(path).LinkTarget;
+            if (stored is not null)
+            {
+                if (ClimbsOutOf(stored, depth, null))
+                {
+                    throw Escape();
+                }
+            }
+            else if (Directory.Exists(path))
+            {
+                ScanMoved(path, depth + 1, ref budget);
+            }
+        }
+    }
+
+    /// <summary>Says whether a stored relative target has a leading <c>..</c> run longer than <paramref name="depth"/>, or comes back to <paramref name="directory"/>.</summary>
+    private static bool ClimbsOutOf(string stored, int depth, List<string>? directory)
+    {
+        if (Path.IsPathRooted(stored))
+        {
+            return false;
+        }
+
+        string[] components = stored.Split(LinkSeparators, StringSplitOptions.RemoveEmptyEntries);
+        int climbs = components.TakeWhile(static c => c == "..").Count();
+        if (climbs > depth)
+        {
+            return true;
+        }
+
+        if (directory is null)
+        {
+            return false;
+        }
+
+        List<string> place = [.. directory.Take(directory.Count - climbs), .. components.Skip(climbs).Where(static c => c != ".")];
+        return place.SequenceEqual(directory, StringComparer.FromComparison(RootComparison));
     }
 
     /// <summary>
