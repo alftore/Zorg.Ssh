@@ -139,6 +139,35 @@ public sealed class FuzzHarnessTests
     }
 
     [Fact]
+    public void Allocation_in_the_harness_prepare_step_is_not_counted_and_the_decoder_still_is()
+    {
+        // The prepare step stands for harness work such as sealing plaintext. It costs far over any budget, and its output is what
+        // the decoder gets. A decoder that allocates by a hostile length behind it must still be caught.
+        static byte[] Expensive(byte[] input)
+        {
+            byte[] scratch = new byte[8 * 1024 * 1024];
+            GC.KeepAlive(scratch);
+            return [.. input];
+        }
+
+        FuzzReport quiet = Run(new FuzzTarget { Name = "prepared", Corpus = LengthPrefixedSeeds, Execute = Correct, Prepare = Expensive, Allowed = [typeof(SshProtocolException)] }, 1000);
+        Assert.DoesNotContain(quiet.Findings, f => f.Kind == FuzzFindingKind.Allocation);
+
+        static FuzzOutcome Allocating(byte[] input)
+        {
+            if (input.Length >= 4)
+            {
+                GC.KeepAlive(new byte[Math.Min(BinaryPrimitives.ReadUInt32BigEndian(input), 16 * 1024 * 1024)]);
+            }
+
+            return Correct(input);
+        }
+
+        FuzzReport caught = Run(new FuzzTarget { Name = "prepared and allocating", Corpus = LengthPrefixedSeeds, Execute = Allocating, Prepare = Expensive, Allowed = [typeof(SshProtocolException)] }, 8000);
+        Assert.Contains(caught.Findings, f => f.Kind == FuzzFindingKind.Allocation);
+    }
+
+    [Fact]
     public void The_generated_keys_are_the_same_on_every_machine_and_load_in_every_format()
     {
         // The hash is of the generated text, not a key. If it changes, BouncyCastle's generator changed (or the encoders did),

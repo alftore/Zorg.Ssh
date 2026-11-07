@@ -99,7 +99,7 @@ public sealed class FuzzTests
         {
             try
             {
-                FuzzOutcome outcome = target.Execute(seed.Data);
+                FuzzOutcome outcome = target.Run(seed.Data);
                 Assert.NotEqual(FuzzOutcome.Skipped, outcome);
                 if (outcome == FuzzOutcome.Accepted)
                 {

@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Security.Cryptography;
 using Xunit;
 using Zorg.Ssh.Crypto.KeyFiles;
@@ -36,5 +37,42 @@ public sealed class FuzzRegressionTests
             Assert.IsType<SshKeyFileException>(direct);
             Assert.IsType<CryptographicException>(direct.InnerException);
         }
+    }
+
+    // Found by a two minute run on Linux: target "PacketReader (AES-CTR, encrypt-and-MAC)", seed 18180106958315875163. The input
+    // was the odd (self-sealed) form: a KEXINIT packet and then 10 KB of zero bytes, each four of which is a length of 0, so the
+    // harness sealed about 2,600 empty packets with the reference cipher (an Aes object, an HMAC and a BigInteger counter for
+    // each). The call allocated 2,256,232 bytes against a budget of 1,763,456: 2,243,912 of it in the sealing, 9,560 in creating
+    // the cipher and 2,768 in the PacketReader, which stops at the first packet it refuses. The finding was the harness's, so the
+    // sealing moved to FuzzTarget.Prepare, outside the measurement. This keeps the input and checks that what the runner measures
+    // now, the library's reads, fits the budget with room to spare.
+    [Fact]
+    public void Sealing_thousands_of_empty_encrypt_and_MAC_packets_is_not_counted_against_the_packet_reader()
+    {
+        FuzzTarget target = FuzzTargets.Named(FuzzAllowedExceptions.PacketsEam);
+        byte[] firstPacket = FuzzCorpus.EamPackets().First(s => s.Name == "eam plain 1").Data;
+        byte[] input = [.. firstPacket, .. new byte[10_500]];
+        Assert.NotNull(target.Prepare);
+        byte[] prepared = target.Prepare(input);
+        Assert.True(prepared.Length > input.Length + (2_000 * 32), $"the zeros sealed to {prepared.Length} bytes");
+
+        long Measure()
+        {
+            long before = GC.GetAllocatedBytesForCurrentThread();
+            try
+            {
+                target.Execute(prepared);
+            }
+            catch (Exception exception) when (target.Allowed.Any(type => type.IsInstanceOfType(exception)))
+            {
+                // A refusal is fine: the PacketReader refuses the first empty packet.
+            }
+
+            return GC.GetAllocatedBytesForCurrentThread() - before;
+        }
+
+        Measure();
+        long allocated = Measure();
+        Assert.True(allocated < target.AllocationBudget(input.Length) / 10, $"the reader allocated {allocated} bytes for an input of {input.Length}");
     }
 }

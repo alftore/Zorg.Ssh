@@ -169,6 +169,7 @@ internal static class FuzzTargets
             Name = name,
             Corpus = corpus,
             Execute = execute,
+            Prepare = tuning.Prepare,
             Allowed = FuzzAllowedExceptions.For(name),
             ShortIterations = iterations,
             AllocationSlack = tuning.Slack,
@@ -187,6 +188,8 @@ internal static class FuzzTargets
         public int PerByte { get; set; } = 64;
 
         public IReadOnlyList<string> Tokens { get; set; } = [];
+
+        public Func<byte[], byte[]>? Prepare { get; set; }
 
         public double MinAccepted { get; set; } = 0.01;
 
@@ -652,7 +655,14 @@ internal static class FuzzTargets
         t.MinAccepted = 0.01;
         t.Slack = 1024 * 1024;
         t.MinReasons = 3;
+        t.Prepare = PrepareEam;
     });
+
+    /// <summary>
+    /// Seals the odd form outside the measurement. The reference cipher costs hundreds of bytes for each packet it seals, and a run
+    /// of zero bytes is one empty packet every four bytes: an 11 KB input sealed with 2.2 MB, while the reader allocated 3 KB.
+    /// </summary>
+    private static byte[] PrepareEam(byte[] input) => input.Length == 0 || (input[0] & 1) == 0 ? input : [input[0], .. FuzzCorpus.SealEamStream(input.AsSpan(1))];
 
     private static FuzzOutcome RunPacketsEam(byte[] input)
     {
@@ -661,10 +671,10 @@ internal static class FuzzTargets
             return FuzzOutcome.Skipped;
         }
 
-        // The length is encrypted, so every packet goes through the first-block decrypt before anything is read for it.
-        byte[] stream = (input[0] & 1) == 0 ? input[1..] : FuzzCorpus.SealEamStream(input.AsSpan(1));
+        // The length is encrypted, so every packet goes through the first-block decrypt before anything is read for it. The odd form
+        // was sealed by PrepareEam, so both forms are the wire bytes after the first byte here.
         using PacketCipher cipher = FuzzCorpus.EamPacketCipher();
-        using PacketReader reader = new(new FuzzStream(stream), 262144);
+        using PacketReader reader = new(new FuzzStream(input[1..]), 262144);
         int packets = 0;
         try
         {

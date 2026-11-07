@@ -34,6 +34,13 @@ internal sealed class FuzzTarget
     /// <summary>Runs the decoder on one input, in this thread, to the end. It must throw only what the decoder documents.</summary>
     public required Func<byte[], FuzzOutcome> Execute { get; init; }
 
+    /// <summary>
+    /// Gets the harness work that turns a fuzzed input into what <see cref="Execute"/> takes, such as sealing plaintext with a
+    /// reference cipher. The runner does it before it starts counting allocation and time, so only the library's work is measured.
+    /// It must not call the library under test.
+    /// </summary>
+    public Func<byte[], byte[]>? Prepare { get; init; }
+
     /// <summary>Gets the exception types the decoder is allowed to throw. A type here also allows its subtypes.</summary>
     public required IReadOnlyList<Type> Allowed { get; init; }
 
@@ -74,6 +81,9 @@ internal sealed class FuzzTarget
     public TimeSpan? InputLimit { get; init; }
 
     public long AllocationBudget(int inputBytes) => AllocationSlack + ((long)AllocationPerByte * inputBytes);
+
+    /// <summary>Runs <see cref="Prepare"/> and then <see cref="Execute"/>, for callers that don't measure.</summary>
+    public FuzzOutcome Run(byte[] input) => Execute(Prepare is null ? input : Prepare(input));
 
     public override string ToString() => Name;
 }
@@ -339,17 +349,35 @@ internal static class FuzzRunner
         Volatile.Write(ref progress.Input, input);
         Volatile.Write(ref progress.Seed, seed);
         Volatile.Write(ref progress.StartedTicks, Stopwatch.GetTimestamp());
-        long allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
-        Stopwatch watch = Stopwatch.StartNew();
         FuzzOutcome outcome = FuzzOutcome.Accepted;
         Exception? thrown = null;
+
+        // The harness's own step is outside the measurement, but not outside the watchdog: a hang in it still stops the run.
+        byte[] executed = input;
         try
         {
-            outcome = target.Execute(input);
+            if (target.Prepare is { } prepare)
+            {
+                executed = prepare(input);
+            }
         }
         catch (Exception exception)
         {
             thrown = exception;
+        }
+
+        long allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
+        Stopwatch watch = Stopwatch.StartNew();
+        if (thrown is null)
+        {
+            try
+            {
+                outcome = target.Execute(executed);
+            }
+            catch (Exception exception)
+            {
+                thrown = exception;
+            }
         }
 
         watch.Stop();
@@ -433,7 +461,7 @@ internal static class FuzzRunner
             Volatile.Write(ref progress.StartedTicks, Stopwatch.GetTimestamp());
             try
             {
-                target.Execute(seed.Data);
+                target.Run(seed.Data);
             }
             catch (Exception)
             {
