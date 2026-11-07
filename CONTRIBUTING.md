@@ -104,6 +104,12 @@ scripts/fuzz.sh kex-init 300      # target, then seconds (default 60)
 
 The corpus and any crash inputs stay in the volume `zorg-ssh-fuzz`, so the next run starts where the last stopped. A crash prints its bytes, and the run fails. The only exception a target swallows is `SshException`, as guarantee 3 says. Seed inputs come from `Zorg.Ssh.Fuzz --seed`. Instrumented code faults outside libFuzzer, so don't run an instrumented `Zorg.Ssh.dll` by hand.
 
+## Interop time limits
+
+Interop tests wait on containers and on peers that may hang. Every step has its own timeout, and under those there are two backstops (`tests/Zorg.Ssh.InteropTests/InteropLimits.cs`). A test has 5 minutes: write `[InteropFact]` or `[InteropTheory]`, never `[Fact]` or `[Theory]`, and xunit fails the test when the time is up, even if it is blocked on a thread. A class has 20 minutes: the first test that starts after that fails at once with the name of the class, so a class takes at most 25 minutes. `Every_interop_test_has_a_time_limit` fails if a test is declared without the first.
+
+Tests never listen on an address other than loopback, because a Windows Defender Firewall prompt for the test host can't be answered on an unattended machine. Containers that need the server on the host reach it through a relay inside the container (`Peers/python-ssh/relay.py`).
+
 ## AOT smoke test
 
 `samples/Zorg.Ssh.AotSmoke` is the Native AOT gate. BouncyCastle isn't marked AOT-compatible, so `VerifyReferenceAotCompatibility` is off and this sample takes its place: it's published with Native AOT and run, and it exercises every algorithm. Trimming keeps only what's used, so add each new algorithm to it. To run it yourself:

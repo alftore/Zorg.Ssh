@@ -52,7 +52,7 @@ public sealed class KeepAliveInteropTests : IDisposable
         KeepAliveCountMax = 3,
     };
 
-    [Theory(Timeout = TestTimeoutMs)]
+    [InteropTheory(Timeout = TestTimeoutMs)]
     [MemberData(nameof(Peers))]
     public async Task Each_server_answers_probes_through_an_idle_stretch(string peer)
     {
@@ -67,7 +67,7 @@ public sealed class KeepAliveInteropTests : IDisposable
         Assert.Equal("still here\n", result.StandardOutput);
     }
 
-    [Theory(Timeout = TestTimeoutMs)]
+    [InteropTheory(Timeout = TestTimeoutMs)]
     [MemberData(nameof(Peers))]
     public async Task Each_server_answers_probes_while_a_silent_command_runs(string peer)
     {
@@ -81,7 +81,7 @@ public sealed class KeepAliveInteropTests : IDisposable
         Assert.True(answered >= 3, $"{peer} answered {answered} probes.");
     }
 
-    [Theory(Timeout = TestTimeoutMs)]
+    [InteropTheory(Timeout = TestTimeoutMs)]
     [MemberData(nameof(Peers))]
     public async Task A_rekey_during_probing_passes_on_each_server(string peer)
     {
@@ -106,7 +106,7 @@ public sealed class KeepAliveInteropTests : IDisposable
         Assert.Equal("still here\n", result.StandardOutput);
     }
 
-    [Fact(Timeout = TestTimeoutMs)]
+    [InteropFact(Timeout = TestTimeoutMs)]
     public async Task Ssh_answers_our_servers_probes_through_a_silent_session()
     {
         TestContext.Current.CancellationToken.ThrowIfCancellationRequested();

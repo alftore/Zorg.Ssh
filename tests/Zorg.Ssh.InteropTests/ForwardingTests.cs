@@ -76,7 +76,7 @@ public class ForwardingTests
     /// full-duplex load with no SSH involved, even for one raw connection. The unit tests cover the flat-out
     /// case over real TCP. <paramref name="inFlight"/> runs with a chunk on its way, halfway through.
     /// </summary>
-    private static async Task AssertEchoesAsync(Stream stream, int size, Action? inFlight = null)
+    internal static async Task AssertEchoesAsync(Stream stream, int size, Action? inFlight = null)
     {
         const int Chunk = 64 * 1024;
         byte[] sent = RandomNumberGenerator.GetBytes(size);
@@ -97,7 +97,7 @@ public class ForwardingTests
     }
 
     /// <summary>A target for remote forwards, on this side of the tunnel. It says hello, reads to the end, then sends it all back.</summary>
-    private static (TcpListener Listener, Task Serving) StartLocalTarget(CancellationToken stop)
+    internal static (TcpListener Listener, Task Serving) StartLocalTarget(CancellationToken stop)
     {
         TcpListener listener = new(IPAddress.Loopback, 0);
         listener.Start();
@@ -140,9 +140,9 @@ public class ForwardingTests
         }
     }
 
-    private static int LocalPort(TcpListener listener) => ((IPEndPoint)listener.LocalEndpoint).Port;
+    internal static int LocalPort(TcpListener listener) => ((IPEndPoint)listener.LocalEndpoint).Port;
 
-    [Fact]
+    [InteropFact]
     public async Task A_stream_reaches_a_service_inside_the_container()
     {
         await using SshPeerContainer container = await StartAsync();
@@ -155,7 +155,7 @@ public class ForwardingTests
         await AssertEchoesAsync(stream, 8_000_000);
     }
 
-    [Fact]
+    [InteropFact]
     public async Task A_local_forward_carries_several_connections_at_once()
     {
         await using SshPeerContainer container = await StartAsync();
@@ -171,7 +171,7 @@ public class ForwardingTests
         }));
     }
 
-    [Fact]
+    [InteropFact]
     public async Task A_rekey_during_a_forwarded_transfer_loses_nothing()
     {
         await using SshPeerContainer container = await StartAsync();
@@ -188,7 +188,7 @@ public class ForwardingTests
     }
 
     // OpenSSH ends the whole connection over one stray message for a channel it has closed.
-    [Fact]
+    [InteropFact]
     public async Task Closing_a_forward_mid_transfer_keeps_OpenSSH_happy()
     {
         await using SshPeerContainer container = await StartAsync();
@@ -212,7 +212,7 @@ public class ForwardingTests
         Assert.Equal(0, (await client.ExecuteAsync("true", Ct)).ExitCode);
     }
 
-    [Fact]
+    [InteropFact]
     public async Task A_stream_to_a_closed_port_is_refused_and_the_connection_lives()
     {
         await using SshPeerContainer container = await StartAsync();
@@ -222,7 +222,7 @@ public class ForwardingTests
         Assert.Equal(0, (await client.ExecuteAsync("true", Ct)).ExitCode);
     }
 
-    [Fact]
+    [InteropFact]
     public async Task A_server_that_forbids_forwarding_refuses_both_directions()
     {
         await using SshPeerContainer container = await StartAsync(forwarding: false);
@@ -233,7 +233,7 @@ public class ForwardingTests
         Assert.Equal(0, (await client.ExecuteAsync("true", Ct)).ExitCode);
     }
 
-    [Fact]
+    [InteropFact]
     public async Task A_remote_forward_on_a_chosen_port_carries_data_both_ways()
     {
         using CancellationTokenSource stop = CancellationTokenSource.CreateLinkedTokenSource(Ct);
@@ -260,7 +260,7 @@ public class ForwardingTests
         }
     }
 
-    [Fact]
+    [InteropFact]
     public async Task A_remote_forward_on_a_fixed_port_serves_connections_at_once_and_closes()
     {
         using CancellationTokenSource stop = CancellationTokenSource.CreateLinkedTokenSource(Ct);
@@ -291,7 +291,7 @@ public class ForwardingTests
         }
     }
 
-    [Fact]
+    [InteropFact]
     public async Task A_remote_forward_to_a_dead_target_refuses_the_connection_and_stays_up()
     {
         using TcpListener unused = new(IPAddress.Loopback, 0);
@@ -308,7 +308,7 @@ public class ForwardingTests
         Assert.Equal(0, (await client.ExecuteAsync("true", Ct)).ExitCode);
     }
 
-    [Fact]
+    [InteropFact]
     public async Task A_privileged_port_is_refused_and_the_connection_lives()
     {
         await using SshPeerContainer container = await StartAsync();
@@ -318,7 +318,7 @@ public class ForwardingTests
         Assert.Equal(0, (await client.ExecuteAsync("true", Ct)).ExitCode);
     }
 
-    [Fact]
+    [InteropFact]
     public async Task A_SOCKS_client_reaches_services_by_address_and_by_name()
     {
         await using SshPeerContainer container = await StartAsync();
@@ -344,7 +344,7 @@ public class ForwardingTests
         }
     }
 
-    [Fact]
+    [InteropFact]
     public async Task A_SOCKS_request_for_a_closed_port_gets_a_refusal()
     {
         await using SshPeerContainer container = await StartAsync();
@@ -363,7 +363,7 @@ public class ForwardingTests
     }
 
     // An independent SOCKS5 client: .NET's own, in HttpClient.
-    [Fact]
+    [InteropFact]
     public async Task HttpClient_works_through_the_proxy()
     {
         await using SshPeerContainer container = await StartAsync();
@@ -379,7 +379,7 @@ public class ForwardingTests
         Assert.Equal("hello", await browser.GetStringAsync(new Uri($"http://127.0.0.1:{HttpPort}/"), Ct));
     }
 
-    [Fact]
+    [InteropFact]
     public async Task A_jump_through_one_container_reaches_a_second_one()
     {
         await using SshPeerContainer outer = await StartAsync();
@@ -400,7 +400,67 @@ public class ForwardingTests
         Assert.True((await sftp.ReadAllBytesAsync("/etc/passwd", Ct)).Length > 0);
     }
 
-    [Fact]
+    // The inner connection's packets travel as channel data inside the outer one. A rekey of either must neither
+    // lose nor reorder a byte of the other, and the two can be in their key exchanges at the same time.
+    [InteropFact]
+    public async Task Rekeys_of_the_outer_and_inner_connections_during_a_transfer_through_a_jump_lose_nothing()
+    {
+        await using SshPeerContainer outer = await StartAsync();
+        await using SshPeerContainer inner = await StartAsync();
+        string address = await ContainerAddressAsync(inner);
+
+        await using SshClient jump = await ConnectAsync(outer);
+        await using SshClient client = await SshClient.ConnectAsync(Options(address, 22, jump), Ct);
+        await using SshProcess echo = await StartEchoAsync(client);
+        await using Stream stream = await client.OpenTcpStreamAsync("127.0.0.1", EchoPort, Ct);
+        int outerBefore = jump.CompletedKeyExchanges;
+        int innerBefore = client.CompletedKeyExchanges;
+
+        // One at a time, in the middle of a chunk: the outer one, the inner one, then both together.
+        await AssertEchoesAsync(stream, 3_000_000, jump.RequestRekey);
+        await AssertEchoesAsync(stream, 3_000_000, client.RequestRekey);
+        await AssertEchoesAsync(stream, 3_000_000, () =>
+        {
+            jump.RequestRekey();
+            client.RequestRekey();
+        });
+
+        // Then a steady stream of requests from a second thread for as long as the transfer lasts.
+        using CancellationTokenSource done = CancellationTokenSource.CreateLinkedTokenSource(Ct);
+        Task rekeying = Task.Run(
+            async () =>
+            {
+                try
+                {
+                    while (true)
+                    {
+                        jump.RequestRekey();
+                        await Task.Delay(40, done.Token);
+                        client.RequestRekey();
+                        await Task.Delay(40, done.Token);
+                    }
+                }
+                catch (OperationCanceledException)
+                {
+                    // The transfer ended.
+                }
+            },
+            CancellationToken.None);
+        await AssertEchoesAsync(stream, 12_000_000);
+        await done.CancelAsync();
+        await rekeying;
+
+        int outerRuns = jump.CompletedKeyExchanges - outerBefore;
+        int innerRuns = client.CompletedKeyExchanges - innerBefore;
+        Assert.True(outerRuns >= 4, $"The outer connection ran {outerRuns} key exchanges.");
+        Assert.True(innerRuns >= 4, $"The inner connection ran {innerRuns} key exchanges.");
+
+        // Both connections still work after all of it.
+        Assert.Equal(inner.Id[..12], (await client.ExecuteAsync("hostname", Ct)).StandardOutput.Trim());
+        Assert.Equal(outer.Id[..12], (await jump.ExecuteAsync("hostname", Ct)).StandardOutput.Trim());
+    }
+
+    [InteropFact]
     public async Task A_jump_to_the_same_container_by_loopback_works()
     {
         await using SshPeerContainer container = await StartAsync();
@@ -409,7 +469,7 @@ public class ForwardingTests
         Assert.Equal("hi\n", (await client.ExecuteAsync("echo hi", Ct)).StandardOutput);
     }
 
-    [Fact]
+    [InteropFact]
     public async Task The_second_hop_is_checked_against_its_own_policy()
     {
         await using SshPeerContainer outer = await StartAsync();
@@ -426,10 +486,10 @@ public class ForwardingTests
         Assert.Equal(0, (await jump.ExecuteAsync("true", Ct)).ExitCode);
     }
 
-    private static byte[] AddressTarget(int port) =>
+    internal static byte[] AddressTarget(int port) =>
         [5, 1, 0, 1, 127, 0, 0, 1, (byte)(port >> 8), (byte)port];
 
-    private static byte[] NameTarget(string name, int port)
+    internal static byte[] NameTarget(string name, int port)
     {
         byte[] bytes = System.Text.Encoding.ASCII.GetBytes(name);
         return [5, 1, 0, 3, (byte)bytes.Length, .. bytes, (byte)(port >> 8), (byte)port];

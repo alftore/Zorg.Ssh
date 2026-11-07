@@ -16,7 +16,7 @@ namespace Zorg.Ssh.InteropTests;
 /// The agent client against real OpenSSH <c>ssh-agent</c> and <c>ssh-add</c>, logging in to real sshd. Git for Windows'
 /// agent can't be reached from .NET, so the real agent runs in the container, and its socket comes out over an SSH exec
 /// channel running socat. The protocol is real end to end, but on Windows the socket transport itself isn't exercised
-/// here: <see cref="A_local_agent_answers_on_its_unix_socket"/> does that on Linux.
+/// here: <see cref="A_local_agent_signs_with_each_key_type_on_its_unix_socket"/> does that on Linux.
 /// </summary>
 public sealed class AgentInteropTests : IDisposable
 {
@@ -75,7 +75,7 @@ public sealed class AgentInteropTests : IDisposable
         max,
         isOptional: false);
 
-    [Theory]
+    [InteropTheory]
     [InlineData("ed25519", "256")]
     [InlineData("ecdsa", "256")]
     [InlineData("ecdsa", "384")]
@@ -91,7 +91,7 @@ public sealed class AgentInteropTests : IDisposable
         Assert.Equal("zorg\n", (await client.ExecuteAsync("whoami", Ct)).StandardOutput);
     }
 
-    [Fact]
+    [InteropFact]
     public async Task Both_RSA_hashes_come_from_a_real_agent()
     {
         string key = await _keygen.GenerateAsync("rsa", "3072");
@@ -115,7 +115,7 @@ public sealed class AgentInteropTests : IDisposable
         }
     }
 
-    [Fact]
+    [InteropFact]
     public async Task The_list_matches_what_ssh_add_prints()
     {
         string first = await _keygen.GenerateAsync("ed25519", "256");
@@ -136,7 +136,7 @@ public sealed class AgentInteropTests : IDisposable
         }
     }
 
-    [Fact]
+    [InteropFact]
     public async Task A_certificate_in_a_real_agent_logs_in()
     {
         string ca = await _keygen.GenerateAsync("ed25519", "256");
@@ -157,7 +157,7 @@ public sealed class AgentInteropTests : IDisposable
     }
 
     // The reason for the cap. Without it, sshd's MaxAuthTries of 6 ends the connection with no useful message.
-    [Fact]
+    [InteropFact]
     public async Task More_keys_than_MaxAuthTries_stop_with_a_clear_message()
     {
         List<string> keys = [];
@@ -175,7 +175,7 @@ public sealed class AgentInteropTests : IDisposable
         Assert.Contains("only 5 were offered", refused.Message);
     }
 
-    [Fact]
+    [InteropFact]
     public async Task A_password_works_after_a_capped_agent_on_real_sshd()
     {
         List<string> keys = [];
@@ -191,7 +191,7 @@ public sealed class AgentInteropTests : IDisposable
         Assert.Equal("zorg\n", (await client.ExecuteAsync("whoami", Ct)).StandardOutput);
     }
 
-    [Fact]
+    [InteropFact]
     public async Task A_key_needing_confirmation_nobody_gives_is_reported()
     {
         string key = await _keygen.GenerateAsync("ed25519", "256");
@@ -204,7 +204,7 @@ public sealed class AgentInteropTests : IDisposable
     }
 
     // Read-only on purpose: this is the user's own agent, so nothing is added and nothing is signed.
-    [Fact]
+    [InteropFact]
     public async Task The_Windows_OpenSSH_pipe_answers_when_the_service_runs()
     {
         Assert.SkipUnless(OperatingSystem.IsWindows(), "This is the Windows transport.");
@@ -214,13 +214,64 @@ public sealed class AgentInteropTests : IDisposable
         Assert.NotNull(await agent.ListIdentitiesAsync(Ct));
     }
 
-    [Fact]
-    public async Task A_local_agent_answers_on_its_unix_socket()
+    /// <summary>The variable that lets a test sign with the user's own Windows agent.</summary>
+    private const string WindowsAgentVariable = "ZORG_TEST_WINDOWS_AGENT";
+
+    // Signing is the one thing a test can do with the user's keys without changing them: nothing is added, removed or
+    // locked, and the service isn't touched. It is still the user's agent, so a key held with a confirm constraint or
+    // on a security token may ask them. That is why it is opt-in: ZORG_TEST_WINDOWS_AGENT=1. It signs a test blob with
+    // every key the agent lists (what `ssh-add -L` shows), for every algorithm the key offers, and checks each signature
+    // with the public key alone.
+    [InteropFact]
+    public async Task The_real_Windows_agent_signs_a_test_blob_for_each_key_it_lists()
+    {
+        Assert.SkipUnless(
+            Environment.GetEnvironmentVariable(WindowsAgentVariable) == "1",
+            $"Signs with the keys in the user's own Windows ssh-agent service, so it runs only when {WindowsAgentVariable}=1.");
+        Assert.True(OperatingSystem.IsWindows(), $"{WindowsAgentVariable}=1 asks for the Windows agent pipe, and this isn't Windows.");
+
+        const string Pipe = @"\\.\pipe\openssh-ssh-agent";
+        Assert.True(
+            Directory.GetFiles(@"\\.\pipe\").Any(p => p.EndsWith("openssh-ssh-agent", StringComparison.OrdinalIgnoreCase)),
+            $"{WindowsAgentVariable}=1 but {Pipe} doesn't exist. The Windows OpenSSH Authentication Agent service isn't running. This test doesn't start it.");
+
+        await using SshAgentConnection agent = new(await SshAgentEndpoint.ConnectAsync(Pipe, Ct), TimeSpan.FromSeconds(30));
+        IReadOnlyList<SshAgentIdentity> identities = await agent.ListIdentitiesAsync(Ct);
+        Assert.True(identities.Count > 0, "The agent lists no key this library can use (`ssh-add -L` shows what it holds). Load one yourself and run again.");
+
+        byte[] data = Encoding.ASCII.GetBytes("Zorg.Ssh test blob, signed by the Windows agent");
+        int signed = 0;
+        foreach (SshAgentIdentity identity in identities)
+        {
+            foreach (string algorithm in identity.SignatureAlgorithms)
+            {
+                byte[]? signature = await agent.SignAsync(identity.Blob, data, SshAgentConnection.FlagsFor(algorithm), Ct);
+                Assert.True(signature is not null, $"The agent refused to sign with {algorithm}.");
+                Assert.True(identity.Key.Verify(algorithm, data, signature), $"The {algorithm} signature does not verify.");
+
+                // The same signature must not verify for other data, or the check above proves nothing.
+                Assert.False(identity.Key.Verify(algorithm, Encoding.ASCII.GetBytes("another blob"), signature), $"{algorithm} verified wrong data.");
+                signed++;
+            }
+        }
+
+        Assert.True(signed >= identities.Count);
+    }
+
+    // A real ssh-agent process on a real Unix socket, holding a throwaway key that ssh-keygen makes at test time. On
+    // Windows no such agent can be reached from .NET, so this runs in the Linux gate (scripts/test-linux.sh --interop).
+    [InteropTheory]
+    [InlineData("ed25519", "256")]
+    [InlineData("ecdsa", "256")]
+    [InlineData("ecdsa", "384")]
+    [InlineData("ecdsa", "521")]
+    [InlineData("rsa", "3072")]
+    public async Task A_local_agent_signs_with_each_key_type_on_its_unix_socket(string type, string bits)
     {
         Assert.SkipWhen(OperatingSystem.IsWindows(), "Git for Windows' agent uses an MSYS socket, which .NET can't reach.");
         string tools = Path.GetDirectoryName(PeerTools.RequireSshClient())!;
         string socket = _keygen.PathOf("agent.sock");
-        string key = await _keygen.GenerateAsync("ed25519", "256");
+        string key = await _keygen.GenerateAsync(type, bits);
 
         using Process agentProcess = Process.Start(new ProcessStartInfo(Path.Combine(tools, "ssh-agent"))
         {
@@ -243,8 +294,12 @@ public sealed class AgentInteropTests : IDisposable
             await using SshAgentConnection agent = new(await SshAgentEndpoint.ConnectAsync(socket, Ct), TimeSpan.FromSeconds(10));
             SshAgentIdentity identity = Assert.Single(await agent.ListIdentitiesAsync(Ct));
             byte[] data = Encoding.ASCII.GetBytes("over a real unix socket");
-            byte[]? signature = await agent.SignAsync(identity.Blob, data, 0, Ct);
-            Assert.True(identity.Key.Verify("ssh-ed25519", data, signature!));
+            foreach (string algorithm in identity.SignatureAlgorithms)
+            {
+                byte[]? signature = await agent.SignAsync(identity.Blob, data, SshAgentConnection.FlagsFor(algorithm), Ct);
+                Assert.True(identity.Key.Verify(algorithm, data, signature!), algorithm);
+                Assert.False(identity.Key.Verify(algorithm, Encoding.ASCII.GetBytes("other data"), signature!), algorithm);
+            }
         }
         finally
         {

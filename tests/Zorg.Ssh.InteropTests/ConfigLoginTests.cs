@@ -40,7 +40,7 @@ public sealed class ConfigLoginTests : IDisposable
         return (container, SshConfig.Parse(text), knownHosts);
     }
 
-    [Fact]
+    [InteropFact]
     public async Task Accept_new_records_the_host_and_then_trusts_it()
     {
         (SshPeerContainer container, SshConfig config, string knownHosts) = await StartAsync("accept-new");
@@ -56,7 +56,7 @@ public sealed class ConfigLoginTests : IDisposable
         }
     }
 
-    [Fact]
+    [InteropFact]
     public async Task Strict_checking_refuses_an_unknown_host()
     {
         (SshPeerContainer container, SshConfig config, _) = await StartAsync("yes");
@@ -66,7 +66,7 @@ public sealed class ConfigLoginTests : IDisposable
         }
     }
 
-    [Fact]
+    [InteropFact]
     public async Task Checking_off_needs_the_callers_own_policy()
     {
         (SshPeerContainer container, SshConfig config, _) = await StartAsync("no");

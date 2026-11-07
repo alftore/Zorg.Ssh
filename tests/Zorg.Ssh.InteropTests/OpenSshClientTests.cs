@@ -31,7 +31,7 @@ public class OpenSshClientTests
         { "aes128-ctr", "hmac-sha2-256-etm@openssh.com" },
     };
 
-    [Theory]
+    [InteropTheory]
     [MemberData(nameof(Kex))]
     public async Task Ssh_completes_each_key_exchange_with_our_server(string kex)
     {
@@ -53,7 +53,7 @@ public class OpenSshClientTests
         return Array.IndexOf(supported, kex) >= 0;
     }
 
-    [Theory]
+    [InteropTheory]
     [MemberData(nameof(Ciphers))]
     public async Task Ssh_talks_each_cipher_with_our_server(string cipher, string mac)
     {
@@ -61,7 +61,7 @@ public class OpenSshClientTests
         Assert.Contains($"cipher: {cipher}", log);
     }
 
-    [Fact]
+    [InteropFact]
     public async Task Ssh_negotiates_strict_KEX_with_our_server()
     {
         string log = await RunAsync([]);

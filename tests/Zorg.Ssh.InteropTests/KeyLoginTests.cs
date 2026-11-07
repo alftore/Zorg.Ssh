@@ -62,7 +62,7 @@ public sealed class KeyLoginTests : IDisposable
         return await SshPeerContainer.StartAsync(image, ["/bin/sh", "-c", script], cancellationToken: Ct);
     }
 
-    [Theory]
+    [InteropTheory]
     [InlineData("ed25519", "256")]
     [InlineData("ecdsa", "256")]
     [InlineData("ecdsa", "384")]
@@ -85,7 +85,7 @@ public sealed class KeyLoginTests : IDisposable
         Assert.Equal("zorg\n", (await client.ExecuteAsync("whoami", Ct)).StandardOutput);
     }
 
-    [Fact]
+    [InteropFact]
     public async Task An_encrypted_key_logs_in()
     {
         string key = await GenerateAsync("ed25519", "256", "s3cret");
@@ -104,7 +104,7 @@ public sealed class KeyLoginTests : IDisposable
     }
 
     // The plan's M2 exit: offering keys the server doesn't know mustn't use up MaxAuthTries (default 6).
-    [Fact]
+    [InteropFact]
     public async Task Unknown_keys_before_the_right_one_do_not_exhaust_MaxAuthTries()
     {
         string good = await GenerateAsync("ed25519", "256");
@@ -129,7 +129,7 @@ public sealed class KeyLoginTests : IDisposable
         Assert.Equal("zorg\n", (await client.ExecuteAsync("whoami", Ct)).StandardOutput);
     }
 
-    [Fact]
+    [InteropFact]
     public async Task Known_hosts_trusts_a_recorded_key_and_refuses_a_changed_one()
     {
         string key = await GenerateAsync("ed25519", "256");

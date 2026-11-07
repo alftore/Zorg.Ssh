@@ -220,7 +220,7 @@ public sealed class SftpServerTests : IDisposable
         Assert.Equal(["secret.txt"], Directory.GetFileSystemEntries(Outside).Select(Path.GetFileName));
     }
 
-    [Fact]
+    [InteropFact]
     public async Task Sftp_moves_a_big_file_both_ways_intact()
     {
         string key = await GenerateKeyAsync();
@@ -235,7 +235,7 @@ public sealed class SftpServerTests : IDisposable
         Assert.Equal(Hash(source), Hash(Path.Combine(Local, "back.bin")));
     }
 
-    [Fact]
+    [InteropFact]
     public async Task Sftp_lists_renames_and_manages_directories()
     {
         string key = await GenerateKeyAsync();
@@ -270,7 +270,7 @@ public sealed class SftpServerTests : IDisposable
         Assert.Empty(Directory.GetFileSystemEntries(Root));
     }
 
-    [Fact]
+    [InteropFact]
     public async Task Sftp_escape_attempts_get_nothing_and_change_nothing()
     {
         string key = await GenerateKeyAsync();
@@ -314,7 +314,7 @@ public sealed class SftpServerTests : IDisposable
         Assert.False(new FileInfo(Path.Combine(Root, "escape-link2")).Exists);
     }
 
-    [Fact]
+    [InteropFact]
     public async Task Sftp_symlink_inside_the_root_works_where_links_can_be_made()
     {
         string key = await GenerateKeyAsync();
@@ -331,7 +331,7 @@ public sealed class SftpServerTests : IDisposable
         Assert.Equal("real", await File.ReadAllTextAsync(Path.Combine(Local, "got.txt"), Ct));
     }
 
-    [Fact]
+    [InteropFact]
     public async Task Sftp_on_a_read_only_server_can_read_and_nothing_else()
     {
         string key = await GenerateKeyAsync();
@@ -355,7 +355,7 @@ public sealed class SftpServerTests : IDisposable
         Assert.Equal(["keep.txt"], Directory.GetFileSystemEntries(Root).Select(Path.GetFileName));
     }
 
-    [Fact]
+    [InteropFact]
     public async Task Our_client_works_over_a_real_connection()
     {
         LinkOutside(Path.Combine(Root, "out"), Outside);
@@ -394,7 +394,7 @@ public sealed class SftpServerTests : IDisposable
         AssertOutsideUntouched();
     }
 
-    [Fact]
+    [InteropFact]
     public async Task Sessions_of_one_connection_share_the_root_beside_other_kinds_of_session()
     {
         await using SshServer server = await StartServerAsync();
@@ -409,7 +409,7 @@ public sealed class SftpServerTests : IDisposable
         Assert.Equal(1, notSftp.ExitCode);
     }
 
-    [Fact]
+    [InteropFact]
     public async Task Paramiko_uses_the_server_and_cant_escape()
     {
         PeerTools.RequireContainers();

@@ -61,7 +61,7 @@ public sealed class ServerClientsTests : IDisposable
         return sockets;
     }
 
-    [Theory]
+    [InteropTheory]
     [InlineData("client_paramiko.py")]
     [InlineData("client_asyncssh.py")]
     public async Task Python_clients_log_in_and_run_a_command(string script)
@@ -81,7 +81,7 @@ public sealed class ServerClientsTests : IDisposable
         }
     }
 
-    [Fact]
+    [InteropFact]
     public async Task Ssh_audit_reports_no_failures_and_strict_KEX()
     {
         await using SshServer server = await StartServerAsync();

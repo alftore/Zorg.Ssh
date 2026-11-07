@@ -28,7 +28,7 @@ public class PeerServerTests
         { "aes128-ctr", "hmac-sha2-256-etm@openssh.com" },
     };
 
-    [Theory]
+    [InteropTheory]
     [MemberData(nameof(Peers))]
     public async Task Our_client_reaches_auth_on_each_server(string peer)
     {
@@ -40,7 +40,7 @@ public class PeerServerTests
         });
     }
 
-    [Theory]
+    [InteropTheory]
     [MemberData(nameof(Kex))]
     public async Task Our_client_completes_each_key_exchange_with_OpenSSH(string kex)
     {
@@ -53,7 +53,7 @@ public class PeerServerTests
         });
     }
 
-    [Theory]
+    [InteropTheory]
     [MemberData(nameof(Ciphers))]
     public async Task Our_client_talks_each_cipher_with_OpenSSH(string cipher, string mac)
     {
