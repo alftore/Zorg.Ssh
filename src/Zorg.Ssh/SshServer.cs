@@ -202,8 +202,14 @@ public sealed partial class SshServer : IAsyncDisposable
     [LoggerMessage(Level = LogLevel.Debug, Message = "Connection ended")]
     private static partial void LogConnectionEnded(ILogger logger, Exception exception);
 
-    [LoggerMessage(Level = LogLevel.Error, Message = "A session handler failed")]
+    [LoggerMessage(Level = LogLevel.Error, Message = "The session handler threw, so the session ended with exit code 1")]
     private static partial void LogHandlerFailed(ILogger logger, Exception exception);
+
+    [LoggerMessage(Level = LogLevel.Error, Message = "An auth handler threw, so the login attempt was rejected")]
+    private static partial void LogAuthHandlerFailed(ILogger logger, Exception exception);
+
+    [LoggerMessage(Level = LogLevel.Error, Message = "The direct-tcpip handler threw, so the channel was refused")]
+    private static partial void LogDirectTcpHandlerFailed(ILogger logger, Exception exception);
 
     private static string ParseString(byte[] data)
     {
@@ -491,7 +497,7 @@ public sealed partial class SshServer : IAsyncDisposable
         catch (Exception ex)
 #pragma warning restore CA1031
         {
-            LogHandlerFailed(_logger, ex);
+            LogAuthHandlerFailed(_logger, ex);
             return AuthDecision.Reject;
         }
     }
@@ -674,7 +680,7 @@ public sealed partial class SshServer : IAsyncDisposable
         catch (Exception ex)
 #pragma warning restore CA1031
         {
-            LogHandlerFailed(_logger, ex);
+            LogDirectTcpHandlerFailed(_logger, ex);
             return (null, SshConnection.OpenFailureProhibited);
         }
 

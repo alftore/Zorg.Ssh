@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -324,6 +325,66 @@ public class AuthTests
 
     [Fact]
     public Task A_flood_of_prompts_is_refused() => WithPromptReply(100);
+
+    // A handler of the application's that throws stops the login with an honest SshAuthenticationException.
+    [Fact]
+    public async Task A_keyboard_interactive_handler_that_throws_stops_the_login()
+    {
+        SshAuthenticationException ex = await Assert.ThrowsAsync<SshAuthenticationException>(
+            () => WithOnePrompt((_, _) => throw new InvalidOperationException("the application's own failure")));
+
+        Assert.IsType<InvalidOperationException>(ex.InnerException);
+        Assert.Contains("keyboard-interactive handler threw InvalidOperationException", ex.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("the application's own failure", ex.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("bug", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_keyboard_interactive_handler_with_the_wrong_number_of_answers_stops_the_login()
+    {
+        SshAuthenticationException ex = await Assert.ThrowsAsync<SshAuthenticationException>(
+            () => WithOnePrompt((_, _) => ValueTask.FromResult<IReadOnlyList<string>>(["a", "b"])));
+
+        Assert.Contains("returned 2 answers for 1 prompts", ex.Message, StringComparison.Ordinal);
+    }
+
+    private static async Task WithOnePrompt(Func<IReadOnlyList<SshPrompt>, CancellationToken, ValueTask<IReadOnlyList<string>>> respond)
+    {
+        (SshTransport client, SshTransport server) = await ConnectAsync(ClientOptions(), ServerOptions(), Ct);
+        await using (client)
+        await using (server)
+        {
+            Task clientAuth = new ClientAuthenticator(client, "alice", null).AuthenticateAsync([SshCredential.FromKeyboardInteractive(respond)], Ct);
+
+            server.SetPhase(TransportPhase.AwaitService);
+            await server.ReceiveAsync(Ct);
+            SshRequestWriter accept = new();
+            accept.Byte(MessageNumber.ServiceAccept);
+            accept.String("ssh-userauth");
+            await server.SendAsync(accept.ToArray(), Ct);
+            server.SetPhase(TransportPhase.Auth);
+
+            await server.ReceiveAsync(Ct);
+            SshRequestWriter methods = new();
+            methods.Byte(MessageNumber.UserAuthFailure);
+            methods.Bytes("keyboard-interactive"u8.ToArray());
+            methods.Bool(false);
+            await server.SendAsync(methods.ToArray(), Ct);
+
+            await server.ReceiveAsync(Ct);
+            SshRequestWriter prompts = new();
+            prompts.Byte(60);
+            prompts.String(string.Empty);
+            prompts.String(string.Empty);
+            prompts.String(string.Empty);
+            prompts.UInt32(1);
+            prompts.String("Code: ");
+            prompts.Bool(false);
+            await server.SendAsync(prompts.ToArray(), Ct);
+
+            await clientAuth;
+        }
+    }
 
     private static async Task WithPromptReply(uint count)
     {

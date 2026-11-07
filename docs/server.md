@@ -149,7 +149,7 @@ What the server doesn't do for you:
 
 The token cancels when the server stops, and when the client closes the session or goes away. Reads on `Input` then end or fail, and writes fail with an `SshException`, so a handler that does other long work has to watch for that itself.
 
-If a handler throws, the error is logged, the client gets exit code 1, and it learns nothing about why.
+If a handler throws, the error is logged, the client gets exit code 1, and it learns nothing about why. The other handlers fail closed the same way: a password or public key handler that throws has rejected the attempt, and a `DirectTcpHandler` that throws has refused the channel. Each is logged at `Error`, with your exception attached, so keep secrets out of its message.
 
 ## SFTP
 

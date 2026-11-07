@@ -125,7 +125,10 @@ public abstract class HostKeyPolicy
             string.Equals(key.Sha256Fingerprint, sha256Fingerprint, StringComparison.Ordinal)));
     }
 
-    /// <summary>Runs your own check. Return true to trust the key.</summary>
+    /// <summary>
+    /// Runs your own check. Return true to trust the key. If the check throws, the key isn't trusted, and the connection
+    /// fails with <see cref="SshHostKeyException"/> whose <see cref="Exception.InnerException"/> is yours.
+    /// </summary>
     /// <param name="check">The check. It runs once, during connection.</param>
     /// <returns>The policy.</returns>
     /// <example>

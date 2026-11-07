@@ -299,13 +299,16 @@ public sealed record SshServerOptions
     /// <summary>Gets the host keys. At least one is required.</summary>
     public required IReadOnlyList<SshHostKey> HostKeys { get; init; }
 
-    /// <summary>Gets the password check. Without it, password login isn't offered.</summary>
+    /// <summary>Gets the password check. Without it, password login isn't offered. One that throws has rejected the attempt, and the failure is logged.</summary>
     public Func<SshPasswordRequest, CancellationToken, ValueTask<SshAuthDecision>>? PasswordHandler { get; init; }
 
-    /// <summary>Gets the public key check. Without it, publickey login isn't offered.</summary>
+    /// <summary>Gets the public key check. Without it, publickey login isn't offered. One that throws has rejected the attempt, and the failure is logged.</summary>
     public Func<SshPublicKeyRequest, CancellationToken, ValueTask<SshAuthDecision>>? PublicKeyHandler { get; init; }
 
-    /// <summary>Gets the code that serves a session, which returns the exit code. It runs once per exec, shell or subsystem request.</summary>
+    /// <summary>
+    /// Gets the code that serves a session, which returns the exit code. It runs once per exec, shell or subsystem
+    /// request. One that throws ends the session with exit code 1, and the failure is logged.
+    /// </summary>
     public required Func<SshServerSession, CancellationToken, Task<int>> SessionHandler { get; init; }
 
     /// <summary>

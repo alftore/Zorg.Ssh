@@ -171,7 +171,7 @@ HostKeyPolicy policy = HostKeyPolicy.Custom((key, ct) =>
 });
 ```
 
-Return false to refuse the key. Don't throw from the check: an exception from it ends the connection with an `SshException` that calls itself a bug in Zorg.Ssh.
+Return false to refuse the key. If the check throws, the key isn't trusted: the connection fails with `SshHostKeyException`, and your exception is its `InnerException`.
 
 Two choices weaken the check, so they carry `Unsafe` in their names.
 

@@ -111,7 +111,7 @@ public abstract class SshCredential
     }
 
     /// <summary>Creates a credential that answers keyboard-interactive prompts.</summary>
-    /// <param name="respond">Returns one answer per prompt.</param>
+    /// <param name="respond">Returns one answer per prompt. If it throws, or returns another number of answers, the login stops with <see cref="SshAuthenticationException"/>.</param>
     /// <returns>The credential.</returns>
     /// <example>
     /// <code>

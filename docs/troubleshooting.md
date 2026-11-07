@@ -70,6 +70,7 @@ The host key wasn't trusted, or the server didn't prove it holds that key. **Thi
 | A new host key can't be recorded: the file isn't a regular file, or didn't keep what was written | Name an ordinary file for the known hosts, or use a policy that doesn't record keys. |
 | The certificate isn't valid for this host name | The name is lower-cased and compared with each principal as a case-sensitive pattern. Connect by a name the certificate lists, and have the CA reissue it if a principal has capitals. |
 | The key isn't trusted | A `Fingerprint` or `Custom` policy refused it. Compare the fingerprint exactly, including `SHA256:`. |
+| The host key check threw | Your `HostKeyPolicy.Custom` check threw, so the key wasn't trusted. `InnerException` is your exception. |
 | The signature is invalid, or the key doesn't match the negotiated type | Treat it as an attack until you know otherwise. |
 | The server changed its host key during a rekey | The same. The connection was closed. |
 
@@ -78,6 +79,15 @@ If a server is on a port other than 22, `known_hosts` needs a `[host]:port` entr
 ## SshAuthenticationException
 
 The server refused every credential. `AttemptedMethods` lists what was tried, and `AllowedMethods` what the server last said it accepts.
+
+| Message says | What to do |
+|---|---|
+| Authentication failed | Check the user name and credentials. The message adds what went wrong with each one, such as a skipped key file or an agent that failed. |
+| The password has expired | Change it, then connect again. |
+| The banner handler threw | Your `BannerHandler` threw, so the login was stopped. `InnerException` is your exception. |
+| The keyboard-interactive handler threw, or returned the wrong number of answers | Your handler must return one answer per prompt. `InnerException`, when set, is your exception. |
+
+Your own callbacks fail closed: a host key check that throws refuses the key, and a banner or keyboard-interactive handler that throws stops the login. The message names the type of your exception but not its text, and `InnerException` holds it.
 
 - Check the user name, and that the credential matches an allowed method. A credential for a method the server doesn't offer is skipped, so it won't appear in `AttemptedMethods`.
 - If the server allows only `keyboard-interactive`, a password credential won't work. Use `FromKeyboardInteractive`.
@@ -170,7 +180,7 @@ The base type is thrown directly in a few cases:
 | The server refused the sftp subsystem | SFTP isn't enabled there. On OpenSSH, check the `Subsystem sftp` line. |
 | The server refused to open the channel | It may have reached a session limit, such as OpenSSH's `MaxSessions`. Close something first. |
 | Too many channels are open | The same limit on this side. Close a process or SFTP session first. |
-| This is a bug in Zorg.Ssh | Something unexpected escaped. An exception from your own `HostKeyPolicy.Custom` check also arrives this way: see `InnerException`. Otherwise please report it. |
+| This is a bug in Zorg.Ssh | Something unexpected escaped. Exceptions from your own callbacks never arrive this way, so please report it. |
 
 ## SftpException
 

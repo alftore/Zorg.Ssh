@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Text;
 using System.Threading;
@@ -217,7 +218,15 @@ internal sealed class ClientAuthenticator(SshTransport transport, string userNam
             }
         }
 
-        onBanner(clean.ToString());
+        try
+        {
+            onBanner(clean.ToString());
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // Application code failed. Login stops, rather than going on as if the banner had been shown.
+            throw new SshAuthenticationException($"The banner handler threw {ex.GetType().Name}, so the login was stopped. See the inner exception.", ex);
+        }
     }
 
     private async ValueTask<SendResult> TryPasswordAsync(PasswordCredential credential, List<string> tried, CancellationToken cancellationToken)
@@ -267,10 +276,20 @@ internal sealed class ClientAuthenticator(SshTransport transport, string userNam
                 }
 
                 List<SshPrompt> prompts = ParsePrompts(message.Span);
-                IReadOnlyList<string> answers = await credential.Respond(prompts, cancellationToken).ConfigureAwait(false);
-                if (answers.Count != prompts.Count)
+                IReadOnlyList<string>? answers;
+                try
                 {
-                    throw new ArgumentException("The keyboard-interactive handler must return one answer per prompt.", nameof(credential));
+                    answers = await credential.Respond(prompts, cancellationToken).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (ex is not SshException && !(ex is OperationCanceledException && cancellationToken.IsCancellationRequested))
+                {
+                    // Application code failed. Nothing is sent for these prompts, and the login stops.
+                    throw new SshAuthenticationException($"The keyboard-interactive handler threw {ex.GetType().Name}, so the login was stopped. See the inner exception.", ex);
+                }
+
+                if (answers is null || answers.Count != prompts.Count)
+                {
+                    throw new SshAuthenticationException($"The keyboard-interactive handler returned {answers?.Count.ToString(CultureInfo.InvariantCulture) ?? "null"} answers for {prompts.Count} prompts. It must return one answer per prompt.");
                 }
 
                 await SendAsync(

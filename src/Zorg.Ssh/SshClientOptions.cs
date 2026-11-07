@@ -109,7 +109,10 @@ public sealed record SshClientOptions
     /// </summary>
     public TimeSpan SocksHandshakeTimeout { get; init; } = TimeSpan.FromSeconds(10);
 
-    /// <summary>Gets a handler for the server's login banner. Its text is chosen by the server.</summary>
+    /// <summary>
+    /// Gets a handler for the server's login banner. Its text is chosen by the server. If the handler throws, the login
+    /// stops with <see cref="SshAuthenticationException"/> whose <see cref="Exception.InnerException"/> is yours.
+    /// </summary>
     public Action<string>? BannerHandler { get; init; }
 
     /// <summary>Gets the logger factory. Secrets are never logged.</summary>
