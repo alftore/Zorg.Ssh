@@ -515,6 +515,7 @@ internal sealed class ServerRig : IDisposable
         bool sawService = peer.Snapshot().Any(m => m.Number == MessageNumber.ServiceAccept);
         string[] logs = Logs.Entries;
         Exception[] logged = Logs.Exceptions;
+        List<PeerMessage> received = peer.Snapshot();
         await peer.DisposeAsync().ConfigureAwait(false);
 
         // The verdicts, most serious first.
@@ -559,7 +560,7 @@ internal sealed class ServerRig : IDisposable
             }
         }
 
-        if (FuzzSecrets.Scan().Find(logs.Concat(logged.Select(e => e.ToString()))) is { } leak)
+        if (FuzzSecrets.Scan().Find(logs.Concat(logged.Select(e => e.ToString())).Concat(received.Select(m => Encoding.Latin1.GetString(m.Payload)))) is { } leak)
         {
             throw new StatefulFindingException("GUARANTEE 4", leak);
         }
@@ -578,7 +579,7 @@ internal sealed class ServerRig : IDisposable
         {
             foreach (Exception unobserved in UnobservedTasks.Drain())
             {
-                throw new StatefulFindingException("Unobserved task exception", $"A background task faulted and nobody awaited it (within the last 20 inputs): {unobserved.GetType().FullName}: {unobserved.Message}{Environment.NewLine}{unobserved}");
+                throw new StatefulFindingException("Unobserved task exception", $"A background task of type {unobserved.Data["task"]} faulted and nobody awaited it (within the last 20 inputs): {unobserved.GetType().FullName}: {unobserved.Message}{Environment.NewLine}{unobserved}");
             }
         }
 

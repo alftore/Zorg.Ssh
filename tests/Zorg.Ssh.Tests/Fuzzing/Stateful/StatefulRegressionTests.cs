@@ -1,11 +1,16 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
+using System.IO.Pipelines;
+using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Net;
 using System.Threading;
 using System.Threading.Tasks;
 using Xunit;
 using Zorg.Ssh.Connection;
 using Zorg.Ssh.Protocol;
+using Zorg.Ssh.Sftp;
 using Zorg.Ssh.Tests.Transport;
 
 namespace Zorg.Ssh.Tests.Fuzzing.Stateful;
@@ -216,6 +221,68 @@ public sealed class StatefulRegressionTests
         SshException ended = await Assert.ThrowsAsync<SshConnectionException>(() => client.ExecuteAsync("again", test));
         Assert.IsType<SshProtocolException>(ended.InnerException);
         Assert.DoesNotContain(SutExceptions.BugMarker, ended.ToString(), StringComparison.Ordinal);
+    }
+
+    // Found by the short fixed-seed pass, target "Stateful SFTP, client side", seed 6798846217955782400 (the unobserved-task check named a Task of
+    // SftpResponse). SftpSession.SendAsync registers a request, then writes it. When the write failed, the session ended and failed every request
+    // outstanding, this one too, but the caller got an exception instead of the request, so nobody ever awaited its task: its failure was left
+    // unobserved. Cancellation was already handled; a failed write was not.
+    [Fact]
+    public async Task A_request_whose_write_failed_leaves_no_unobserved_task_exception()
+    {
+        CancellationToken test = TestContext.Current.CancellationToken;
+        UnobservedTasks.Install();
+        UnobservedTasks.Drain();
+        Pipe fromServer = new();
+        byte[] version = [0, 0, 0, 5, SftpMessage.Version, 0, 0, 0, 3];
+        await fromServer.Writer.WriteAsync(version, test);
+        await using SftpSession session = await SftpSession.StartAsync(fromServer.Reader.AsStream(), new BreaksAfterOneWrite(), null, SftpLimits.Default, test);
+
+        await SendThatFailsAsync(session, test);
+        List<Exception> unobserved = UnobservedTasks.Drain();
+        Exception? ours = unobserved.FirstOrDefault(e => e.ToString().Contains(BreaksAfterOneWrite.Message, StringComparison.Ordinal));
+        Assert.True(ours is null, $"A faulted {ours?.Data["task"]} was never observed: {ours}");
+    }
+
+    // Kept out of line, so that nothing in the test's own frame keeps the request alive past the collection.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static async Task SendThatFailsAsync(SftpSession session, CancellationToken test) =>
+        await Assert.ThrowsAnyAsync<SshException>(async () => (await session.SendAsync(SftpFrames.Path("x"), SftpMessage.Stat, SftpMessage.Attrs, test)).Response.Dispose());
+
+    private sealed class BreaksAfterOneWrite : Stream
+    {
+        public const string Message = "the test stream broke on the second write";
+
+        private int _writes;
+
+        public override bool CanRead => false;
+
+        public override bool CanSeek => false;
+
+        public override bool CanWrite => true;
+
+        public override long Length => throw new NotSupportedException();
+
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override void Flush()
+        {
+        }
+
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        public override ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default) =>
+            ++_writes > 1 ? throw new IOException(Message) : ValueTask.CompletedTask;
     }
 
     private static async Task<SshProcess> StartAndAcceptAsync(SshClient client, StatefulPeer peer, CancellationToken test)

@@ -68,6 +68,12 @@ public sealed class FuzzTests
         }
 
         Assert.True(report.Findings.Count == 0, report.Describe());
+        if (name.StartsWith("Stateful", StringComparison.Ordinal))
+        {
+            // A background loop that lost its failure shows up once its task is collected. Anything seen since the last check is reported here.
+            List<Exception> unobserved = Stateful.UnobservedTasks.Drain();
+            Assert.True(unobserved.Count == 0, $"{name}: {unobserved.Count} faulted task(s) were never observed. The first came from a {unobserved.FirstOrDefault()?.Data["task"]}: {unobserved.FirstOrDefault()}");
+        }
 
         if (FuzzSettings.ReplaySeed is null && FuzzSettings.LongRun is null)
         {

@@ -41,7 +41,7 @@ internal static class StatefulTargets
 
     private static byte[] PeerKeyBlob => FuzzSecrets.PeerKey.PublicKey.Blob.ToArray();
 
-    public static IReadOnlyList<FuzzTarget> Build() =>
+    public static List<FuzzTarget> Build() => InstallWatchers(
     [
         Make(ServerPreAuth, ServerPreAuthSeeds(), ServerPreAuthPool(), input => PreAuthRig.Value.Run(input, sftp: false), variants: 2, iterations: 24, minStages: 4),
         Make(ServerConnection, ServerConnectionSeeds(), ServerConnectionPool(), input => ConnectionRig.Value.Run(input, sftp: true), variants: 1, iterations: 24),
@@ -51,7 +51,13 @@ internal static class StatefulTargets
         Make(ClientSftp, ClientSftpSeeds(), ClientConnectionPool(), input => ClientSftpRig.Value.Run(input), variants: 1, iterations: 10, minReasons: 1),
         Make(ServerRekey, ServerRekeySeeds(), ServerConnectionPool(), input => RekeyRig.Value.Run(input, sftp: true), variants: 1, iterations: 14),
         Make(ClientRekey, ClientRekeySeeds(), ClientConnectionPool(), input => ClientRekeyRig.Value.Run(input), variants: 1, iterations: 10),
-    ];
+    ]);
+
+    private static List<FuzzTarget> InstallWatchers(List<FuzzTarget> targets)
+    {
+        UnobservedTasks.Install();
+        return targets;
+    }
 
     private static FuzzTarget Make(string name, IReadOnlyList<(string Name, List<FuzzOp> Ops)> seeds, IReadOnlyList<FuzzOp> pool, Func<byte[], FuzzOutcome> run, int variants, int iterations, int minStages = 14, int minReasons = 2)
     {
@@ -297,6 +303,8 @@ internal static class StatefulTargets
         FuzzOp.App(2),
         FuzzOp.App(3),
         FuzzOp.App(4),
+        FuzzOp.App(8),
+        FuzzOp.App(9),
     ];
 
     // SFTP.
@@ -339,12 +347,14 @@ internal static class StatefulTargets
 
     private static IReadOnlyList<(string, List<FuzzOp>)> ClientSftpSeeds()
     {
-        List<FuzzOp> Session(int method) => ClientWith(method, FuzzOp.App(2), FuzzOp.Await(MessageNumber.ChannelOpen), FuzzOp.Send(Wire.ChannelOpenConfirmation(0, 100)), FuzzOp.Await(MessageNumber.ChannelRequest), FuzzOp.Send(Wire.ChannelSuccess(0)), FuzzOp.Await(MessageNumber.ChannelData));
+        List<FuzzOp> Session(int method, byte app = 2) => ClientWith(method, FuzzOp.App(app), FuzzOp.Await(MessageNumber.ChannelOpen), FuzzOp.Send(Wire.ChannelOpenConfirmation(0, 100)), FuzzOp.Await(MessageNumber.ChannelRequest), FuzzOp.Send(Wire.ChannelSuccess(0)), FuzzOp.Await(MessageNumber.ChannelData));
         byte[] Fixed(byte type, byte[] body) => [1, type, .. body];
         byte[] Mutated(ulong seed) => [2, .. new FuzzBlob().UInt64(seed).ToArray()];
         return
         [
             ("honest server", [.. Session(0), new FuzzOp(OpKind.SftpRespond, [0]), FuzzOp.Await(MessageNumber.ChannelClose), FuzzOp.Send(Wire.ChannelClose(0))]),
+            ("files and streams", [.. Session(1, 8), new FuzzOp(OpKind.SftpRespond, [0]), FuzzOp.Await(MessageNumber.ChannelClose), FuzzOp.Send(Wire.ChannelClose(0))]),
+            ("metadata", [.. Session(2, 9), new FuzzOp(OpKind.SftpRespond, [0]), new FuzzOp(OpKind.SftpRespond, [1, SftpMessage.Status, .. new FuzzBlob().UInt32(8).String("no").String("en").ToArray()]), FuzzOp.Await(MessageNumber.ChannelClose), FuzzOp.Send(Wire.ChannelClose(0))]),
             ("wrong type for handle", [.. Session(1), new FuzzOp(OpKind.SftpRespond, [0]), new FuzzOp(OpKind.SftpRespond, Fixed(SftpMessage.Status, new FuzzBlob().UInt32(0).String("ok").String("en").ToArray())), new FuzzOp(OpKind.SftpRespond, Fixed(SftpMessage.Data, new FuzzBlob().String(new byte[10]).ToArray())), FuzzOp.Send(Wire.ChannelClose(0))]),
             ("mutated replies", [.. Session(2), new FuzzOp(OpKind.SftpRespond, [0]), new FuzzOp(OpKind.SftpRespond, Mutated(11)), new FuzzOp(OpKind.SftpRespond, Mutated(12)), new FuzzOp(OpKind.SftpRespond, Mutated(13)), new FuzzOp(OpKind.SftpRespond, Mutated(14)), FuzzOp.Send(Wire.ChannelClose(0))]),
             ("stray replies", [.. Session(0), new FuzzOp(OpKind.SftpRespond, [0]), new FuzzOp(OpKind.SftpRespond, [3, .. Wire.SftpFrame(SftpMessage.Status, 4000, new FuzzBlob().UInt32(0).String("x").String("en").ToArray())]), new FuzzOp(OpKind.SftpRespond, [3, .. Wire.SftpFrame(SftpMessage.Version, 0, [])]), new FuzzOp(OpKind.SftpRespond, [3, .. Wire.SftpFrame(SftpMessage.Handle, 1, new FuzzBlob().String(new byte[300]).ToArray())]), FuzzOp.Send(Wire.ChannelClose(0))]),

@@ -161,17 +161,22 @@ internal sealed class SftpSession : IAsyncDisposable
             slotTaken = false;
             writeLockTaken = false;
             Task write = WriteAndReleaseAsync(frame);
+            bool handedOver = false;
             try
             {
                 await write.WaitAsync(cancellationToken).ConfigureAwait(false);
+                handedOver = true;
+                return pending;
             }
-            catch (OperationCanceledException)
+            finally
             {
-                pending.Abandon();
-                throw;
+                // The caller never gets the request, so nobody will await it. A write that failed has ended the session, which fails every
+                // request still outstanding, this one too, and that failure would be left unobserved.
+                if (!handedOver)
+                {
+                    pending.Abandon();
+                }
             }
-
-            return pending;
         }
         finally
         {

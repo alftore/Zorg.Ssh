@@ -102,10 +102,12 @@ internal static class UnobservedTasks
     {
         if (Interlocked.Exchange(ref _installed, 1) == 0)
         {
-            TaskScheduler.UnobservedTaskException += (_, e) =>
+            TaskScheduler.UnobservedTaskException += (sender, e) =>
             {
                 foreach (Exception inner in e.Exception.Flatten().InnerExceptions)
                 {
+                    // The task's type says who made it: a Task of SftpResponse is a pending SFTP request, for one.
+                    inner.Data["task"] = sender?.GetType().ToString();
                     Seen.Enqueue(inner);
                 }
 

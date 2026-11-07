@@ -222,7 +222,7 @@ internal sealed class ClientRig(Depth depth = Depth.Channel) : IDisposable
         {
             foreach (Exception unobserved in UnobservedTasks.Drain())
             {
-                throw new StatefulFindingException("Unobserved task exception", $"A background task faulted and nobody awaited it (within the last 20 inputs): {unobserved.GetType().FullName}: {unobserved.Message}{Environment.NewLine}{unobserved}");
+                throw new StatefulFindingException("Unobserved task exception", $"A background task of type {unobserved.Data["task"]} faulted and nobody awaited it (within the last 20 inputs): {unobserved.GetType().FullName}: {unobserved.Message}{Environment.NewLine}{unobserved}");
             }
         }
 
@@ -241,7 +241,7 @@ internal sealed class ClientRig(Depth depth = Depth.Channel) : IDisposable
         return deep ? FuzzOutcome.Accepted : FuzzOutcome.Rejected;
     }
 
-    private static string AppName(byte action) => (action % 8) switch
+    private static string AppName(byte action) => (action % 10) switch
     {
         0 => "ExecuteAsync",
         1 => "StartProcessAsync",
@@ -250,7 +250,9 @@ internal sealed class ClientRig(Depth depth = Depth.Channel) : IDisposable
         4 => "OpenTcpStreamAsync",
         5 => "StartShellAsync",
         6 => "ForwardRemotePortAsync fixed port",
-        _ => "two ExecuteAsync calls",
+        7 => "two ExecuteAsync calls",
+        8 => "SFTP files and streams",
+        _ => "SFTP metadata",
     };
 
     private static async Task DrainAsync(Stream stream)
@@ -296,7 +298,7 @@ internal sealed class ClientRig(Depth depth = Depth.Channel) : IDisposable
 
     private async Task RunAppAsync(SshClient client, byte action)
     {
-        switch (action % 8)
+        switch (action % 10)
         {
             case 0:
                 await client.ExecuteAsync("echo hi").ConfigureAwait(false);
@@ -334,7 +336,7 @@ internal sealed class ClientRig(Depth depth = Depth.Channel) : IDisposable
 
                 break;
             case 3 or 6:
-                SshRemoteForward forward = await client.ForwardRemotePortAsync(action % 8 == 3 ? "127.0.0.1" : "0.0.0.0", action % 8 == 3 ? 0 : 8022, "127.0.0.1", SharedSink.Port).ConfigureAwait(false);
+                SshRemoteForward forward = await client.ForwardRemotePortAsync(action % 10 == 3 ? "127.0.0.1" : "0.0.0.0", action % 10 == 3 ? 0 : 8022, "127.0.0.1", SharedSink.Port).ConfigureAwait(false);
                 await using (forward.ConfigureAwait(false))
                 {
                     // Stays registered while the scripted server opens connections to it, until the connection ends or a moment has passed.
@@ -363,9 +365,43 @@ internal sealed class ClientRig(Depth depth = Depth.Channel) : IDisposable
                 }
 
                 break;
-            default:
+            case 7:
                 await client.ExecuteAsync("one").ConfigureAwait(false);
                 await client.ExecuteAsync("two").ConfigureAwait(false);
+                break;
+            case 8:
+                SftpClient files = await client.OpenSftpAsync().ConfigureAwait(false);
+                await using (files.ConfigureAwait(false))
+                {
+                    SftpFile file = await files.OpenAsync("a.txt").ConfigureAwait(false);
+                    await using (file.ConfigureAwait(false))
+                    {
+                        byte[] buffer = new byte[100];
+                        await file.ReadAsync(buffer, CancellationToken.None).ConfigureAwait(false);
+                    }
+
+                    using MemoryStream download = new();
+                    await files.DownloadFileAsync("a.txt", download).ConfigureAwait(false);
+                    using MemoryStream upload = new(new byte[500]);
+                    await files.UploadFileAsync(upload, "up.bin").ConfigureAwait(false);
+                    await files.DownloadDirectoryAsync(".", Path.Combine(Path.GetTempPath(), "zorg-fuzz-down-" + Guid.NewGuid().ToString("N")), maxTotalBytes: 4096).ConfigureAwait(false);
+                }
+
+                break;
+            default:
+                SftpClient meta = await client.OpenSftpAsync().ConfigureAwait(false);
+                await using (meta.ConfigureAwait(false))
+                {
+                    await meta.ExistsAsync("a.txt").ConfigureAwait(false);
+                    await meta.SetAttributesAsync("a.txt", new SftpAttributes { Permissions = UnixFileMode.UserRead | UnixFileMode.UserWrite }).ConfigureAwait(false);
+                    await meta.CreateSymbolicLinkAsync("l", "a.txt").ConfigureAwait(false);
+                    await meta.ReadLinkAsync("l").ConfigureAwait(false);
+                    await meta.GetFileSystemInfoAsync(".").ConfigureAwait(false);
+                    await meta.CopyFileAsync("a.txt", "b.txt").ConfigureAwait(false);
+                    await meta.CreateHardLinkAsync("h", "a.txt").ConfigureAwait(false);
+                    await meta.DeleteDirectoryAsync("d").ConfigureAwait(false);
+                }
+
                 break;
         }
     }
