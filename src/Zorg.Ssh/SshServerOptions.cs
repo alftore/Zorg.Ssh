@@ -315,7 +315,9 @@ public sealed class SshServerOptions
     /// <summary>
     /// Gets how long a logged-in connection may have no open channel before the server closes it, like OpenSSH's
     /// <c>UnusedConnectionTimeout</c>. Null, the default, means never. Opening a channel resets it, and the clock
-    /// restarts when the last channel closes. Keepalive traffic doesn't count as activity. Must be above zero.
+    /// restarts when the last channel closes, except for a channel the server refused, such as a denied direct-tcpip
+    /// open: refused opens can't keep a connection alive. A channel that arrives after the server has decided the
+    /// connection is idle is refused too. Keepalive traffic doesn't count as activity. Must be above zero.
     /// </summary>
     /// <example>
     /// <code>
