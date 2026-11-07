@@ -46,6 +46,8 @@ SshException
   SshHostKeyException
   SshAuthenticationException
   SshKeyFileException
+  SshAgentException
+  SshConfigException
   SftpException
     SftpFileNotFoundException
     SftpPermissionDeniedException
@@ -62,7 +64,11 @@ The host key wasn't trusted, or the server didn't prove it holds that key. **Thi
 |---|---|
 | The host isn't in the file | Check the fingerprint in the message with the server's administrator, then add the host, for example by connecting once with `ssh`. |
 | The host key has changed | Ask the administrator whether it was replaced. Update `known_hosts` only if they confirm it. A different key type counts as a change too. |
-| The key is marked revoked | Don't connect until the administrator has replaced it. |
+| The key is marked revoked | Don't connect until the administrator has replaced it. A key is revoked by value, so a copy re-encoded with redundant zeros is revoked too. |
+| The known_hosts file can't be read, isn't a regular file, or is too large | Name an ordinary file under 16 MiB. A directory, device (`/dev/null`, `NUL`) or FIFO is refused. |
+| A line of the known_hosts file is over 1 MiB | Remove or shorten it. It isn't skipped, because that could drop a revocation. |
+| A new host key can't be recorded: the file isn't a regular file, or didn't keep what was written | Name an ordinary file for the known hosts, or use a policy that doesn't record keys. |
+| The certificate isn't valid for this host name | The name is lower-cased and compared with each principal as a case-sensitive pattern. Connect by a name the certificate lists, and have the CA reissue it if a principal has capitals. |
 | The key isn't trusted | A `Fingerprint` or `Custom` policy refused it. Compare the fingerprint exactly, including `SHA256:`. |
 | The signature is invalid, or the key doesn't match the negotiated type | Treat it as an attack until you know otherwise. |
 | The server changed its host key during a rekey | The same. The connection was closed. |
@@ -87,10 +93,32 @@ A private key file couldn't be loaded. It stops the login at that credential, so
 |---|---|
 | The file is encrypted | Pass the passphrase. |
 | The passphrase is wrong, or the file is damaged | Check the passphrase. |
-| Couldn't read the key file | Check the path and permissions. |
+| Couldn't read the key file | Check the path and permissions. The file must be a regular file of at most 1 MiB: a FIFO, device or directory is refused. |
 | Legacy encrypted PEM format | Convert it: `ssh-keygen -p -f <file>`. |
 | The key isn't supported | Use Ed25519, ECDSA on P-256, P-384 or P-521, or RSA of 2048 to 16384 bits. |
 | Malformed, or the public key doesn't match | The file is incomplete or altered. Restore it, or make a new key. |
+
+## SshConfigException
+
+`SshConfig.Load`, `SshConfig.Resolve` or `SshClientOptions.FromConfig` refused a config. The message names the file and line, or the host and keyword. These are deliberate refusals: `FromConfig` won't ignore something that decides who is trusted.
+
+| Message says | What to do |
+|---|---|
+| `StrictHostKeyChecking no` | Use `yes` or `accept-new`, or pass `HostKeyPolicy.AcceptAnyUnsafe()` to `FromConfig` if you mean it. |
+| `accept-new` with a known hosts file that isn't a regular file | Name an ordinary file in `UserKnownHostsFile`, or use `StrictHostKeyChecking yes`. |
+| Uses `ProxyJump` or `ProxyCommand` | Connect to the jump host yourself and set `SshClientOptions.JumpHost`. |
+| Sets `RevokedHostKeys`, `KnownHostsCommand` or `HostKeyAlias` | Remove it, or pass your own `HostKeyPolicy` to `FromConfig`. |
+| A `Match` block sets a keyword and could apply to the host | `Match` isn't supported for that keyword. Move the setting into a `Host` block. |
+| A value isn't a number or a port, or a file can't be read | Fix the line named in the message. Config files must be regular files, up to 1 MiB. |
+
+## SshAgentException
+
+The ssh-agent couldn't be used. A login with `FromConfig` skips a missing agent; `FromAgent` fails.
+
+- "isn't a plain named pipe": the Windows agent path has a slash, a backslash or a `..` after `\\.\pipe\`. Use the pipe name alone, for example `\\.\pipe\openssh-ssh-agent`.
+- "is served by a process that runs as ...": on Windows, another account created the pipe first. Stop that process, or start the OpenSSH Authentication Agent service. The client only talks to a pipe served by you or by the system.
+- "Couldn't tell who runs the process ...": the pipe's server couldn't be identified and isn't the `ssh-agent` service. Start that service, or run the agent as yourself.
+- "Couldn't reach the ssh-agent": check that it is running and that `SSH_AUTH_SOCK` names its socket.
 
 ## SshConnectionException
 

@@ -95,14 +95,15 @@ Not implemented in this version:
 - Remote forwarding on the server: it refuses every `tcpip-forward` request.
 - Agent forwarding. Logging in through a local ssh-agent is supported.
 - User certificates on the server: it refuses them. The client can log in with one, and trusts host certificates through `@cert-authority` lines.
-- Following `ProxyJump` from a config file. `SshClientOptions.FromConfig` reads a subset of `~/.ssh/config` and refuses such a host. Use `SshClientOptions.JumpHost` instead.
+- Following `ProxyJump` or `ProxyCommand` from a config file. `SshClientOptions.FromConfig` reads a subset of `~/.ssh/config` and refuses such a host. Use `SshClientOptions.JumpHost` instead.
+- `Match` blocks in a config file. They are never evaluated, and `FromConfig` throws when one that could apply sets a keyword that decides trust. `RevokedHostKeys`, `KnownHostsCommand` and `HostKeyAlias` also make it throw. `IdentityAgent` (except `none`), `CertificateFile`, `HostKeyAlgorithms` and `CASignatureAlgorithms` are ignored with a warning. [client.md](client.md#the-agent-certificates-and-sshconfig) has the table.
 - X11 forwarding, GSSAPI, host-based login, security keys (`sk-`), PKCS#11 and ML-DSA signatures.
 - Legacy algorithms. Old network equipment that needs them won't connect.
 - Keyboard-interactive login and password changes on the server side.
 - Changing an expired password from the client: it fails with `SshAuthenticationException`.
 - SFTP versions other than 3.
 
-The agent, certificates and config parsing are planned. Nothing here is a promise of a date.
+The agent, host and user certificates for login, and a subset of `ssh_config` exist, with the limits above. Nothing else here is a promise of a date.
 
 ## Unverified
 
@@ -118,6 +119,7 @@ What hasn't been checked:
 - **SFTP against other servers.** Only OpenSSH's `sftp-server` has been tested. Commercial and appliance servers haven't, and neither has the OpenSSH server for Windows.
 - **Real network equipment**, and its quirks.
 - **Native AOT** is covered by a smoke test of the algorithms and one in-memory session (a command, an SFTP round trip, the agent protocol and `ssh_config` parsing), not by a real network connection.
+- **File types and the Windows agent pipe.** Telling a regular file from a FIFO or device uses `statx` on Linux (tested in the Linux container) and `stat` on macOS (written from the documented struct layout, never run). Elsewhere, only directories and `/dev/` paths are told apart, and reads are still size-limited. The check of who serves the Windows agent pipe was tested against the current user's process and with made-up identities, not against another account's pipe or a stopped or non-default agent service.
 - **Other platforms.** Day-to-day work happens on Windows x64, with peers in Linux containers. The unit and interop suites also run in a Linux container (`scripts/test-linux.sh`) on Alpine (musl) and Ubuntu (glibc), on x64 only. The CI workflow also targets Ubuntu, but hasn't run yet. macOS and Arm haven't been tried.
 - **Long-running connections.** Rekeying has been tested, but not connections left up for days.
 - **The public API** can still change before 1.0.
