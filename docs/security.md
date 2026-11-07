@@ -84,7 +84,7 @@ Compression: `none` only.
 
 Not offered: `ssh-rsa` with SHA-1, `ssh-dss`, CBC ciphers, `diffie-hellman-*` key exchange and non-EtM MACs. A server that offers only those fails with `SshNegotiationException`.
 
-BouncyCastle provides Ed25519, X25519, ML-KEM, sntrup761 and ChaCha20-Poly1305 where the .NET libraries don't. Its code hasn't been reviewed as part of this project. See [dependencies.md](dependencies.md).
+BouncyCastle provides Ed25519, X25519, ML-KEM, sntrup761 and Poly1305 (for ChaCha20-Poly1305) where the .NET libraries don't. The ChaCha20 cipher itself is Zorg.Ssh's own code, which has no secret-dependent branch or index, and whose key words are zeroed on dispose. Its working state lives in registers and stack slots, which managed code can't zero. Neither BouncyCastle's code nor ours has been reviewed as part of this project. See [dependencies.md](dependencies.md).
 
 ## Out of scope
 

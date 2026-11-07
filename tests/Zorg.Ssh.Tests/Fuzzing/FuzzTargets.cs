@@ -10,6 +10,7 @@ using System.Threading;
 using Zorg.Ssh.Agent;
 using Zorg.Ssh.Auth;
 using Zorg.Ssh.Crypto;
+using Zorg.Ssh.Crypto.Ciphers;
 using Zorg.Ssh.Crypto.KeyFiles;
 using Zorg.Ssh.Crypto.Keys;
 using Zorg.Ssh.Forwarding;
@@ -43,6 +44,7 @@ internal static class FuzzAllowedExceptions
     public const string Agent = "SshAgentConnection replies";
     public const string SftpServer = "SftpServerSession.DispatchAsync";
     public const string PublicKeyRequest = "ServerAuthenticator.ParsePublicKey";
+    public const string ChaChaDifferential = "ChaCha20Simd against BouncyCastle";
 
     public static IReadOnlyList<Type> For(string target) => target switch
     {
@@ -86,6 +88,9 @@ internal static class FuzzAllowedExceptions
 
         // ServerAuthenticator reads SshProtocolException from a malformed request and drops the connection.
         PublicKeyRequest => [typeof(SshProtocolException)],
+
+        // A differential target: ours and BouncyCastle's must agree on every input, and neither may throw.
+        ChaChaDifferential => [],
         _ => throw new ArgumentException("No allowed exceptions are recorded for " + target, nameof(target)),
     };
 }
@@ -118,6 +123,7 @@ internal static class FuzzTargets
         [FuzzAllowedExceptions.Agent] = 4,
         [FuzzAllowedExceptions.SftpServer] = 30,
         [FuzzAllowedExceptions.PublicKeyRequest] = 2,
+        [FuzzAllowedExceptions.ChaChaDifferential] = 3,
     };
 
     public static IReadOnlyList<FuzzTarget> All => AllTargets.Value;
@@ -141,6 +147,7 @@ internal static class FuzzTargets
         AgentTarget(),
         SftpServerTarget(),
         PublicKeyRequestTarget(),
+        ChaChaDifferentialTarget(),
         .. Stateful.StatefulTargets.Build(),
     ];
 
@@ -246,6 +253,63 @@ internal static class FuzzTargets
         {
             Require(name.Length > 0 && name.All(c => c is > ' ' and < '\u007f' && c != ','), "a name-list held an empty or unprintable name");
         }
+    }
+
+    // ChaCha20: ours against BouncyCastle's engine.
+
+    private const int ChaChaHeader = 1 + 32 + 4;
+
+    private static FuzzTarget ChaChaDifferentialTarget() => Make(FuzzAllowedExceptions.ChaChaDifferential, FuzzCorpus.ChaChaInputs(), RunChaChaDifferential, 3000, t =>
+    {
+        t.MinAccepted = 0.3;
+        t.MinReasons = 0;
+        t.Slack = 4 * 1024 * 1024;
+    });
+
+    /// <summary>
+    /// Byte 0 picks the path and the starting block, then come the key, a sequence number and the data. Every path the
+    /// machine supports must give BouncyCastle's bytes, in place and not.
+    /// </summary>
+    private static FuzzOutcome RunChaChaDifferential(byte[] input)
+    {
+        if (input.Length < ChaChaHeader)
+        {
+            return FuzzOutcome.Skipped;
+        }
+
+        ChaCha20Simd.Path[] paths = [.. new[] { ChaCha20Simd.Path.Auto, ChaCha20Simd.Path.Scalar, ChaCha20Simd.Path.Vector128, ChaCha20Simd.Path.Vector256 }.Where(ChaCha20Simd.IsSupported)];
+        ChaCha20Simd.Path path = paths[(input[0] >> 1) % paths.Length];
+        ulong counter = (ulong)(input[0] & 1);
+        byte[] key = input[1..33];
+        uint sequence = BinaryPrimitives.ReadUInt32BigEndian(input.AsSpan(33));
+        byte[] data = input[ChaChaHeader..];
+
+        byte[] nonce = new byte[12];
+        BinaryPrimitives.WriteUInt32BigEndian(nonce.AsSpan(8), sequence);
+        Org.BouncyCastle.Crypto.Engines.ChaCha7539Engine engine = new();
+        engine.Init(forEncryption: true, new Org.BouncyCastle.Crypto.Parameters.ParametersWithIV(new Org.BouncyCastle.Crypto.Parameters.KeyParameter(key), nonce));
+        if (counter == 1)
+        {
+            byte[] skip = new byte[64];
+            engine.ProcessBytes(skip, 0, 64, skip, 0);
+        }
+
+        byte[] expected = new byte[data.Length];
+        engine.ProcessBytes(data, 0, data.Length, expected, 0);
+
+        uint[] words = new uint[ChaCha20Simd.KeyWords];
+        ChaCha20Simd.LoadKey(key, words);
+        uint nonce1 = BinaryPrimitives.ReverseEndianness(sequence);
+        byte[] actual = new byte[data.Length];
+        ChaCha20Simd.Crypt(words, counter, 0, nonce1, data, actual, path);
+        Require(expected.AsSpan().SequenceEqual(actual), "ChaCha20Simd differs from BouncyCastle on path " + path);
+
+        byte[] inPlace = (byte[])data.Clone();
+        ChaCha20Simd.Crypt(words, counter, 0, nonce1, inPlace, inPlace, path);
+        Require(expected.AsSpan().SequenceEqual(inPlace), "ChaCha20Simd differs from BouncyCastle when run in place on path " + path);
+
+        FuzzNotes.Reached("chacha length class " + (data.Length < 64 ? 0 : data.Length < 256 ? 1 : 2) + ", counter " + counter);
+        return FuzzOutcome.Accepted;
     }
 
     private static void Require(bool condition, string what)

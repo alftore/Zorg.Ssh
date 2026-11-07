@@ -13,7 +13,7 @@ Rules:
 
 | Package | Licence | Why | Future risk | Exit plan |
 |---|---|---|---|---|
-| BouncyCastle.Cryptography 2.7.0 | MIT | Ed25519, X25519, ML-KEM and sntrup761 on platforms the BCL doesn't cover, and ChaCha20-Poly1305 in OpenSSH's layout | Low. Long-lived project under a charity, and permissive since the start. No dependencies of its own. Not marked AOT-compatible, so the AOT smoke test covers it. | Used only behind `Crypto/`. Moves to the BCL family by family as support grows. |
+| BouncyCastle.Cryptography 2.7.0 | MIT | Ed25519, X25519, ML-KEM and sntrup761 on platforms the BCL doesn't cover, and Poly1305 for `chacha20-poly1305@openssh.com`. The ChaCha20 half is our own vectorised code (`ChaCha20Simd`), tested against BouncyCastle's engine and fuzzed against it | Low. Long-lived project under a charity, and permissive since the start. No dependencies of its own. Not marked AOT-compatible, so the AOT smoke test covers it. | Used only behind `Crypto/`. Moves to the BCL family by family as support grows. |
 | Microsoft.Extensions.Logging.Abstractions 10.0.14 | MIT | `ILogger`, the standard logging seam | Low. Part of .NET. | Small surface. Could be replaced by our own callback. |
 
 ## Build only (not shipped)

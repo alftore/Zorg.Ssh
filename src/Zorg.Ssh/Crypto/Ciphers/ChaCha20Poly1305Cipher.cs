@@ -1,7 +1,6 @@
 using System;
 using System.Buffers.Binary;
 using System.Security.Cryptography;
-using Org.BouncyCastle.Crypto.Engines;
 using Org.BouncyCastle.Crypto.Macs;
 using Org.BouncyCastle.Crypto.Parameters;
 
@@ -13,9 +12,8 @@ namespace Zorg.Ssh.Crypto.Ciphers;
 /// Poly1305 covers the encrypted length and the encrypted body.
 /// </summary>
 /// <remarks>
-/// OpenSSH runs ChaCha20 with a 64-bit counter and a 64-bit IV holding the sequence number. RFC 8439's 32-bit counter
-/// and 96-bit nonce fill the same state words, so a nonce of four zero bytes and the 8-byte big-endian sequence number
-/// is the same cipher, as long as the counter stays under 2^32. Packets are far too small to reach that.
+/// ChaCha20 is <see cref="ChaCha20Simd"/>, which runs OpenSSH's layout directly: a 64-bit block counter and a 64-bit
+/// IV holding the sequence number. Poly1305 is BouncyCastle's.
 /// <para>
 /// Each packet allocates one BouncyCastle <see cref="KeyParameter"/>, the only way to key its Poly1305. That also
 /// leaves the one-time Poly1305 key on the heap until collected. The key authenticates that single packet, which by
@@ -28,21 +26,17 @@ internal sealed class ChaCha20Poly1305Cipher : PacketCipher
     private const int Block = 8;
     private const int Tag = 16;
     private const int BodyOffset = 4;
-    private const int ChaChaBlockSize = 64;
     private const int PolyKeySize = 32;
-    private const int NonceSize = 12;
-    private const int SequenceOffset = 8;
 
-    private readonly ReseatableChaCha _bodyCipher;
-    private readonly ReseatableChaCha _lengthCipher;
+    private readonly uint[] _bodyKey = new uint[ChaCha20Simd.KeyWords];
+    private readonly uint[] _lengthKey = new uint[ChaCha20Simd.KeyWords];
     private readonly Poly1305 _poly = new();
-    private readonly byte[] _nonce = new byte[NonceSize];
     private bool _disposed;
 
     public ChaCha20Poly1305Cipher(ReadOnlySpan<byte> key)
     {
-        _bodyCipher = new ReseatableChaCha(key[..HalfKeySize]);
-        _lengthCipher = new ReseatableChaCha(key[HalfKeySize..]);
+        ChaCha20Simd.LoadKey(key[..HalfKeySize], _bodyKey);
+        ChaCha20Simd.LoadKey(key[HalfKeySize..], _lengthKey);
     }
 
     public override int BlockSize => Block;
@@ -85,7 +79,7 @@ internal sealed class ChaCha20Poly1305Cipher : PacketCipher
         PacketChecks.CheckLength(BinaryPrimitives.ReadUInt32BigEndian(lengthField), packet.Length, Tag);
 
         Span<byte> body = packet[BodyOffset..^Tag];
-        _bodyCipher.ProcessBytes(body, body);
+        ChaCha20Simd.Crypt(_bodyKey, counter: 1, nonce0: 0, Nonce(sequenceNumber), body, body);
         PacketChecks.CheckPadding(body);
     }
 
@@ -97,7 +91,7 @@ internal sealed class ChaCha20Poly1305Cipher : PacketCipher
         KeyPoly(sequenceNumber);
 
         Span<byte> body = packet[BodyOffset..^Tag];
-        _bodyCipher.ProcessBytes(body, body);
+        ChaCha20Simd.Crypt(_bodyKey, counter: 1, nonce0: 0, Nonce(sequenceNumber), body, body);
 
         Span<byte> lengthField = packet[..BodyOffset];
         CryptLength(lengthField, lengthField, sequenceNumber);
@@ -113,82 +107,45 @@ internal sealed class ChaCha20Poly1305Cipher : PacketCipher
             _disposed = true;
             if (disposing)
             {
-                _bodyCipher.Wipe();
-                _lengthCipher.Wipe();
+                CryptographicOperations.ZeroMemory(MemoryMarshalBytes(_bodyKey));
+                CryptographicOperations.ZeroMemory(MemoryMarshalBytes(_lengthKey));
 
                 // Replaces the last one-time key held in the MAC's state.
                 _poly.Init(new KeyParameter(new byte[PolyKeySize]));
-                Array.Clear(_nonce);
             }
         }
 
         base.Dispose(disposing);
     }
 
+    private static Span<byte> MemoryMarshalBytes(uint[] words) => System.Runtime.InteropServices.MemoryMarshal.AsBytes(words.AsSpan());
+
     /// <summary>
-    /// Keys Poly1305 from block 0 of the body cipher. The whole block is consumed, which leaves the cipher at block 1
-    /// for the body.
+    /// State word 15. The IV is the sequence number as 8 big-endian bytes, whose first four are zero, so word 14 is zero
+    /// and word 15 is the last four bytes read as a little-endian word.
+    /// </summary>
+    private static uint Nonce(uint sequenceNumber) => BinaryPrimitives.ReverseEndianness(sequenceNumber);
+
+    /// <summary>
+    /// Keys Poly1305 from block 0 of the body cipher. The whole block is consumed, so the body starts at block 1.
     /// </summary>
     private void KeyPoly(uint sequenceNumber)
     {
-        BinaryPrimitives.WriteUInt32BigEndian(_nonce.AsSpan(SequenceOffset), sequenceNumber);
-        _bodyCipher.Reseat(_nonce);
-
-        Span<byte> block = stackalloc byte[ChaChaBlockSize];
-        block.Clear();
-        _bodyCipher.ProcessBytes(block, block);
+        Span<byte> block = stackalloc byte[ChaCha20Simd.BlockSize];
+        ChaCha20Simd.Keystream(_bodyKey, counter: 0, nonce0: 0, Nonce(sequenceNumber), block);
         _poly.Init(new KeyParameter(block[..PolyKeySize]));
         CryptographicOperations.ZeroMemory(block);
     }
 
     private void CryptLength(ReadOnlySpan<byte> input, Span<byte> output, uint sequenceNumber)
     {
-        BinaryPrimitives.WriteUInt32BigEndian(_nonce.AsSpan(SequenceOffset), sequenceNumber);
-        _lengthCipher.Reseat(_nonce);
-        _lengthCipher.ProcessBytes(input, output);
-    }
-
-    /// <summary>
-    /// A ChaCha20 engine that takes a new nonce without the two allocations of <c>Init</c>, and that can be wiped.
-    /// </summary>
-    private sealed class ReseatableChaCha : ChaCha7539Engine
-    {
-        public ReseatableChaCha(ReadOnlySpan<byte> key)
+        Span<byte> block = stackalloc byte[ChaCha20Simd.BlockSize];
+        ChaCha20Simd.Keystream(_lengthKey, counter: 0, nonce0: 0, Nonce(sequenceNumber), block);
+        for (int i = 0; i < BodyOffset; i++)
         {
-            byte[] nonce = new byte[NonceSize];
-
-            // Only Init marks an engine as ready, and Init would leave a copy of its key in a KeyParameter that can't
-            // be zeroed. So it gets a key of zeros, and the real key goes in through SetKey from a copy that can be.
-            Init(forEncryption: true, new ParametersWithIV(new KeyParameter(new byte[HalfKeySize]), nonce));
-
-            byte[] copy = key.ToArray();
-            try
-            {
-                SetKey(copy, nonce);
-            }
-            finally
-            {
-                CryptographicOperations.ZeroMemory(copy);
-            }
-
-            Reset();
+            output[i] = (byte)(input[i] ^ block[i]);
         }
 
-        /// <summary>Selects a nonce with the key unchanged, and returns to block 0.</summary>
-        public void Reseat(byte[] nonce)
-        {
-            SetKey(null, nonce);
-            Reset();
-        }
-
-        /// <summary>Replaces the key in the engine's state, then overwrites its last keystream block.</summary>
-        public void Wipe()
-        {
-            SetKey(new byte[HalfKeySize], new byte[NonceSize]);
-            Reset();
-
-            Span<byte> scratch = stackalloc byte[1];
-            ProcessBytes(scratch, scratch);
-        }
+        CryptographicOperations.ZeroMemory(block);
     }
 }
