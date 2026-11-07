@@ -422,6 +422,26 @@ public class PacketCipherTests
         Assert.All(keys, key => Assert.All(key, word => Assert.Equal(0u, word)));
     }
 
+    [Theory]
+    [InlineData(Aes128Ctr, Sha256Etm)]
+    [InlineData(Aes256Ctr, Sha512Etm)]
+    public void CTR_clears_the_keystream_after_every_packet(string cipherName, string macName)
+    {
+        using PacketCipher sender = Create(cipherName, macName);
+        using PacketCipher receiver = Create(cipherName, macName);
+
+        // More than one chunk, so the loop runs twice, and a short one after it.
+        foreach (int size in new[] { 100, 9000, 20 })
+        {
+            byte[] packet = Plain(sender, size);
+            sender.Seal(packet, 0);
+            Assert.All((byte[])PrivateField(PrivateField(sender, "_keystream"), "_keystream"), b => Assert.Equal(0, b));
+
+            receiver.Open(packet, 0);
+            Assert.All((byte[])PrivateField(PrivateField(receiver, "_keystream"), "_keystream"), b => Assert.Equal(0, b));
+        }
+    }
+
     [Fact]
     public void Disposing_CTR_zeroes_its_buffers()
     {
@@ -429,9 +449,10 @@ public class PacketCipherTests
         byte[] packet = Plain(cipher, 100);
         cipher.Seal(packet, 0);
 
-        byte[] keystream = (byte[])PrivateField(cipher, "_keystream");
-        byte[] counters = (byte[])PrivateField(cipher, "_counterBlocks");
-        Assert.Contains(keystream, b => b != 0);
+        object ctr = PrivateField(cipher, "_keystream");
+        byte[] keystream = (byte[])PrivateField(ctr, "_keystream");
+        byte[] counters = (byte[])PrivateField(ctr, "_counterBlocks");
+        Assert.Contains(counters, b => b != 0);
 
         cipher.Dispose();
 

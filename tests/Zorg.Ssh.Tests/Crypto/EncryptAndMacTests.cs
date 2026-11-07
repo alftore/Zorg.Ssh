@@ -363,7 +363,8 @@ public class EncryptAndMacTests
         object keystream = PrivateField(cipher, "_keystream");
         byte[] blocks = (byte[])PrivateField(keystream, "_keystream");
         byte[] counters = (byte[])PrivateField(keystream, "_counterBlocks");
-        Assert.Contains(blocks, b => b != 0);
+        Assert.All(blocks, b => Assert.Equal(0, b));
+        Assert.Contains(counters, b => b != 0);
 
         cipher.Dispose();
         cipher.Dispose();

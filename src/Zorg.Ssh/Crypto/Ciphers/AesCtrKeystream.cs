@@ -58,6 +58,7 @@ internal sealed class AesCtrKeystream : IDisposable
             FillCounterBlocks(count, ref high, ref low);
             Transform(count);
             Xor(data[..count], _keystream.AsSpan(0, count));
+            CryptographicOperations.ZeroMemory(_keystream.AsSpan(0, count));
             data = data[count..];
         }
 
