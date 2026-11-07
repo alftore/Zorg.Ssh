@@ -325,11 +325,11 @@ internal static partial class SftpServerLinux
         DateTimeOffset.FromUnixTimeSeconds(Math.Clamp(Int64At(status, offset), 0, uint.MaxValue));
 
     /// <summary>
-    /// What <see cref="SftpServerAttributes.FromInfo"/> reports for the same entry: the entry itself, its type from the
-    /// mode, and a size only for a regular file. .NET gives a link the permission bits of its target, when there is
-    /// one, and the link's own times, so <paramref name="targetMode"/> carries the target's mode for a link.
+    /// What <see cref="SftpServerAttributes.FromInfo"/> reports for the same entry: the entry itself, never what a link
+    /// leads to (its type and permission bits are its own, 0777 for a link on Linux, as OpenSSH sends), and a size only
+    /// for a regular file. A link is never followed, so a listing doesn't look outside the root.
     /// </summary>
-    private static SftpAttributes ToAttributes(byte[] status, uint? targetMode)
+    private static SftpAttributes ToAttributes(byte[] status)
     {
         uint mode = Mode(status);
         uint type = mode & TypeMask;
@@ -338,7 +338,7 @@ internal static partial class SftpServerLinux
             type = SftpAttributes.TypeRegular;
         }
 
-        uint permissions = (targetMode ?? mode) & 0xFFF;
+        uint permissions = mode & 0xFFF;
         long size = type == SftpAttributes.TypeRegular ? Int64At(status, StatxSizeOffset) : 0;
         return SftpAttributes.ForServer(size, (UnixFileMode)permissions, type, Time(status, StatxAtimeOffset), Time(status, StatxMtimeOffset));
     }
@@ -516,17 +516,7 @@ internal static partial class SftpServerLinux
                     continue;
                 }
 
-                uint? targetMode = null;
-                if ((Mode(_status) & TypeMask) == TypeLink)
-                {
-                    byte[] target = new byte[StatxLength];
-                    if (StatX(fd, nameZ, 0, StatxMask, target) == 0)
-                    {
-                        targetMode = Mode(target);
-                    }
-                }
-
-                SftpAttributes attributes = ToAttributes(_status, targetMode);
+                SftpAttributes attributes = ToAttributes(_status);
                 ReadOnlySpan<byte> raw = nameZ.AsSpan(0, nameZ.Length - 1);
                 entry = Utf8.IsValid(raw)
                     ? new SftpServerListedEntry(Encoding.UTF8.GetString(raw), null, attributes)

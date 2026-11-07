@@ -61,12 +61,14 @@ public sealed class SftpServerLinuxListingTests : IDisposable
         Dictionary<string, SftpAttributes> dotnet = Read(SftpServerListing.OpenWithDotNet(root));
         Assert.Equal(10, dotnet.Count);
         Assert.Equal(dotnet.Keys, raw.Keys);
-        // The one difference: .NET has no permissions for a link whose target is missing, and says -1, which went out
-        // as 07777. The raw reader gives the link's own, from lstat, as OpenSSH does.
-        Assert.Equal((UnixFileMode)(-1), dotnet["dangling"].Permissions);
-        Assert.Equal((UnixFileMode)0x1FF, raw["dangling"].Permissions);
-        Assert.True(raw["dangling"].IsSymbolicLink);
-        dotnet["dangling"] = dotnet["dangling"] with { Permissions = (UnixFileMode)0x1FF };
+        // Links carry their own bits, 0777 on Linux, as OpenSSH sends: never their target's, which can be outside the
+        // root, and never .NET's -1 for a dangling link. Both readers agree on that.
+        Assert.All(new[] { "to-file", "to-dir", "dangling", ".hidden-link" }, name =>
+        {
+            Assert.True(raw[name].IsSymbolicLink, name);
+            Assert.Equal((UnixFileMode)0x1FF, raw[name].Permissions);
+            Assert.Equal((UnixFileMode)0x1FF, dotnet[name].Permissions);
+        });
 
         foreach ((string name, SftpAttributes expected) in dotnet)
         {

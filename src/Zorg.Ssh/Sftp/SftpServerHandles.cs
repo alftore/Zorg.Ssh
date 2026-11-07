@@ -168,6 +168,7 @@ internal static class SftpServerAttributes
     private const UnixFileMode DirectoryMode = (UnixFileMode)0x1ED;
     private const UnixFileMode FileMode = (UnixFileMode)0x1A4;
     private const UnixFileMode ReadOnlyFileMode = (UnixFileMode)0x124;
+    private const UnixFileMode LinkMode = (UnixFileMode)0x1FF;
 
     /// <summary>
     /// Describes an entry without following it. On Windows the permission bits are made up from the attributes. .NET
@@ -180,7 +181,9 @@ internal static class SftpServerAttributes
         FileAttributes attributes = info.Attributes;
         bool link = info.LinkTarget is not null;
         bool directory = !link && attributes.HasFlag(FileAttributes.Directory);
-        UnixFileMode mode = OperatingSystem.IsWindows() ? WindowsMode(attributes) : info.UnixFileMode;
+        // .NET gives a link its target's permission bits (or -1 when there's no target), which would describe a file
+        // that can be outside the root. A link's own bits mean nothing on Unix and are 0777 on Linux, as OpenSSH sends.
+        UnixFileMode mode = OperatingSystem.IsWindows() ? WindowsMode(attributes) : link ? LinkMode : info.UnixFileMode;
         uint type = link ? SftpAttributes.TypeSymbolicLink : directory ? SftpAttributes.TypeDirectory : SftpAttributes.TypeRegular;
         if (type == SftpAttributes.TypeRegular && LocalFile.GetFileType(info.FullName, mode) is { } real && IsSpecialFileType(real))
         {
