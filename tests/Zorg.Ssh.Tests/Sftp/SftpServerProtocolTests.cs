@@ -714,7 +714,8 @@ public sealed class SftpServerProtocolTests : IDisposable
     {
         // .NET calls a FIFO a file. A client that checks IsRegularFile before it opens, as docs/sftp.md says to, would
         // open it, and the open would block until OpenTimeout ended the session.
-        Assert.SkipUnless(OperatingSystem.IsLinux(), "FIFOs are a Unix thing, and only Linux has a call that tells their type.");
+        // On macOS this is the only run of the lstat layout the server trusts, and it needs a Mac (the CI macOS job).
+        Assert.SkipUnless(OperatingSystem.IsLinux() || OperatingSystem.IsMacOS(), "FIFOs are a Unix thing, and only Linux and macOS have a call here that tells their type.");
         using (System.Diagnostics.Process mkfifo = System.Diagnostics.Process.Start("mkfifo", _sandbox.InRoot("fifo")))
         {
             await mkfifo.WaitForExitAsync(Ct);
