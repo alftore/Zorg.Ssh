@@ -217,8 +217,14 @@ public sealed class SshPeerContainer : IAsyncDisposable
     public static async Task<string> BuildImageAsync(
         string tag, string contextDirectory, CancellationToken cancellationToken = default)
     {
+        // On Podman the default rootless network ran at about 100 KB/s on the development machine, which made a build that
+        // downloads look hung. Host networking in the build only is the same fix scripts/test-linux.sh uses. Docker's
+        // default builder doesn't take it without an entitlement, so it isn't passed there.
+        string[] network = System.IO.Path.GetFileNameWithoutExtension(ContainerCli.Path).Equals("podman", StringComparison.OrdinalIgnoreCase)
+            ? ["--network", "host"]
+            : [];
         Lazy<Task> build = Builds.GetOrAdd(tag, _ => new Lazy<Task>(() =>
-            ContainerCli.RunAsync(BuildTimeout, CancellationToken.None, "build", "-t", tag, contextDirectory)));
+            ContainerCli.RunAsync(BuildTimeout, CancellationToken.None, ["build", .. network, "-t", tag, contextDirectory])));
         await build.Value.WaitAsync(cancellationToken);
         return tag;
     }

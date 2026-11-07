@@ -45,6 +45,12 @@ Only `tests/Zorg.Ssh.Fuzz` references SharpFuzz. `src/Zorg.Ssh` gains no depende
 | libfuzzer-dotnet, commit bd39d4e | MIT | The libFuzzer driver that talks to the .NET process. Built from source in the fuzz image, and the file's SHA-256 is checked before it is compiled. | Low. A single 267-line C++ file. If the repository vanishes, copy the file into `scripts/linux/`. |
 | libclang-rt-18-dev (Ubuntu apt) | Apache-2.0 with LLVM exceptions | The libFuzzer runtime for `clang -fsanitize=fuzzer` | Low. In the image only. |
 
+## Test tools built in a container (not shipped)
+
+| Tool | Licence | Why | Risk |
+|---|---|---|---|
+| Terrapin-Scanner v1.1.3 (commit 5947c1a, RUB-NDS) | Apache-2.0, from its `LICENSE` and the GitHub licence API | One test in `TerrapinScannerTests` runs it against the server. `Peers/terrapin-scanner/Dockerfile` clones the tag, fails unless HEAD is that commit, and builds it in the image. Go modules are checked against its `go.sum`. | Low. Nothing is built or run on the host, and removing it loses one test. |
+
 ## Considered and rejected
 
 | Package | Reason |
