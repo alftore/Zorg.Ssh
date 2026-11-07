@@ -231,9 +231,25 @@ public sealed class DeferredEofTests
         await subject.CloseAsync(Ct).AsTask().WaitAsync(Limit, Ct);
 
         Assert.Equal([Eof, Close], await rig.ReadUntilAsync(Subject, Close));
-        await rig.GrantWindowAsync(subject.LocalId, ChannelRig.PacketSize);
+
+        // No window is granted and the peer doesn't answer the CLOSE: the close itself must end the write.
         await Assert.ThrowsAnyAsync<SshException>(() => writing.WaitAsync(Limit, Ct));
         Assert.Empty(await rig.RestAsync(Subject));
+    }
+
+    [Fact]
+    public async Task A_local_close_wakes_a_writer_waiting_in_a_zero_window()
+    {
+        await using ChannelRig rig = await ChannelRig.StartAsync(Ct);
+        SshChannel subject = await rig.OpenAsync(Subject, window: 0);
+        Task writing = subject.WriteAsync(new byte[16], CancellationToken.None).AsTask();
+        await Task.Delay(100, Ct);
+        Assert.False(writing.IsCompleted);
+
+        await subject.CloseAsync(Ct).AsTask().WaitAsync(Limit, Ct);
+
+        Assert.Equal(Close, await rig.NextAsync(Subject));
+        await Assert.ThrowsAnyAsync<SshException>(() => writing.WaitAsync(TimeSpan.FromSeconds(5), Ct));
     }
 
     [Fact]

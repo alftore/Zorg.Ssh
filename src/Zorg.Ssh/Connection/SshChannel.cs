@@ -295,6 +295,7 @@ internal sealed class SshChannel : IAsyncDisposable
             try
             {
                 bool eof;
+                TaskCompletionSource? window;
                 lock (_gate)
                 {
                     if (_closeSent && !_closeOwed)
@@ -305,7 +306,12 @@ internal sealed class SshChannel : IAsyncDisposable
                     _closeSent = true;
                     _closeOwed = true;
                     eof = _eofOwed;
+                    window = _windowWaiter;
+                    _windowWaiter = null;
                 }
+
+                // A writer parked in a zero window finds the channel closed now, without waiting for the peer.
+                window?.TrySetResult();
 
                 if (eof)
                 {
