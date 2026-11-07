@@ -3,11 +3,11 @@
 Zorg.Ssh speaks SFTP version 3, the version OpenSSH uses. A session runs on its own channel, and several can share one `SshClient`. Calls on one session can run at the same time.
 
 ```csharp
-SftpClient sftp = await client.OpenSftpAsync(cancellationToken);
+await using SftpClient sftp = await client.OpenSftpAsync(cancellationToken);
 string home = await sftp.GetFullPathAsync(".", cancellationToken);
 ```
 
-Dispose the session when you've finished. That closes its channel and leaves the `SshClient` connected. If the server refuses the subsystem, `OpenSftpAsync` throws `SshException`, and SFTP may not be enabled there.
+Disposing the session closes its channel and leaves the `SshClient` connected. `OpenSftpAsync` also takes `SftpClientOptions`, which holds the session's limits: `MaxReadAllBytes` and `MaxDirectoryEntries`. If the server refuses the subsystem, `OpenSftpAsync` throws `SshException`, and SFTP may not be enabled there.
 
 Paths are sent as you write them. With OpenSSH, a relative path starts from the home directory, as in these samples.
 
@@ -45,7 +45,7 @@ await sftp.WriteAllBytesAsync("reports/settings.json", "{}"u8.ToArray(), cancell
 byte[] settings = await sftp.ReadAllBytesAsync("reports/settings.json", cancellationToken);
 
 // ReadAllBytesAsync refuses anything over this limit. The default is 256 MiB.
-sftp.MaxReadAllBytes = 1024L * 1024 * 1024;
+await using SftpClient large = await client.OpenSftpAsync(new SftpClientOptions { MaxReadAllBytes = 1024L * 1024 * 1024 }, cancellationToken);
 ```
 
 ## Listing directories
@@ -65,7 +65,7 @@ await foreach (SftpEntry entry in sftp.ListDirectoryAsync("reports", cancellatio
 }
 ```
 
-Names come back exactly as the server sent them, including `.` and `..`, and they can be hostile. Check `IsSafeName` before you build a local path from one. A listing that passes `MaxDirectoryEntries`, by default 1,000,000, fails with `SftpException`.
+Names come back exactly as the server sent them, including `.` and `..`, and they can be hostile. Check `IsSafeName` before you build a local path from one. A listing that passes `SftpClientOptions.MaxDirectoryEntries`, by default 1,000,000, fails with `SftpException`.
 
 ## Downloading a tree
 
@@ -81,7 +81,7 @@ await sftp.DownloadDirectoryAsync("reports", "local-reports", maxTotalBytes: 10L
 - `maxTotalBytes` bounds the bytes across all files, and `MaxDirectoryEntries` bounds the entries across the tree. It stops at 64 levels of nesting.
 - If it fails or you cancel, the files already written stay.
 
-Set `maxTotalBytes` for any server you don't fully trust. The default is no limit.
+`maxTotalBytes` is required, so every download says how much it will take. Pass `long.MaxValue` only for a server you fully trust.
 
 ## Files as streams
 
@@ -108,7 +108,7 @@ int read = await file.ReadAsync(start, cancellationToken); // Can be less than y
 ## Attributes
 
 ```csharp
-SftpAttributes attributes = await sftp.GetAttributesAsync("reports/log.txt", cancellationToken: cancellationToken);
+SftpAttributes attributes = await sftp.GetAttributesAsync("reports/log.txt", cancellationToken);
 Console.WriteLine($"{attributes.Size} bytes, {attributes.Permissions}");
 
 await sftp.SetAttributesAsync(
@@ -119,7 +119,7 @@ await sftp.SetAttributesAsync(
 
 A property is null if the server didn't send it, and `SetAttributesAsync` changes only the properties you set. Set `Uid` with `Gid`, and `ModifiedTime` with `AccessTime`, because the protocol sends them in pairs. Times have a resolution of one second.
 
-`GetAttributesAsync` follows symbolic links unless you pass `followSymbolicLinks: false`.
+`GetAttributesAsync` follows symbolic links. `GetLinkAttributesAsync` reports on a link itself.
 
 ## Managing files
 

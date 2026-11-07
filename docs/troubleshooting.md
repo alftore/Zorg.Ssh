@@ -23,7 +23,7 @@ catch (SshNegotiationException ex)
 }
 catch (SshDisconnectedException ex)
 {
-    Console.Error.WriteLine($"The server hung up: {ex.ReasonCode} {ex.Description}");
+    Console.Error.WriteLine($"The server hung up: {ex.Reason} {ex.Description}");
 }
 catch (SshConnectionException ex)
 {
@@ -35,7 +35,7 @@ catch (SshException ex)
 }
 ```
 
-Catch the most derived type first. The hierarchy:
+Catch the most derived type first. The hierarchy, in which only `SshException`, `SshConnectionException`, `SshProtocolException` and `SftpException` have subclasses (the others are sealed):
 
 ```text
 SshException
@@ -70,6 +70,7 @@ The host key wasn't trusted, or the server didn't prove it holds that key. **Thi
 | A new host key can't be recorded: the file isn't a regular file, or didn't keep what was written | Name an ordinary file for the known hosts, or use a policy that doesn't record keys. |
 | The certificate isn't valid for this host name | The name is lower-cased and compared with each principal as a case-sensitive pattern. Connect by a name the certificate lists, and have the CA reissue it if a principal has capitals. |
 | The key isn't trusted | A `Fingerprint` or `Custom` policy refused it. Compare the fingerprint exactly, including `SHA256:`. |
+| The host key check threw | Your `HostKeyPolicy.Custom` check threw, so the key wasn't trusted. `InnerException` is your exception. |
 | The signature is invalid, or the key doesn't match the negotiated type | Treat it as an attack until you know otherwise. |
 | The server changed its host key during a rekey | The same. The connection was closed. |
 
@@ -78,6 +79,15 @@ If a server is on a port other than 22, `known_hosts` needs a `[host]:port` entr
 ## SshAuthenticationException
 
 The server refused every credential. `AttemptedMethods` lists what was tried, and `AllowedMethods` what the server last said it accepts.
+
+| Message says | What to do |
+|---|---|
+| Authentication failed | Check the user name and credentials. The message adds what went wrong with each one, such as a skipped key file or an agent that failed. |
+| The password has expired | Change it, then connect again. |
+| The banner handler threw | Your `BannerHandler` threw, so the login was stopped. `InnerException` is your exception. |
+| The keyboard-interactive handler threw, or returned the wrong number of answers | Your handler must return one answer per prompt. `InnerException`, when set, is your exception. |
+
+Your own callbacks fail closed: a host key check that throws refuses the key, and a banner or keyboard-interactive handler that throws stops the login. The message names the type of your exception but not its text, and `InnerException` holds it.
 
 - Check the user name, and that the credential matches an allowed method. A credential for a method the server doesn't offer is skipped, so it won't appear in `AttemptedMethods`.
 - If the server allows only `keyboard-interactive`, a password credential won't work. Use `FromKeyboardInteractive`.
@@ -104,7 +114,8 @@ A private key file couldn't be loaded. It stops the login at that credential, so
 
 | Message says | What to do |
 |---|---|
-| `StrictHostKeyChecking no` | Use `yes` or `accept-new`, or pass `HostKeyPolicy.AcceptAnyUnsafe()` to `FromConfig` if you mean it. |
+| `StrictHostKeyChecking no` | Use `yes`, or pass `HostKeyPolicy.AcceptAnyUnsafe()` to `FromConfig` if you mean it. |
+| `StrictHostKeyChecking accept-new` | It trusts a host the first time it's seen. Use `yes` and add the host to known_hosts, or pass `acceptNewHostKeysUnsafe: true` to `FromConfig` if you mean it. |
 | `accept-new` with a known hosts file that isn't a regular file | Name an ordinary file in `UserKnownHostsFile`, or use `StrictHostKeyChecking yes`. |
 | Uses `ProxyJump` or `ProxyCommand` | Connect to the jump host yourself and set `SshClientOptions.JumpHost`. |
 | Sets `RevokedHostKeys`, `KnownHostsCommand` or `HostKeyAlias` | Remove it, or pass your own `HostKeyPolicy` to `FromConfig`. |
@@ -135,7 +146,7 @@ The network failed or the connection closed. Connect again to continue: a client
 
 ## SshDisconnectedException
 
-The server ended the connection on purpose. It derives from `SshConnectionException`. `ReasonCode` is from RFC 4253 section 11.1, and `Description` is the server's text. Common causes are too many authentication failures, an idle timeout, and a server shutting down.
+The server ended the connection on purpose. It derives from `SshConnectionException`. `Reason` is the `SshDisconnectReason` from RFC 4253 section 11.1 (a code outside the list keeps its number), and `Description` is the server's text. Common causes are too many authentication failures, an idle timeout, and a server shutting down.
 
 ## SshNegotiationException
 
@@ -144,7 +155,7 @@ The two sides share no algorithm in one family. `Family` names it, and `LocalAlg
 | Message says | What to do |
 |---|---|
 | The peer offers X, which `SshAlgorithms.LegacyUnsafe` enables | The server has only older algorithms. Upgrade it if you can. Otherwise set `Algorithms = SshAlgorithms.LegacyUnsafe` on the client, after reading [security.md](security.md#legacy-algorithms). A warning is logged each time a legacy algorithm is used. |
-| No common key exchange, with `diffie-hellman-*` on the client and a server from this library | A server offers finite-field Diffie-Hellman only when its `KeyExchange` list names it: `LegacyUnsafe` alone isn't enough there. |
+| No common key exchange, with `diffie-hellman-*` on the client and a server from this library | A server offers finite-field Diffie-Hellman only when its `KeyExchange` list names it: `LegacyUnsafe` alone isn't enough there. Use `SshAlgorithms.LegacyUnsafe with { KeyExchange = [...] }`. |
 | The platform refused an ssh-rsa (RSA with SHA-1) signature | The operating system's crypto policy forbids SHA-1 signatures, as RHEL 9 and later do by default. Upgrade the peer to `rsa-sha2-256` or `rsa-sha2-512`. If you can't, allow SHA-1 in the system policy (on RHEL: `update-crypto-policies --set DEFAULT:SHA1`), which affects every program on the machine. |
 | `diffie-hellman-group1-sha1`, `diffie-hellman-group-exchange-*`, `ssh-dss`, `3des-cbc`, CBC, arcfour or MD5 | Not supported, and `LegacyUnsafe` doesn't add them. The peer must be upgraded or reconfigured. |
 
@@ -169,7 +180,7 @@ The base type is thrown directly in a few cases:
 | The server refused the sftp subsystem | SFTP isn't enabled there. On OpenSSH, check the `Subsystem sftp` line. |
 | The server refused to open the channel | It may have reached a session limit, such as OpenSSH's `MaxSessions`. Close something first. |
 | Too many channels are open | The same limit on this side. Close a process or SFTP session first. |
-| This is a bug in Zorg.Ssh | Something unexpected escaped. An exception from your own `HostKeyPolicy.Custom` check also arrives this way: see `InnerException`. Otherwise please report it. |
+| This is a bug in Zorg.Ssh | Something unexpected escaped. Exceptions from your own callbacks never arrive this way, so please report it. |
 
 ## SftpException
 
@@ -184,7 +195,7 @@ The server refused an SFTP request. The session stays usable unless the message 
 
 `SftpFileNotFoundException` means nothing exists at the path, and `SftpPermissionDeniedException` means the account isn't allowed. Check the path, and the account's rights on it. With a relative path, remember that it starts from the home directory on OpenSSH: `GetFullPathAsync(".")` shows it.
 
-Limits reached in the library also arrive as `SftpException`: raise `MaxReadAllBytes`, `MaxDirectoryEntries` or `maxTotalBytes` if the size is expected.
+Limits reached in the library also arrive as `SftpException`: raise `MaxReadAllBytes` or `MaxDirectoryEntries` in `SftpClientOptions`, or `maxTotalBytes`, if the size is expected.
 
 `CreateDirectoryAsync` on an existing directory usually gives `Failure`. Check with `ExistsAsync` first.
 

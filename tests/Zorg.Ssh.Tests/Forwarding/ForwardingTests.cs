@@ -50,7 +50,7 @@ public sealed class ForwardingTests : IDisposable
         JumpHost = jumpHost,
     };
 
-    private static async Task<TcpClient> ConnectAsync(SshForward forward)
+    private static async Task<TcpClient> ConnectAsync(SshLocalForward forward)
     {
         TcpClient client = new() { NoDelay = true };
         await client.ConnectAsync(forward.LocalEndPoint, Ct);
@@ -219,7 +219,7 @@ public sealed class ForwardingTests : IDisposable
         await using SshClient client = await SshClient.ConnectAsync(ClientOptions(server), Ct);
 
         await Assert.ThrowsAnyAsync<ArgumentException>(() => client.OpenTcpStreamAsync(host, port, Ct));
-        await Assert.ThrowsAnyAsync<ArgumentException>(() => client.ForwardLocalPortAsync(null, host, port, Ct));
+        await Assert.ThrowsAnyAsync<ArgumentException>(() => client.ForwardLocalPortAsync(host, port, Ct));
     }
 
     [Fact]
@@ -228,7 +228,7 @@ public sealed class ForwardingTests : IDisposable
         await using TcpService echo = TcpService.Echo();
         await using SshServer server = await StartOpenServerAsync(this);
         await using SshClient client = await SshClient.ConnectAsync(ClientOptions(server), Ct);
-        await using SshForward forward = await client.ForwardLocalPortAsync(null, "127.0.0.1", echo.Port, Ct);
+        await using SshLocalForward forward = await client.ForwardLocalPortAsync("127.0.0.1", echo.Port, Ct);
 
         Assert.True(IPAddress.IsLoopback(forward.LocalEndPoint.Address));
         Assert.NotEqual(0, forward.LocalEndPoint.Port);
@@ -244,7 +244,7 @@ public sealed class ForwardingTests : IDisposable
         await using TcpService echo = TcpService.Echo();
         await using SshServer server = await StartOpenServerAsync(this);
         await using SshClient client = await SshClient.ConnectAsync(ClientOptions(server), Ct);
-        await using SshForward forward = await client.ForwardLocalPortAsync(null, "127.0.0.1", echo.Port, Ct);
+        await using SshLocalForward forward = await client.ForwardLocalPortAsync("127.0.0.1", echo.Port, Ct);
 
         await Task.WhenAll(Enumerable.Range(0, 4).Select(async _ =>
         {
@@ -265,7 +265,7 @@ public sealed class ForwardingTests : IDisposable
         await using TcpService echo = TcpService.Echo();
         await using SshServer server = await StartOpenServerAsync(this);
         await using SshClient client = await SshClient.ConnectAsync(ClientOptions(server), Ct);
-        await using SshForward forward = await client.ForwardLocalPortAsync(null, "127.0.0.1", echo.Port, Ct);
+        await using SshLocalForward forward = await client.ForwardLocalPortAsync("127.0.0.1", echo.Port, Ct);
 
         using CancellationTokenSource done = CancellationTokenSource.CreateLinkedTokenSource(Ct);
 #pragma warning disable CA2025 // Awaited below, before the source is disposed.
@@ -306,7 +306,7 @@ public sealed class ForwardingTests : IDisposable
         await using SshServer server = await StartOpenServerAsync(this);
         await using SshClient client = await SshClient.ConnectAsync(ClientOptions(server), Ct);
 
-        await Assert.ThrowsAsync<SshException>(() => client.ForwardLocalPortAsync((IPEndPoint)taken.LocalEndpoint, "127.0.0.1", 9, Ct));
+        await Assert.ThrowsAsync<SshException>(() => client.ForwardLocalPortAsync("127.0.0.1", 9, (IPEndPoint)taken.LocalEndpoint, Ct));
     }
 
     [Fact]
@@ -327,7 +327,7 @@ public sealed class ForwardingTests : IDisposable
         });
         await using SshServer server = await StartOpenServerAsync(this);
         await using SshClient client = await SshClient.ConnectAsync(ClientOptions(server), Ct);
-        await using SshForward forward = await client.ForwardLocalPortAsync(null, "127.0.0.1", service.Port, Ct);
+        await using SshLocalForward forward = await client.ForwardLocalPortAsync("127.0.0.1", service.Port, Ct);
 
         using TcpClient connection = await ConnectAsync(forward);
         NetworkStream stream = connection.GetStream();
@@ -347,7 +347,7 @@ public sealed class ForwardingTests : IDisposable
         await using TcpService service = new(async (stream, ct) => await stream.WriteAsync(farewell, ct));
         await using SshServer server = await StartOpenServerAsync(this);
         await using SshClient client = await SshClient.ConnectAsync(ClientOptions(server), Ct);
-        await using SshForward forward = await client.ForwardLocalPortAsync(null, "127.0.0.1", service.Port, Ct);
+        await using SshLocalForward forward = await client.ForwardLocalPortAsync("127.0.0.1", service.Port, Ct);
 
         using TcpClient connection = await ConnectAsync(forward);
         await Task.Delay(100, Ct);
@@ -362,7 +362,7 @@ public sealed class ForwardingTests : IDisposable
         await using TcpService echo = TcpService.Echo();
         await using SshServer server = await StartOpenServerAsync(this);
         await using SshClient client = await SshClient.ConnectAsync(ClientOptions(server, maxForwarded: 2), Ct);
-        await using SshForward forward = await client.ForwardLocalPortAsync(null, "127.0.0.1", echo.Port, Ct);
+        await using SshLocalForward forward = await client.ForwardLocalPortAsync("127.0.0.1", echo.Port, Ct);
 
         using TcpClient first = await ConnectAsync(forward);
         using TcpClient second = await ConnectAsync(forward);
@@ -410,8 +410,8 @@ public sealed class ForwardingTests : IDisposable
         await using TcpService echo = TcpService.Echo();
         await using SshServer server = await StartOpenServerAsync(this);
         await using SshClient client = await SshClient.ConnectAsync(ClientOptions(server), Ct);
-        await using SshForward stalled = await client.ForwardLocalPortAsync(null, "127.0.0.1", flood.Port, Ct);
-        await using SshForward healthy = await client.ForwardLocalPortAsync(null, "127.0.0.1", echo.Port, Ct);
+        await using SshLocalForward stalled = await client.ForwardLocalPortAsync("127.0.0.1", flood.Port, Ct);
+        await using SshLocalForward healthy = await client.ForwardLocalPortAsync("127.0.0.1", echo.Port, Ct);
 
         using TcpClient neverRead = await ConnectAsync(stalled);
         await WaitUntilAsync(() => stalled.ActiveConnections == 1);
@@ -440,7 +440,7 @@ public sealed class ForwardingTests : IDisposable
         await using SshClient client = await SshClient.ConnectAsync(ClientOptions(server), Ct);
         await using Stream bystander = await client.OpenTcpStreamAsync("127.0.0.1", echo.Port, Ct);
 
-        SshForward forward = await client.ForwardLocalPortAsync(null, "127.0.0.1", flood.Port, Ct);
+        SshLocalForward forward = await client.ForwardLocalPortAsync("127.0.0.1", flood.Port, Ct);
         IPEndPoint endPoint = forward.LocalEndPoint;
         using TcpClient connection = await ConnectAsync(forward);
         NetworkStream stream = connection.GetStream();
@@ -481,7 +481,7 @@ public sealed class ForwardingTests : IDisposable
         await using TcpService echo = TcpService.Echo();
         await using SshServer server = await StartOpenServerAsync(this);
         SshClient client = await SshClient.ConnectAsync(ClientOptions(server), Ct);
-        SshForward forward = await client.ForwardLocalPortAsync(null, "127.0.0.1", echo.Port, Ct);
+        SshLocalForward forward = await client.ForwardLocalPortAsync("127.0.0.1", echo.Port, Ct);
         using TcpClient connection = await ConnectAsync(forward);
         await AssertEchoesAsync(connection.GetStream());
 
@@ -490,7 +490,7 @@ public sealed class ForwardingTests : IDisposable
 
         using TcpClient late = new();
         await Assert.ThrowsAnyAsync<SocketException>(() => late.ConnectAsync(forward.LocalEndPoint, Ct).AsTask());
-        await Assert.ThrowsAsync<SshConnectionException>(() => client.ForwardLocalPortAsync(null, "127.0.0.1", echo.Port, Ct));
+        await Assert.ThrowsAsync<SshConnectionException>(() => client.ForwardLocalPortAsync("127.0.0.1", echo.Port, Ct));
     }
 
     [Fact]
@@ -499,7 +499,7 @@ public sealed class ForwardingTests : IDisposable
         await using TcpService echo = TcpService.Echo();
         SshServer server = await StartOpenServerAsync(this);
         await using SshClient client = await SshClient.ConnectAsync(ClientOptions(server), Ct);
-        await using SshForward forward = await client.ForwardLocalPortAsync(null, "127.0.0.1", echo.Port, Ct);
+        await using SshLocalForward forward = await client.ForwardLocalPortAsync("127.0.0.1", echo.Port, Ct);
         await server.DisposeAsync();
 
         await WaitUntilAsync(() =>
@@ -597,7 +597,7 @@ public sealed class ForwardingTests : IDisposable
         await using TcpService echo = TcpService.Echo();
         await using SshServer server = await StartOpenServerAsync(this, maxSessions: 8);
         await using SshClient client = await SshClient.ConnectAsync(ClientOptions(server), Ct);
-        await using SshForward forward = await client.ForwardLocalPortAsync(null, "127.0.0.1", echo.Port, Ct);
+        await using SshLocalForward forward = await client.ForwardLocalPortAsync("127.0.0.1", echo.Port, Ct);
 
         // Far past the 256 channels a connection allows, and the server's 8, so a leak of either fails here.
         for (int round = 0; round < 75; round++)

@@ -134,7 +134,7 @@ It also opens a real connection: an in-memory client and server, a command, an S
 - **Vertical slices.** Tests and docs land in the same commit as the code.
 - **Tests listen on loopback only** (`IPAddress.Loopback`, never `Any`), because anything wider prompts the Windows firewall. To test several source addresses, bind the client to 127.0.0.x and connect to 127.0.0.1. `ListenAddressGuardTests` enforces this.
 - **New packages** go through the review in `docs/dependencies.md`.
-- **Legacy algorithms** live behind `SshAlgorithms.LegacyUnsafe`, and weak-crypto analyzer suppressions stay next to them, with a reason. Their names are in `Crypto/LegacyAlgorithms.cs`, and the finite-field code is reached only through `KeyExchangeExtension`, which only `LegacyUnsafe` and an explicit `KeyExchange` list create, so trimming can drop it. Never add group1, group exchange, `ssh-dss`, 3DES, arcfour, MD5 or CBC.
+- **Legacy algorithms** live behind `SshAlgorithms.LegacyUnsafe`, and weak-crypto analyzer suppressions stay next to them, with a reason. Their names are in `Crypto/LegacyAlgorithms.cs`, and the finite-field code is reached only through `KeyExchangeExtension`, which only `LegacyUnsafe` creates (its copies keep it), so trimming can drop it. A legacy name is valid only on `LegacyUnsafe` or a copy of it: never let a plain `SshAlgorithms` list reach one. Never add group1, group exchange, `ssh-dss`, 3DES, arcfour, MD5 or CBC.
 
 ## Commits
 

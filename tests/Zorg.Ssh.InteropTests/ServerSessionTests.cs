@@ -99,7 +99,7 @@ public sealed class ServerSessionTests : IDisposable
         Assert.Equal(42, code);
         Assert.Equal("alice", seen!.UserName);
         Assert.Equal(["publickey"], seen.Methods);
-        Assert.Equal(fingerprint, seen.KeyFingerprint);
+        Assert.Equal([fingerprint], seen.KeyFingerprints);
     }
 
     [InteropFact]

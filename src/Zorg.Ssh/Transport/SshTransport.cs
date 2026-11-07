@@ -330,7 +330,7 @@ internal sealed partial class SshTransport : IAsyncDisposable
     /// <summary>Gives each waiter its own exception object, with the first failure as the cause, so stack traces stay meaningful.</summary>
     private static SshException Wrap(Exception failure) => failure switch
     {
-        SshDisconnectedException e => new SshDisconnectedException(e.ReasonCode, e.Description),
+        SshDisconnectedException e => new SshDisconnectedException(e.Reason, e.Description),
         SshConnectionException e => new SshConnectionException(e.Message, e),
         SshHostKeyException e => new SshHostKeyException(e.Message, e),
         SshProtocolException e => new SshProtocolException(e.Message, e),
@@ -357,7 +357,7 @@ internal sealed partial class SshTransport : IAsyncDisposable
             description = string.Empty;
         }
 
-        return new SshDisconnectedException(code, description);
+        return new SshDisconnectedException((SshDisconnectReason)code, description);
     }
 
     private static OutgoingPacket BuildDisconnect(uint reason, string text)

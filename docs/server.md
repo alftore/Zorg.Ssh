@@ -60,7 +60,7 @@ private static bool IsPasswordRight(string userName, string password)
 }
 ```
 
-`SshPasswordRequest.ToString` leaves the password out, so logging a request can't leak it. Don't log `request.Password` yourself. A slow check runs on the client's connection, so `LoginGraceTime` and `MaxUnauthenticatedConnections` bound how many can run at once.
+`SshPasswordRequest.ToString` leaves the password out, so logging a request can't leak it. Don't log `request.Password` yourself. `RemoteEndPoint` on both requests is the client's address and port, for your own rate limits or audit log. It's null for a connection given to `ServeStreamAsync`. A slow check runs on the client's connection, so `LoginGraceTime` and `MaxUnauthenticatedConnections` bound how many can run at once.
 
 ### Public keys
 
@@ -95,7 +95,7 @@ SshServerOptions options = new()
 };
 ```
 
-A client can pass them in either order, and a password alone gets no further. `Principal.Methods` lists every method that passed, in order. `Principal.KeyFingerprints` lists every key the client proved, in order, and `KeyFingerprint` is the last. A method passes once, so a second key never counts as the second method. A login can prove at most eight keys.
+A client can pass them in either order, and a password alone gets no further. `Principal.Methods` lists every method that passed, in order. `Principal.KeyFingerprints` lists every key the client proved, in order. A method passes once, so a second key never counts as the second method. A login can prove at most eight keys.
 
 ## Sessions
 
@@ -129,7 +129,8 @@ private static async Task<int> RunSessionAsync(SshServerSession session, Cancell
 
 | `SshServerSession` | Meaning |
 |---|---|
-| `Principal` | Who logged in: `UserName`, the `Methods` that passed, and `KeyFingerprint` (the last key proven) and `KeyFingerprints` (all of them). |
+| `Principal` | Who logged in: `UserName`, the `Methods` that passed, and `KeyFingerprints` (every key proven, in order). |
+| `RemoteEndPoint` | The client's address and port. Null for a connection given to `ServeStreamAsync`. |
 | `Kind` | `Exec`, `Shell` or `Subsystem`. |
 | `Command` | The command line or subsystem name. Null for a shell. |
 | `Pty` | The terminal the client asked for, if any. |
@@ -148,7 +149,7 @@ What the server doesn't do for you:
 
 The token cancels when the server stops, and when the client closes the session or goes away. Reads on `Input` then end or fail, and writes fail with an `SshException`, so a handler that does other long work has to watch for that itself.
 
-If a handler throws, the error is logged, the client gets exit code 1, and it learns nothing about why.
+If a handler throws, the error is logged, the client gets exit code 1, and it learns nothing about why. The other handlers fail closed the same way: a password or public key handler that throws has rejected the attempt, and a `DirectTcpHandler` that throws has refused the channel. Each is logged at `Error`, with your exception attached, so keep secrets out of its message.
 
 ## SFTP
 
@@ -205,9 +206,9 @@ SshServerOptions options = new()
 
 `IdleTimeout` is like OpenSSH's `UnusedConnectionTimeout`. It starts when the client logs in, and runs only while the connection has no open channel: a session or a direct-tcpip forward that is still open, including one whose handler is still running, stops the clock. Opening a channel resets it, and it starts again from zero when the last channel closes. Keepalive traffic doesn't count as activity, so a client that only answers keepalives is still closed. The server sends a polite DISCONNECT and logs the close at `Information` level. The server never accepts remote forwards, so there is no listener that could count as use. It must be above zero.
 
-`Banner` is text sent to clients before login. `LoggerFactory` takes a standard `ILoggerFactory`, and passwords and keys aren't logged.
+`Banner` is text sent to clients before login. `LoggerFactory` takes a standard `ILoggerFactory`, and passwords and keys aren't logged. `SshServerOptions` is a record, so `with` makes a changed copy, and its `ToString` shows only the address and port.
 
-`Algorithms` narrows what the server offers, as on the client. For old clients, `SshAlgorithms.LegacyUnsafe` adds `ssh-rsa` (SHA-1) host key signatures, when a host key is RSA, `ssh-rsa` user signatures, and the `hmac-sha1` MACs. It doesn't add finite-field Diffie-Hellman: a client can make the server spend milliseconds of CPU per handshake on it before logging in, so the server offers `diffie-hellman-*` only when its `KeyExchange` list names them, as OpenSSH 10's sshd does. [security.md](security.md#legacy-algorithms) has the details.
+`Algorithms` narrows what the server offers, as on the client. For old clients, `SshAlgorithms.LegacyUnsafe` adds `ssh-rsa` (SHA-1) host key signatures, when a host key is RSA, `ssh-rsa` user signatures, and the `hmac-sha1` MACs. It doesn't add finite-field Diffie-Hellman: a client can make the server spend milliseconds of CPU per handshake on it before logging in, so the server offers `diffie-hellman-*` only when its `KeyExchange` list names them, as OpenSSH 10's sshd does. Name them on a copy of the preset: `Algorithms = SshAlgorithms.LegacyUnsafe with { KeyExchange = ["curve25519-sha256", "diffie-hellman-group14-sha256"] }`. A plain `new SshAlgorithms` refuses legacy names. [security.md](security.md#legacy-algorithms) has the details.
 
 ### Keepalive
 
@@ -215,7 +216,7 @@ Keepalive frees the slot of a client that has gone. It's on by default, and it s
 
 - If nothing arrives for one interval, the server sends a `keepalive@openssh.com` request. Any packet counts as an answer, so a busy connection sends no probes. A client that doesn't know global requests can answer `UNIMPLEMENTED`, and that counts too.
 - Only one probe is out at a time. After it, `KeepAliveCountMax` more silent intervals end the connection. With the defaults that's 20 minutes of silence. Set a shorter interval to notice sooner, at the cost of dropping a connection over a shorter network break. The default is the one Debian's OpenSSH uses for `BatchMode`, because upstream OpenSSH leaves it off and relies on TCP keepalive, which can't see a peer that stops reading.
-- A client that keeps sending but has stopped reading is never silent. So one socket write that doesn't finish within the interval times the count also ends the connection. With the defaults that's 90 seconds, or up to one interval more.
+- A client that keeps sending but has stopped reading is never silent. So one socket write that doesn't finish within the interval times the count also ends the connection. With the defaults that's 15 minutes, or up to one interval more.
 - When the connection ends, each handler's token is cancelled, and its stream calls throw `SshConnectionException`. A handler that ignores both still holds its slot.
 - A client that answers probes but grants no window is alive. The connection stays up, and a handler's write waits. Use the handler's token, and a timeout of your own if you need one.
 - `TimeSpan.Zero` turns all of this off. The interval can be 1 second to 1 day, and the count 1 to 1000.

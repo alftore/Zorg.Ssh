@@ -2,11 +2,16 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text;
 using Microsoft.Extensions.Logging;
 
 namespace Zorg.Ssh;
 
-/// <summary>What <see cref="SshClient.ConnectAsync"/> needs. Host, user name and host key policy are required, so that no connection is accidentally unverified.</summary>
+/// <summary>
+/// What <see cref="SshClient.ConnectAsync"/> needs. Host, user name and host key policy are required, so that no
+/// connection is accidentally unverified. Use <c>with</c> to change a copy, for example one from <see cref="FromConfig"/>.
+/// <see cref="ToString"/> shows only the host, port and user name, so logging options can't leak a credential.
+/// </summary>
 /// <example>
 /// <code>
 /// SshClientOptions options = new()
@@ -16,9 +21,10 @@ namespace Zorg.Ssh;
 ///     Credentials = [SshCredential.FromPassword(password)],
 ///     HostKeyPolicy = HostKeyPolicy.Fingerprint(knownFingerprint),
 /// };
+/// SshClientOptions patient = options with { ConnectTimeout = TimeSpan.FromMinutes(2) };
 /// </code>
 /// </example>
-public sealed class SshClientOptions
+public sealed record SshClientOptions
 {
     /// <summary>Gets the host name or address to connect to.</summary>
     public required string Host { get; init; }
@@ -70,7 +76,7 @@ public sealed class SshClientOptions
     /// <summary>Gets the clock, for tests.</summary>
     internal TimeProvider TimeProvider { get; init; } = TimeProvider.System;
 
-    /// <summary>Gets the most output <see cref="SshClient.ExecuteAsync"/> keeps, per stream, before it fails. The default is 64 MiB. Use <see cref="SshClient.StartProcessAsync"/> for more.</summary>
+    /// <summary>Gets the most output <see cref="SshClient.ExecuteAsync(string, SshProcessOptions, System.Threading.CancellationToken)"/> keeps, per stream, before it fails. The default is 64 MiB. Use <see cref="SshClient.StartProcessAsync"/> for more.</summary>
     public int MaxCommandOutputBytes { get; init; } = 64 * 1024 * 1024;
 
     /// <summary>
@@ -103,11 +109,21 @@ public sealed class SshClientOptions
     /// </summary>
     public TimeSpan SocksHandshakeTimeout { get; init; } = TimeSpan.FromSeconds(10);
 
-    /// <summary>Gets a handler for the server's login banner. Its text is chosen by the server.</summary>
+    /// <summary>
+    /// Gets a handler for the server's login banner. Its text is chosen by the server. If the handler throws, the login
+    /// stops with <see cref="SshAuthenticationException"/> whose <see cref="Exception.InnerException"/> is yours.
+    /// </summary>
     public Action<string>? BannerHandler { get; init; }
 
     /// <summary>Gets the logger factory. Secrets are never logged.</summary>
     public ILoggerFactory? LoggerFactory { get; init; }
+
+    /// <summary>Prints the host, port and user name only. Guarantee 4: credentials and handlers never reach a string.</summary>
+    private bool PrintMembers(StringBuilder builder)
+    {
+        builder.Append("Host = ").Append(Host).Append(", Port = ").Append(Port).Append(", UserName = ").Append(UserName);
+        return true;
+    }
 
     /// <summary>
     /// Makes options from an OpenSSH config file, for the host as you'd name it to <c>ssh</c>. Credentials are the agent,
@@ -115,7 +131,9 @@ public sealed class SshClientOptions
     /// An agent that isn't there and an identity file that can't be used, such as an encrypted one, are passed over.
     /// <c>StrictHostKeyChecking no</c> throws <see cref="SshConfigException"/> unless
     /// <paramref name="hostKeyPolicy"/> is given, because a config file mustn't silently weaken security. The check
-    /// can be dropped only by passing <see cref="HostKeyPolicy.AcceptAnyUnsafe"/> here.
+    /// can be dropped only by passing <see cref="HostKeyPolicy.AcceptAnyUnsafe"/> here. For the same reason
+    /// <c>StrictHostKeyChecking accept-new</c>, which trusts a host the first time it's seen, throws unless
+    /// <paramref name="acceptNewHostKeysUnsafe"/> is true or <paramref name="hostKeyPolicy"/> is given.
     /// A host with <c>ProxyJump</c> or <c>ProxyCommand</c> throws <see cref="SshConfigException"/>: this method can't follow
     /// it, and going direct could bypass a required bastion. Whatever the config leaves unsaid, anything it says that this
     /// method can't honour and that decides who is trusted throws too, and never weakens the check silently:
@@ -134,6 +152,11 @@ public sealed class SshClientOptions
     /// <param name="hostKeyPolicy">A policy to use in place of what the config says.</param>
     /// <param name="credentials">More credentials to try after those from the config, such as a key with a passphrase.</param>
     /// <param name="loggerFactory">The logger factory for the options, and for notes about the config.</param>
+    /// <param name="acceptNewHostKeysUnsafe">
+    /// Lets <c>StrictHostKeyChecking accept-new</c> in the config take effect: a host seen for the first time is trusted
+    /// and recorded, as <c>ssh</c> does. <b>A first connection can then be intercepted without anyone noticing.</b>
+    /// It changes nothing for a host the config doesn't set that for.
+    /// </param>
     /// <returns>The options.</returns>
     /// <exception cref="SshConfigException">The config can't be used.</exception>
     /// <example>
@@ -147,7 +170,8 @@ public sealed class SshClientOptions
         SshConfig? config = null,
         HostKeyPolicy? hostKeyPolicy = null,
         IReadOnlyList<SshCredential>? credentials = null,
-        ILoggerFactory? loggerFactory = null)
+        ILoggerFactory? loggerFactory = null,
+        bool acceptNewHostKeysUnsafe = false)
     {
         ArgumentException.ThrowIfNullOrEmpty(hostAlias);
         ILogger? logger = loggerFactory?.CreateLogger<SshConfig>();
@@ -189,6 +213,12 @@ public sealed class SshClientOptions
                 if (host.UserKnownHostsFiles.Count > 0 && LocalFile.GetKind(host.UserKnownHostsFiles[0]) == LocalFileKind.Other)
                 {
                     throw new SshConfigException($"The config says StrictHostKeyChecking accept-new for {hostAlias} with UserKnownHostsFile {host.UserKnownHostsFiles[0]}, which isn't a regular file, so no key could be recorded and every connection would trust any key. Name an ordinary file, or use StrictHostKeyChecking yes.");
+                }
+
+                // Guarantee 2: trust on first use is a weaker check, so a config file can't choose it alone.
+                if (!acceptNewHostKeysUnsafe)
+                {
+                    throw new SshConfigException($"The config says StrictHostKeyChecking accept-new for {hostAlias}, which trusts a host the first time it's seen, so a first connection could be intercepted without anyone noticing. Pass acceptNewHostKeysUnsafe: true to FromConfig if you mean it, or use StrictHostKeyChecking yes.");
                 }
             }
         }

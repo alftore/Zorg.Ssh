@@ -9,14 +9,13 @@ namespace Zorg.Ssh.Examples;
 /// <summary>The samples in docs/sftp.md. Paths are relative, so OpenSSH resolves them from the home directory.</summary>
 internal static class SftpExamples
 {
-    public static async Task<SftpClient> Open(SshClient client, CancellationToken cancellationToken)
+    public static async Task Open(SshClient client, CancellationToken cancellationToken)
     {
         // doc:sftp-open
-        SftpClient sftp = await client.OpenSftpAsync(cancellationToken);
+        await using SftpClient sftp = await client.OpenSftpAsync(cancellationToken);
         string home = await sftp.GetFullPathAsync(".", cancellationToken);
         // end-doc
         Console.WriteLine(home);
-        return sftp;
     }
 
     public static async Task Transfer(SftpClient sftp, CancellationToken cancellationToken)
@@ -39,14 +38,14 @@ internal static class SftpExamples
         // end-doc
     }
 
-    public static async Task SmallFiles(SftpClient sftp, CancellationToken cancellationToken)
+    public static async Task SmallFiles(SshClient client, SftpClient sftp, CancellationToken cancellationToken)
     {
         // doc:sftp-small-files
         await sftp.WriteAllBytesAsync("reports/settings.json", "{}"u8.ToArray(), cancellationToken);
         byte[] settings = await sftp.ReadAllBytesAsync("reports/settings.json", cancellationToken);
 
         // ReadAllBytesAsync refuses anything over this limit. The default is 256 MiB.
-        sftp.MaxReadAllBytes = 1024L * 1024 * 1024;
+        await using SftpClient large = await client.OpenSftpAsync(new SftpClientOptions { MaxReadAllBytes = 1024L * 1024 * 1024 }, cancellationToken);
         // end-doc
         Console.WriteLine(settings.Length);
     }
@@ -93,7 +92,7 @@ internal static class SftpExamples
     public static async Task Attributes(SftpClient sftp, CancellationToken cancellationToken)
     {
         // doc:sftp-attributes
-        SftpAttributes attributes = await sftp.GetAttributesAsync("reports/log.txt", cancellationToken: cancellationToken);
+        SftpAttributes attributes = await sftp.GetAttributesAsync("reports/log.txt", cancellationToken);
         Console.WriteLine($"{attributes.Size} bytes, {attributes.Permissions}");
 
         await sftp.SetAttributesAsync(

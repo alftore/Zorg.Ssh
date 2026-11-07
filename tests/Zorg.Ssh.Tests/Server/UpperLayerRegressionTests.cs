@@ -314,7 +314,7 @@ public sealed class UpperLayerRegressionTests : IDisposable
                 PublicKeyHandler = (_, _) => ValueTask.FromResult(SshAuthDecision.Accept),
                 PasswordHandler = (_, _) => ValueTask.FromResult(SshAuthDecision.Accept),
                 SessionHandler = (s, _) => Task.FromResult(
-                    s.Principal.KeyFingerprints is [var only] && only == expected && s.Principal.KeyFingerprint == expected ? 0 : 1),
+                    s.Principal.KeyFingerprints is [var only] && only == expected ? 0 : 1),
             },
             Ct);
 

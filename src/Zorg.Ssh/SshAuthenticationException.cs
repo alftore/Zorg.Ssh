@@ -12,7 +12,7 @@ namespace Zorg.Ssh;
 /// }
 /// </code>
 /// </example>
-public class SshAuthenticationException : SshException
+public sealed class SshAuthenticationException : SshException
 {
     /// <summary>Creates an exception with a default message.</summary>
     public SshAuthenticationException()

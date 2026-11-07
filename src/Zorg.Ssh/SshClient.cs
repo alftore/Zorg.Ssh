@@ -17,17 +17,26 @@ using Zorg.Ssh.Transport;
 namespace Zorg.Ssh;
 
 /// <summary>What a finished command produced.</summary>
-/// <param name="ExitCode">The exit code, or null if the command ended on a signal or the server sent none.</param>
-/// <param name="ExitSignal">The name of the signal that ended the command, if any.</param>
-/// <param name="StandardOutput">Everything on stdout, as UTF-8.</param>
-/// <param name="StandardError">Everything on stderr, as UTF-8.</param>
 /// <example>
 /// <code>
 /// SshCommandResult result = await client.ExecuteAsync("uname -a", cancellationToken);
 /// Console.WriteLine(result.StandardOutput);
 /// </code>
 /// </example>
-public sealed record SshCommandResult(int? ExitCode, string? ExitSignal, string StandardOutput, string StandardError);
+public sealed record SshCommandResult
+{
+    /// <summary>Gets the exit code, or null if the command ended on a signal or the server sent none.</summary>
+    public int? ExitCode { get; init; }
+
+    /// <summary>Gets the name of the signal that ended the command, if any.</summary>
+    public string? ExitSignal { get; init; }
+
+    /// <summary>Gets everything on stdout, as UTF-8.</summary>
+    public required string StandardOutput { get; init; }
+
+    /// <summary>Gets everything on stderr, as UTF-8.</summary>
+    public required string StandardError { get; init; }
+}
 
 /// <summary>Terminal settings for <see cref="SshProcessOptions.Pty"/>.</summary>
 /// <example>
@@ -40,11 +49,32 @@ public sealed class SshPtyOptions
     /// <summary>Gets the terminal type. The default is <c>xterm-256color</c>.</summary>
     public string Terminal { get; init; } = "xterm-256color";
 
+    private readonly int _columns = 80;
+    private readonly int _rows = 24;
+
     /// <summary>Gets the width in characters. The default is 80.</summary>
-    public int Columns { get; init; } = 80;
+    /// <exception cref="ArgumentOutOfRangeException">The value is zero or less.</exception>
+    public int Columns
+    {
+        get => _columns;
+        init
+        {
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(value);
+            _columns = value;
+        }
+    }
 
     /// <summary>Gets the height in characters. The default is 24.</summary>
-    public int Rows { get; init; } = 24;
+    /// <exception cref="ArgumentOutOfRangeException">The value is zero or less.</exception>
+    public int Rows
+    {
+        get => _rows;
+        init
+        {
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(value);
+            _rows = value;
+        }
+    }
 }
 
 /// <summary>Settings for <see cref="SshClient.StartProcessAsync"/>.</summary>
@@ -100,9 +130,14 @@ public sealed partial class SshClient : IAsyncDisposable
     /// <param name="options">Where to connect, and how to log in.</param>
     /// <param name="cancellationToken">Cancels the connection attempt.</param>
     /// <returns>A connected client.</returns>
-    /// <exception cref="SshHostKeyException">The host key wasn't trusted.</exception>
-    /// <exception cref="SshAuthenticationException">The server refused every credential.</exception>
-    /// <exception cref="SshConnectionException">The network failed.</exception>
+    /// <exception cref="SshHostKeyException">The host key wasn't trusted, or your <see cref="HostKeyPolicy.Custom"/> check threw. Show it to a person: it can mean an attack.</exception>
+    /// <exception cref="SshAuthenticationException">The server refused every credential, or a banner or keyboard-interactive handler of yours threw. An agent that failed is named in the message, not thrown as <see cref="SshAgentException"/>.</exception>
+    /// <exception cref="SshKeyFileException">A private key file couldn't be read, or its passphrase is wrong. An identity file that <see cref="SshClientOptions.FromConfig"/> added is passed over instead.</exception>
+    /// <exception cref="SshNegotiationException">The two sides share no algorithm in one family.</exception>
+    /// <exception cref="SshDisconnectedException">The server ended the connection, with a reason code.</exception>
+    /// <exception cref="SshConnectionException">The network failed, or the connection timed out.</exception>
+    /// <exception cref="SshProtocolException">The server broke the protocol.</exception>
+    /// <exception cref="ArgumentException">An option is out of range, or <see cref="SshClientOptions.Algorithms"/> names an algorithm that isn't supported.</exception>
     /// <example>
     /// <code>
     /// await using SshClient client = await SshClient.ConnectAsync(options, cancellationToken);
@@ -194,9 +229,23 @@ public sealed partial class SshClient : IAsyncDisposable
     /// }
     /// </code>
     /// </example>
-    public async Task<SshCommandResult> ExecuteAsync(string command, CancellationToken cancellationToken = default)
+    public Task<SshCommandResult> ExecuteAsync(string command, CancellationToken cancellationToken) =>
+        ExecuteAsync(command, null, cancellationToken);
+
+    /// <summary>Runs a command to the end with environment or terminal settings, and returns its output.</summary>
+    /// <param name="command">The command line. The server's shell interprets it, so quote anything that comes from a user.</param>
+    /// <param name="options">Terminal and environment settings, as for <see cref="StartProcessAsync"/>. With a terminal, stderr arrives in <see cref="SshCommandResult.StandardOutput"/>.</param>
+    /// <param name="cancellationToken">Stops waiting and closes the channel.</param>
+    /// <returns>The exit status and output.</returns>
+    /// <example>
+    /// <code>
+    /// SshProcessOptions options = new() { Environment = new Dictionary&lt;string, string&gt; { ["LANG"] = "C" } };
+    /// SshCommandResult result = await client.ExecuteAsync("locale", options, cancellationToken);
+    /// </code>
+    /// </example>
+    public async Task<SshCommandResult> ExecuteAsync(string command, SshProcessOptions? options = null, CancellationToken cancellationToken = default)
     {
-        SshProcess process = await StartProcessAsync(command, null, cancellationToken).ConfigureAwait(false);
+        SshProcess process = await StartProcessAsync(command, options, cancellationToken).ConfigureAwait(false);
         await using (process.ConfigureAwait(false))
         {
             await process.StandardInput.DisposeAsync().ConfigureAwait(false);
@@ -210,7 +259,13 @@ public sealed partial class SshClient : IAsyncDisposable
 #pragma warning restore CA2025
             await Task.WhenAll(output, error).ConfigureAwait(false);
             await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
-            return new SshCommandResult(process.ExitCode, process.ExitSignal, await output.ConfigureAwait(false), await error.ConfigureAwait(false));
+            return new SshCommandResult
+            {
+                ExitCode = process.ExitCode,
+                ExitSignal = process.ExitSignal,
+                StandardOutput = await output.ConfigureAwait(false),
+                StandardError = await error.ConfigureAwait(false),
+            };
         }
     }
 
@@ -249,7 +304,7 @@ public sealed partial class SshClient : IAsyncDisposable
     public Task<SshProcess> StartShellAsync(SshProcessOptions? options = null, CancellationToken cancellationToken = default) =>
         StartAsync("shell", null, options ?? new SshProcessOptions { Pty = new SshPtyOptions() }, cancellationToken);
 
-    /// <summary>Starts an SFTP session on a new channel. Several sessions can share one client.</summary>
+    /// <summary>Starts an SFTP session on a new channel, with the default limits. Several sessions can share one client.</summary>
     /// <param name="cancellationToken">Cancels the start. It doesn't affect a session that has started.</param>
     /// <returns>The session. Disposing it closes its channel, and leaves this client connected.</returns>
     /// <exception cref="SshException">The server refused the subsystem, so SFTP may not be enabled there.</exception>
@@ -259,10 +314,24 @@ public sealed partial class SshClient : IAsyncDisposable
     /// byte[] config = await sftp.ReadAllBytesAsync("/etc/app.conf", cancellationToken);
     /// </code>
     /// </example>
-    public async Task<SftpClient> OpenSftpAsync(CancellationToken cancellationToken = default)
+    public Task<SftpClient> OpenSftpAsync(CancellationToken cancellationToken) =>
+        OpenSftpAsync(null, cancellationToken);
+
+    /// <summary>Starts an SFTP session on a new channel, with limits of your own. Several sessions can share one client.</summary>
+    /// <param name="options">The session's limits. Null uses the defaults.</param>
+    /// <param name="cancellationToken">Cancels the start. It doesn't affect a session that has started.</param>
+    /// <returns>The session. Disposing it closes its channel, and leaves this client connected.</returns>
+    /// <exception cref="SshException">The server refused the subsystem, so SFTP may not be enabled there.</exception>
+    /// <example>
+    /// <code>
+    /// await using SftpClient sftp = await client.OpenSftpAsync(new SftpClientOptions { MaxReadAllBytes = 1024L * 1024 * 1024 }, cancellationToken);
+    /// </code>
+    /// </example>
+    public async Task<SftpClient> OpenSftpAsync(SftpClientOptions? options = null, CancellationToken cancellationToken = default)
     {
+        options ??= SftpClientOptions.Default;
         SshChannel channel = await OpenSubsystemAsync("sftp", cancellationToken).ConfigureAwait(false);
-        return await SftpClient.OpenOverChannelAsync(channel, ServerVersion, cancellationToken).ConfigureAwait(false);
+        return await SftpClient.OpenOverChannelAsync(channel, ServerVersion, options, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>Closes every forward, and then the connection. A client that used this one as a jump host loses its connection too.</summary>
@@ -504,6 +573,7 @@ public sealed class SshProcess : IAsyncDisposable
     /// <param name="rows">The height in characters.</param>
     /// <param name="cancellationToken">Cancels the send.</param>
     /// <returns>A task that completes when the request is queued.</returns>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="columns"/> or <paramref name="rows"/> is zero or less.</exception>
     /// <example>
     /// <code>
     /// await shell.ResizeAsync(120, 40, cancellationToken);
@@ -511,6 +581,8 @@ public sealed class SshProcess : IAsyncDisposable
     /// </example>
     public async Task ResizeAsync(int columns, int rows, CancellationToken cancellationToken = default)
     {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(columns);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(rows);
         SshRequestWriter writer = new();
         writer.UInt32((uint)columns);
         writer.UInt32((uint)rows);

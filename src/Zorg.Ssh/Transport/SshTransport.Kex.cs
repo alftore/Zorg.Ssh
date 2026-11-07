@@ -388,10 +388,11 @@ internal sealed partial class SshTransport
         {
             trusted = await _options.HostKeyValidator!(hostKey, cancellationToken).ConfigureAwait(false);
         }
-        catch (Exception ex) when (ex is not SshException and not OperationCanceledException)
+        catch (Exception ex) when (ex is not SshException && !(ex is OperationCanceledException && cancellationToken.IsCancellationRequested))
         {
-            // Application code failed. The key isn't trusted, and that's no bug of ours.
-            throw new SshHostKeyException("The host key check failed, so the key isn't trusted. See the inner exception.", ex);
+            // Application code failed, so the key isn't trusted: fail closed. Only the type is named, because the
+            // application's message could hold anything.
+            throw new SshHostKeyException($"The host key check threw {ex.GetType().Name}, so the key isn't trusted and the connection was closed. See the inner exception.", ex);
         }
 
         if (!trusted)

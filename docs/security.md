@@ -7,7 +7,7 @@
 These are the rules the library is built around. Each has tests, and a change that weakens one needs a design decision. They're goals backed by tests, not proofs.
 
 1. **No message is acted on in a state that doesn't allow it.** One table, `Transport/MessagePolicy`, decides which message may arrive when. The default is deny. A connection message before login ends the connection.
-2. **Nothing proceeds on an unverified host key or unauthenticated user.** There's no default host key policy. Anything that weakens a check has `Unsafe` in its name: `HostKeyPolicy.AcceptAnyUnsafe` and the `addUnknownHostsUnsafe` argument. On the server, a public key handler's answer counts only once the client's signature has been verified.
+2. **Nothing proceeds on an unverified host key or unauthenticated user.** There's no default host key policy. Anything that weakens a check has `Unsafe` in its name: `HostKeyPolicy.AcceptAnyUnsafe`, `HostKeyPolicy.KnownHostsFileAcceptNewUnsafe` (trust on first use), the `acceptNewHostKeysUnsafe` argument of `SshClientOptions.FromConfig` (which `StrictHostKeyChecking accept-new` needs), and `SshAlgorithms.LegacyUnsafe`, the only way to reach a legacy algorithm. On the server, a public key handler's answer counts only once the client's signature has been verified.
 3. **A hostile peer can't cause unbounded memory, a hang or an unhandled exception type.** Buffers, queues and counts have limits, and waits can be cancelled. Failures a peer causes reach you as `SshException` or a derived type.
 4. **Secrets never reach logs or exception messages, and are zeroed after use.** See the limits on this under [Secrets](#secrets).
 
@@ -105,7 +105,13 @@ Not offered by default: `ssh-rsa` with SHA-1, `diffie-hellman-*` key exchange an
 - Host keys and user signatures: `ssh-rsa`, RSA with SHA-1.
 - MACs: `hmac-sha1-etm@openssh.com`, `hmac-sha1`.
 
-It's for network equipment, BMCs and old servers that have nothing better, such as HPE iLO 4 and 5, classic Cisco IOS, older Dropbear and RHEL 6. A peer that has anything better still gets it: the legacy names come last, and each side's `KEXINIT` is in the signed exchange hash, so a man in the middle can't strip the modern names. Choosing a legacy algorithm logs a warning that names it. A narrowed list can also name any of these directly.
+It's for network equipment, BMCs and old servers that have nothing better, such as HPE iLO 4 and 5, classic Cisco IOS, older Dropbear and RHEL 6. A peer that has anything better still gets it: the legacy names come last, and each side's `KEXINIT` is in the signed exchange hash, so a man in the middle can't strip the modern names. Choosing a legacy algorithm logs a warning that names it.
+
+The legacy names are accepted only on `LegacyUnsafe` and on copies made from it with `with`, so the word `Unsafe` is always in the code that turns one on. A plain `new SshAlgorithms { HostKeys = ["ssh-rsa"] }` throws `ArgumentException`, and the message points at `LegacyUnsafe`. To narrow or reorder the preset, copy it:
+
+```csharp
+SshAlgorithms algorithms = SshAlgorithms.LegacyUnsafe with { KeyExchange = ["curve25519-sha256", "diffie-hellman-group14-sha256"] };
+```
 
 Why each is acceptable as an opt-in, and why it stays opt-in:
 
@@ -114,7 +120,7 @@ Why each is acceptable as an opt-in, and why it stays opt-in:
 - **`ssh-rsa`.** SHA-1 chosen-prefix collisions are practical (Shambles, 2020), and they threaten long-lived signed data. A key exchange signature covers a hash of fresh values from both sides, so a precomputed collision doesn't help against it. The library accepts or makes a SHA-1 signature only where `ssh-rsa` was negotiated from a list that names it. Certificates signed by their CA with SHA-1 are refused whatever the lists say. Without `server-sig-algs`, a client with `ssh-rsa` allowed signs RSA user keys with it, as OpenSSH does; otherwise it uses `rsa-sha2-512`. Platforms whose crypto policy forbids SHA-1 signatures (RHEL 9 and later by default) refuse it, and that becomes `SshNegotiationException` saying so.
 - **HMAC-SHA-1.** HMAC doesn't depend on SHA-1's collision resistance, and there is no practical forgery. It's opt-in because policies forbid SHA-1.
 
-Trimming and Native AOT leave the finite-field code out of an application that never uses `LegacyUnsafe` and never sets `SshAlgorithms.KeyExchange` (checked with a trimmed publish: none of the finite-field types are left). The SHA-1 MAC and signature paths are a few lines in shared classes and stay.
+Trimming and Native AOT leave the finite-field code out of an application that never uses `LegacyUnsafe` (checked with a trimmed publish: none of the finite-field types are left). The SHA-1 MAC and signature paths are a few lines in shared classes and stay.
 
 BouncyCastle provides Ed25519, X25519, ML-KEM, sntrup761 and Poly1305 (for ChaCha20-Poly1305) where the .NET libraries don't. The ChaCha20 cipher itself is Zorg.Ssh's own code, which has no secret-dependent branch or index, and whose key words are zeroed on dispose. Its working state lives in registers and stack slots, which managed code can't zero. Neither BouncyCastle's code nor ours has been reviewed as part of this project. See [dependencies.md](dependencies.md).
 

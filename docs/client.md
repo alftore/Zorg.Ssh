@@ -49,13 +49,19 @@ SshClientOptions options = new()
 | `ConnectTimeout` | 30 seconds | One limit for TCP connect, key exchange and login together. |
 | `KeepAliveInterval` | 5 minutes | How long the connection can be silent before a probe goes out. `TimeSpan.Zero` turns it off. See [Keepalive](#keepalive). |
 | `KeepAliveCountMax` | 3 | How many more silent intervals end the connection. |
+| `Algorithms` | `SshAlgorithms.Default` | The algorithms to offer. See below. |
 | `MaxCommandOutputBytes` | 64 MiB | The most `ExecuteAsync` keeps per stream before it fails. |
-| `BannerHandler` | none | Receives the server's login banner. The server chooses that text. |
+| `JumpHost` | none | A connected `SshClient` to reach this host through, as `ssh -J` does. See [Through a jump host](#through-a-jump-host). |
+| `MaxForwardedConnections` | 64 | The most connections each forward carries at once. Past it, a forward refuses new ones until one ends. |
+| `SocksHandshakeTimeout` | 10 seconds | The time a client of `ForwardDynamicPortAsync` has to finish its SOCKS handshake. |
+| `BannerHandler` | none | Receives the server's login banner. The server chooses that text. If it throws, the login stops. |
 | `LoggerFactory` | none | A standard `ILoggerFactory`. Secrets aren't logged. |
 
-`Algorithms` narrows the algorithm lists, for example to meet a policy. The defaults need no tuning, and [security.md](security.md#algorithms) lists them. Against a server with no AEAD cipher and no EtM MAC, such as Dropbear or some appliances, the client uses AES-CTR with `hmac-sha2-512` or `hmac-sha2-256` (encrypt-and-MAC), which security.md explains.
+`SshClientOptions` is a record, so `with` makes a changed copy, for example of what `FromConfig` returns. Its `ToString` shows only the host, port and user name, so logging the options can't leak a credential.
 
-For old network equipment, BMCs and servers that offer only SHA-1 or finite-field key exchange, set `Algorithms = SshAlgorithms.LegacyUnsafe`. It appends `diffie-hellman-group14-sha256`, `diffie-hellman-group16-sha512` and `diffie-hellman-group14-sha1`, `ssh-rsa` host keys and signatures, and `hmac-sha1-etm@openssh.com` and `hmac-sha1` after the defaults, so a modern server still gets modern algorithms. Each legacy algorithm that is chosen logs a warning naming it. [security.md](security.md#legacy-algorithms) explains the cost of each. With it, an RSA key signs with `ssh-rsa` when the server sends no `server-sig-algs`, as OpenSSH does.
+`Algorithms` narrows the algorithm lists, for example to meet a policy. The defaults need no tuning, and [security.md](security.md#algorithms) lists them. A name that isn't supported throws `ArgumentException` when you connect. Against a server with no AEAD cipher and no EtM MAC, such as Dropbear or some appliances, the client uses AES-CTR with `hmac-sha2-512` or `hmac-sha2-256` (encrypt-and-MAC), which security.md explains.
+
+For old network equipment, BMCs and servers that offer only SHA-1 or finite-field key exchange, set `Algorithms = SshAlgorithms.LegacyUnsafe`. It appends `diffie-hellman-group14-sha256`, `diffie-hellman-group16-sha512` and `diffie-hellman-group14-sha1`, `ssh-rsa` host keys and signatures, and `hmac-sha1-etm@openssh.com` and `hmac-sha1` after the defaults, so a modern server still gets modern algorithms. Each legacy algorithm that is chosen logs a warning naming it. [security.md](security.md#legacy-algorithms) explains the cost of each. With it, an RSA key signs with `ssh-rsa` when the server sends no `server-sig-algs`, as OpenSSH does. The legacy names work only on `LegacyUnsafe` and its copies, so narrow it with `with`, for example `SshAlgorithms.LegacyUnsafe with { HostKeys = ["ssh-rsa"] }`. A plain `new SshAlgorithms { ... }` that names one throws.
 
 ```csharp
 SshClientOptions options = new()
@@ -104,10 +110,10 @@ await using SshClient inner = await SshClient.ConnectAsync(new SshClientOptions
 
 ```csharp
 // ssh -L: a local port that leads to a target the server can reach. Null binds a free loopback port.
-await using SshForward local = await client.ForwardLocalPortAsync(null, "db.internal", 5432, cancellationToken);
+await using SshLocalForward local = await client.ForwardLocalPortAsync("db.internal", 5432, cancellationToken);
 
 // ssh -D: a SOCKS5 proxy, CONNECT only, no login. SOCKS4 isn't supported.
-await using SshForward proxy = await client.ForwardDynamicPortAsync(null, cancellationToken);
+await using SshLocalForward proxy = await client.ForwardDynamicPortAsync(null, cancellationToken);
 
 // ssh -R: a port on the server that leads back here. Port 0 lets the server choose.
 await using SshRemoteForward remote = await client.ForwardRemotePortAsync("127.0.0.1", 0, "localhost", 8080, cancellationToken);
@@ -161,7 +167,7 @@ HostKeyPolicy pinned = HostKeyPolicy.Fingerprint("SHA256:n4cHVJ8c0vCpJiQJCbOgLEU
 
 - `KnownHostsFile` reads an OpenSSH `known_hosts` file, by default `~/.ssh/known_hosts`. It understands hashed host names, `[host]:port` entries and `@revoked`. An unknown host is refused, and so is a host whose key has changed. A file that doesn't exist counts as empty, so every host is unknown. One that exists but isn't a regular file, or is too large, throws `SshHostKeyException`. `@cert-authority` lines make host certificates trusted: see [the agent, certificates and config](#the-agent-certificates-and-sshconfig).
 - `Fingerprint` trusts one key. It's the strictest policy when you know the key. Get the value on the server with `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`. It's compared exactly, including the `SHA256:` prefix.
-- `Custom` runs your own check, once, during connection.
+- `Custom` runs your own check, once, during connection. `SshHostKeyInfo` gives the host, port, key type, fingerprint and `PublicKey`, the key in OpenSSH `type base64` form, so a store of your own can record the key and compare it next time.
 
 ```csharp
 HostKeyPolicy policy = HostKeyPolicy.Custom((key, ct) =>
@@ -171,16 +177,16 @@ HostKeyPolicy policy = HostKeyPolicy.Custom((key, ct) =>
 });
 ```
 
-Return false to refuse the key. Don't throw from the check: an exception from it ends the connection with an `SshException` that calls itself a bug in Zorg.Ssh.
+Return false to refuse the key. If the check throws, the key isn't trusted: the connection fails with `SshHostKeyException`, and your exception is its `InnerException`.
 
 Two choices weaken the check, so they carry `Unsafe` in their names.
 
 ```csharp
-HostKeyPolicy trustOnFirstUse = HostKeyPolicy.KnownHostsFile(addUnknownHostsUnsafe: true);
+HostKeyPolicy trustOnFirstUse = HostKeyPolicy.KnownHostsFileAcceptNewUnsafe();
 HostKeyPolicy noCheckAtAll = HostKeyPolicy.AcceptAnyUnsafe();
 ```
 
-`addUnknownHostsUnsafe` trusts a host the first time it's seen and records it, as `ssh -o StrictHostKeyChecking=accept-new` does. A first connection can be intercepted without anyone noticing, but a changed key is still refused. A host that a `@cert-authority` line covers is never recorded, so offering a plain key can't step around the CA, and a file that can't keep what is written to it (`/dev/null`, `NUL`) makes the connection fail. `AcceptAnyUnsafe` removes the protection entirely. Use it only in tests against a machine you control.
+`KnownHostsFileAcceptNewUnsafe` trusts a host the first time it's seen and records it, as `ssh -o StrictHostKeyChecking=accept-new` does. A first connection can be intercepted without anyone noticing, but a changed key is still refused. A host that a `@cert-authority` line covers is never recorded, so offering a plain key can't step around the CA, and a file that can't keep what is written to it (`/dev/null`, `NUL`) makes the connection fail. `AcceptAnyUnsafe` removes the protection entirely. Use it only in tests against a machine you control.
 
 ## Running a command
 
@@ -207,6 +213,7 @@ else
 - Output is decoded as UTF-8. For binary output, use `StartProcessAsync`.
 - The server's shell interprets the command line, so quote anything that comes from a user. A NUL character in a command throws `ArgumentException`.
 - If either stream passes `MaxCommandOutputBytes`, the call fails with `SshException`. Use `StartProcessAsync` to stream it instead.
+- `ExecuteAsync(command, options, cancellationToken)` takes the same `SshProcessOptions` as `StartProcessAsync`, for environment variables or a terminal. With a terminal, stderr arrives in `StandardOutput`.
 
 Each command gets its own channel, so they can run side by side.
 
@@ -251,7 +258,7 @@ SshClientOptions options = new()
 
 - If nothing arrives for one interval, the client sends a `keepalive@openssh.com` request. Any packet counts as an answer, so a busy connection sends no probes. A server that doesn't know global requests can answer `UNIMPLEMENTED`, and that counts too.
 - Only one probe is out at a time. After it, `KeepAliveCountMax` more silent intervals end the connection. With the defaults that's 20 minutes of silence. Set a shorter interval to notice sooner, at the cost of dropping a connection over a shorter network break. The default is the one Debian's OpenSSH uses for `BatchMode`, because upstream OpenSSH leaves it off and relies on TCP keepalive, which can't see a peer that stops reading.
-- A server that keeps sending but has stopped reading is never silent. So one socket write that doesn't finish within the interval times the count also ends the connection. With the defaults that's 90 seconds, or up to one interval more.
+- A server that keeps sending but has stopped reading is never silent. So one socket write that doesn't finish within the interval times the count also ends the connection. With the defaults that's 15 minutes, or up to one interval more.
 - No probe goes out during a rekey, because nothing but the rekey can. Silence still counts. A live rekey sends packets, and each one restarts the count.
 - The connection fails with `SshConnectionException`, and everything waiting on it wakes: commands, stream reads and writes, SFTP calls and forwards. Connect again to continue.
 - `TimeSpan.Zero` turns all of this off. The interval can be 1 second to 1 day, and the count 1 to 1000.
@@ -349,7 +356,8 @@ Output from a shell with a terminal holds prompts and control sequences. To run 
 | In the config | What `FromConfig` does |
 |---|---|
 | `StrictHostKeyChecking no` | Throws, unless you pass your own `HostKeyPolicy`. |
-| `StrictHostKeyChecking accept-new` with a first known hosts file that isn't a regular file (`/dev/null`, `NUL`, a directory) | Throws: nothing could be recorded, so every connection would trust any key. |
+| `StrictHostKeyChecking accept-new` | Throws, unless you pass `acceptNewHostKeysUnsafe: true` or your own `HostKeyPolicy`. With the opt-in, a new host is trusted and recorded in the first known hosts file, as `ssh` does. |
+| `StrictHostKeyChecking accept-new` with a first known hosts file that isn't a regular file (`/dev/null`, `NUL`, a directory) | Throws, even with the opt-in: nothing could be recorded, so every connection would trust any key. |
 | `ProxyJump`, `ProxyCommand` (other than `none`) | Throws. Connect through the bastion yourself with `SshClientOptions.JumpHost`. |
 | `RevokedHostKeys`, `KnownHostsCommand`, `HostKeyAlias` | Throws, unless you pass your own `HostKeyPolicy`: ignoring them would change who is trusted. |
 | A `Match` block that could apply to the host and sets `StrictHostKeyChecking`, `UserKnownHostsFile`, `GlobalKnownHostsFile`, `HostKeyAlias`, `RevokedHostKeys`, `KnownHostsCommand`, `ProxyCommand`, `ProxyJump`, `HostKeyAlgorithms`, `CASignatureAlgorithms`, `HostName`, `Port`, `IdentitiesOnly`, `IdentityFile`, `IdentityAgent`, `CertificateFile` or `PubkeyAuthentication` | Throws: `Match` isn't supported for those keywords. Move the setting into a `Host` block. |
@@ -360,6 +368,12 @@ Output from a shell with a terminal holds prompts and control sequences. To run 
 | `ServerAliveInterval N`, `ServerAliveCountMax N` | Become `KeepAliveInterval` (in seconds; `0` turns keepalive off, as in OpenSSH) and `KeepAliveCountMax`. A value that isn't a number throws. When the config is silent, the library's defaults stay. |
 | `ConnectTimeout N` | Becomes `ConnectTimeout` in seconds. It covers connecting, key exchange and login together. `0` keeps the library's 30 seconds. |
 | Any other keyword | Ignored. |
+
+Trust on first use is a weaker check, so a config file can't choose it alone:
+
+```csharp
+SshClientOptions options = SshClientOptions.FromConfig("lab-router", acceptNewHostKeysUnsafe: true);
+```
 
 `HostKeyPolicy.KnownHostsFile` takes `globalPaths` for the same read-only files. It reads none by default, so its result depends only on the files you name.
 

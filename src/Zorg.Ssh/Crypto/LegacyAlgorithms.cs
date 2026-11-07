@@ -45,9 +45,9 @@ internal static class LegacyAlgorithms
 
 /// <summary>
 /// Creates key exchange methods that <see cref="KeyExchangeCatalog"/> doesn't hold. An instance is made only by
-/// <see cref="SshAlgorithms.LegacyUnsafe"/> or by an explicit <see cref="SshAlgorithms.KeyExchange"/> list, and the
-/// transport reaches the methods only through it. An application that does neither never constructs one, so Native AOT
-/// and trimming leave out the finite-field code (the modular exponentiation and the RFC 3526 primes).
+/// <see cref="SshAlgorithms.LegacyUnsafe"/>, whose copies keep it, and the transport reaches the methods only through
+/// it. An application that never uses the preset never constructs one, so Native AOT and trimming leave out the
+/// finite-field code (the modular exponentiation and the RFC 3526 primes).
 /// </summary>
 internal abstract class KeyExchangeExtension
 {

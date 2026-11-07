@@ -67,6 +67,14 @@ internal static class ClientExamples
         return options;
     }
 
+    public static SshAlgorithms LegacyNarrowed()
+    {
+        // doc:legacy-narrowed
+        SshAlgorithms algorithms = SshAlgorithms.LegacyUnsafe with { KeyExchange = ["curve25519-sha256", "diffie-hellman-group14-sha256"] };
+        // end-doc
+        return algorithms;
+    }
+
     public static IReadOnlyList<SshCredential> Credentials(string passphrase, string password, string deployKey, string oneTimeCode)
     {
         // doc:credentials
@@ -107,10 +115,18 @@ internal static class ClientExamples
     public static IReadOnlyList<HostKeyPolicy> UnsafePolicies()
     {
         // doc:host-key-unsafe
-        HostKeyPolicy trustOnFirstUse = HostKeyPolicy.KnownHostsFile(addUnknownHostsUnsafe: true);
+        HostKeyPolicy trustOnFirstUse = HostKeyPolicy.KnownHostsFileAcceptNewUnsafe();
         HostKeyPolicy noCheckAtAll = HostKeyPolicy.AcceptAnyUnsafe();
         // end-doc
         return [trustOnFirstUse, noCheckAtAll];
+    }
+
+    public static SshClientOptions ConfigAcceptNew()
+    {
+        // doc:config-accept-new
+        SshClientOptions options = SshClientOptions.FromConfig("lab-router", acceptNewHostKeysUnsafe: true);
+        // end-doc
+        return options;
     }
 
     public static async Task Execute(SshClient client, CancellationToken cancellationToken)
@@ -267,10 +283,10 @@ internal static class ClientExamples
     {
         // doc:forwarding
         // ssh -L: a local port that leads to a target the server can reach. Null binds a free loopback port.
-        await using SshForward local = await client.ForwardLocalPortAsync(null, "db.internal", 5432, cancellationToken);
+        await using SshLocalForward local = await client.ForwardLocalPortAsync("db.internal", 5432, cancellationToken);
 
         // ssh -D: a SOCKS5 proxy, CONNECT only, no login. SOCKS4 isn't supported.
-        await using SshForward proxy = await client.ForwardDynamicPortAsync(null, cancellationToken);
+        await using SshLocalForward proxy = await client.ForwardDynamicPortAsync(null, cancellationToken);
 
         // ssh -R: a port on the server that leads back here. Port 0 lets the server choose.
         await using SshRemoteForward remote = await client.ForwardRemotePortAsync("127.0.0.1", 0, "localhost", 8080, cancellationToken);

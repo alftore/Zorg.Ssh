@@ -11,7 +11,7 @@ using Zorg.Ssh.Protocol;
 namespace Zorg.Ssh.Sftp;
 
 /// <summary>
-/// An SFTP version 3 session over one SSH channel. Open one with <see cref="SshClient.OpenSftpAsync"/>. Calls may
+/// An SFTP version 3 session over one SSH channel. Open one with <see cref="SshClient.OpenSftpAsync(SftpClientOptions, System.Threading.CancellationToken)"/>. Calls may
 /// run at the same time, and they share the session's requests in flight. Disposing it leaves the
 /// <see cref="SshClient"/> connected.
 /// </summary>
@@ -70,24 +70,12 @@ public sealed class SftpClient : IAsyncDisposable
     /// </example>
     public IReadOnlyDictionary<string, string> ServerExtensions => _session.Extensions;
 
-    /// <summary>Gets or sets the most bytes <see cref="ReadAllBytesAsync"/> will hold, which stops a server filling memory. The default is 256 MiB.</summary>
-    /// <example>
-    /// <code>
-    /// sftp.MaxReadAllBytes = 1024L * 1024 * 1024;
-    /// </code>
-    /// </example>
-    public long MaxReadAllBytes { get; set; } = 256 * 1024 * 1024;
+    /// <summary>Gets the limits the session was opened with. Tests change them after the start.</summary>
+    internal SftpClientOptions Options { get; set; } = SftpClientOptions.Default;
 
-    /// <summary>
-    /// Gets or sets the most entries one <see cref="ListDirectoryAsync"/> or <see cref="DownloadDirectoryAsync"/>
-    /// will take, which stops a server listing forever. The default is 1,000,000.
-    /// </summary>
-    /// <example>
-    /// <code>
-    /// sftp.MaxDirectoryEntries = 10_000_000;
-    /// </code>
-    /// </example>
-    public long MaxDirectoryEntries { get; set; } = 1_000_000;
+    private long MaxReadAllBytes => Options.MaxReadAllBytes;
+
+    private long MaxDirectoryEntries => Options.MaxDirectoryEntries;
 
     /// <summary>Reads a whole file into memory. For large files use <see cref="DownloadFileAsync"/>.</summary>
     /// <param name="path">The remote path.</param>
@@ -95,7 +83,7 @@ public sealed class SftpClient : IAsyncDisposable
     /// <returns>The file's contents.</returns>
     /// <exception cref="SftpFileNotFoundException">The file doesn't exist.</exception>
     /// <exception cref="SftpPermissionDeniedException">The account can't read it.</exception>
-    /// <exception cref="SftpException">The server refused, or the file is larger than <see cref="MaxReadAllBytes"/>.</exception>
+    /// <exception cref="SftpException">The server refused, or the file is larger than <see cref="SftpClientOptions.MaxReadAllBytes"/>.</exception>
     /// <example>
     /// <code>
     /// byte[] config = await sftp.ReadAllBytesAsync("/etc/app.conf", cancellationToken);
@@ -104,7 +92,7 @@ public sealed class SftpClient : IAsyncDisposable
     public async Task<byte[]> ReadAllBytesAsync(string path, CancellationToken cancellationToken = default)
     {
         using MemoryStream contents = new();
-        await UseHandleAsync(path, SftpOpenFlags.Read, handle => CopyFromHandleAsync(handle, path, 0, contents, Math.Min(MaxReadAllBytes, Array.MaxLength), nameof(MaxReadAllBytes), cancellationToken), cancellationToken).ConfigureAwait(false);
+        await UseHandleAsync(path, SftpOpenFlags.Read, handle => CopyFromHandleAsync(handle, path, 0, contents, Math.Min(MaxReadAllBytes, Array.MaxLength), "SftpClientOptions.MaxReadAllBytes", cancellationToken), cancellationToken).ConfigureAwait(false);
         return contents.ToArray();
     }
 
@@ -181,7 +169,7 @@ public sealed class SftpClient : IAsyncDisposable
     /// await sftp.DownloadDirectoryAsync("/srv/site", @"C:\backup\site", 10L * 1024 * 1024 * 1024, cancellationToken);
     /// </code>
     /// </example>
-    public async Task DownloadDirectoryAsync(string remotePath, string localDirectory, long maxTotalBytes = long.MaxValue, CancellationToken cancellationToken = default)
+    public async Task DownloadDirectoryAsync(string remotePath, string localDirectory, long maxTotalBytes, CancellationToken cancellationToken = default)
     {
         ValidatePath(remotePath);
         ArgumentException.ThrowIfNullOrEmpty(localDirectory);
@@ -237,7 +225,7 @@ public sealed class SftpClient : IAsyncDisposable
     /// <param name="cancellationToken">Stops the listing.</param>
     /// <returns>The entries, in the server's order.</returns>
     /// <exception cref="SftpFileNotFoundException">The directory doesn't exist.</exception>
-    /// <exception cref="SftpException">The server refused, or sent more than <see cref="MaxDirectoryEntries"/> entries.</exception>
+    /// <exception cref="SftpException">The server refused, or sent more than <see cref="SftpClientOptions.MaxDirectoryEntries"/> entries.</exception>
     /// <example>
     /// <code>
     /// await foreach (SftpEntry entry in sftp.ListDirectoryAsync("/var/log", cancellationToken))
@@ -272,7 +260,7 @@ public sealed class SftpClient : IAsyncDisposable
                 total += batch.Length;
                 if (total > limit)
                 {
-                    throw new SftpException($"The server listed more than {limit} entries in '{SftpParser.Sanitise(path)}'. Raise MaxDirectoryEntries if that's expected.", SftpStatusCode.Failure, path);
+                    throw new SftpException($"The server listed more than {limit} entries in '{SftpParser.Sanitise(path)}'. Raise SftpClientOptions.MaxDirectoryEntries if that's expected.", SftpStatusCode.Failure, path);
                 }
 
                 foreach (SftpEntry entry in batch)
@@ -287,22 +275,38 @@ public sealed class SftpClient : IAsyncDisposable
         }
     }
 
-    /// <summary>Gets a file's attributes.</summary>
+    /// <summary>Gets a file's attributes, following a symbolic link to what it points to.</summary>
     /// <param name="path">The remote path.</param>
-    /// <param name="followSymbolicLinks">False reports on a link itself, not on what it points to.</param>
     /// <param name="cancellationToken">Cancels the request.</param>
     /// <returns>What the server reported.</returns>
     /// <exception cref="SftpFileNotFoundException">Nothing exists at the path.</exception>
     /// <example>
     /// <code>
-    /// SftpAttributes attributes = await sftp.GetAttributesAsync("/srv/data.bin", cancellationToken: cancellationToken);
+    /// SftpAttributes attributes = await sftp.GetAttributesAsync("/srv/data.bin", cancellationToken);
     /// Console.WriteLine(attributes.Size);
     /// </code>
     /// </example>
-    public Task<SftpAttributes> GetAttributesAsync(string path, bool followSymbolicLinks = true, CancellationToken cancellationToken = default)
+    public Task<SftpAttributes> GetAttributesAsync(string path, CancellationToken cancellationToken = default)
     {
         ValidatePath(path);
-        return RequestAsync(SftpFrames.Path(path), followSymbolicLinks ? SftpMessage.Stat : SftpMessage.Lstat, SftpMessage.Attrs, SftpParser.ReadAttributes, path, cancellationToken);
+        return RequestAsync(SftpFrames.Path(path), SftpMessage.Stat, SftpMessage.Attrs, SftpParser.ReadAttributes, path, cancellationToken);
+    }
+
+    /// <summary>Gets a file's attributes without following a symbolic link: for a link, it reports on the link itself.</summary>
+    /// <param name="path">The remote path.</param>
+    /// <param name="cancellationToken">Cancels the request.</param>
+    /// <returns>What the server reported.</returns>
+    /// <exception cref="SftpFileNotFoundException">Nothing exists at the path.</exception>
+    /// <example>
+    /// <code>
+    /// SftpAttributes link = await sftp.GetLinkAttributesAsync("/srv/current", cancellationToken);
+    /// Console.WriteLine(link.IsSymbolicLink);
+    /// </code>
+    /// </example>
+    public Task<SftpAttributes> GetLinkAttributesAsync(string path, CancellationToken cancellationToken = default)
+    {
+        ValidatePath(path);
+        return RequestAsync(SftpFrames.Path(path), SftpMessage.Lstat, SftpMessage.Attrs, SftpParser.ReadAttributes, path, cancellationToken);
     }
 
     /// <summary>Changes a file's attributes. Only the properties you set are sent.</summary>
@@ -480,7 +484,7 @@ public sealed class SftpClient : IAsyncDisposable
     {
         try
         {
-            await GetAttributesAsync(path, followSymbolicLinks: false, cancellationToken).ConfigureAwait(false);
+            await GetLinkAttributesAsync(path, cancellationToken).ConfigureAwait(false);
             return true;
         }
         catch (SftpFileNotFoundException)
@@ -569,14 +573,16 @@ public sealed class SftpClient : IAsyncDisposable
     public ValueTask DisposeAsync() => _session.DisposeAsync();
 
     /// <summary>Starts a session over an open <c>sftp</c> subsystem channel. The client owns the channel from here on.</summary>
-    internal static async Task<SftpClient> OpenOverChannelAsync(SshChannel channel, string serverIdentification, CancellationToken cancellationToken)
+    internal static async Task<SftpClient> OpenOverChannelAsync(SshChannel channel, string serverIdentification, SftpClientOptions options, CancellationToken cancellationToken)
     {
         try
         {
             // Nothing reads stderr, so close it: what arrives there is then credited back to the window at once,
             // and a chatty server can't stall the shared window.
             await channel.ErrorOutput.DisposeAsync().ConfigureAwait(false);
-            return await StartAsync(channel.Output, channel.Input, channel, serverIdentification, SftpLimits.Default, cancellationToken).ConfigureAwait(false);
+            SftpClient client = await StartAsync(channel.Output, channel.Input, channel, serverIdentification, SftpLimits.Default, cancellationToken).ConfigureAwait(false);
+            client.Options = options;
+            return client;
         }
         catch
         {
@@ -1097,7 +1103,7 @@ public sealed class SftpClient : IAsyncDisposable
             string remote = remotePrefix + entry.Name;
             SftpAttributes attributes = entry.Attributes.HasFileType
                 ? entry.Attributes
-                : await GetAttributesAsync(remote, followSymbolicLinks: false, cancellationToken).ConfigureAwait(false);
+                : await GetLinkAttributesAsync(remote, cancellationToken).ConfigureAwait(false);
             if (attributes.IsDirectory)
             {
                 CreateLocalDirectory(local, entry.Name, remoteDirectory);
@@ -1182,7 +1188,7 @@ public sealed class SftpClient : IAsyncDisposable
             _pathCharacters += path.Length;
             if (++_taken > entries || _pathCharacters > MaxPathCharacters)
             {
-                throw new SftpException($"The tree has more than {entries} entries, reached at '{SftpParser.Sanitise(path)}'. Raise MaxDirectoryEntries if that's expected.", SftpStatusCode.Failure, path);
+                throw new SftpException($"The tree has more than {entries} entries, reached at '{SftpParser.Sanitise(path)}'. Raise SftpClientOptions.MaxDirectoryEntries if that's expected.", SftpStatusCode.Failure, path);
             }
         }
 

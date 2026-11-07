@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text;
 using Zorg.Ssh.Crypto;
 using Zorg.Ssh.Crypto.Keys;
 
@@ -9,19 +10,24 @@ namespace Zorg.Ssh;
 /// <summary>
 /// Which algorithms a connection offers, most preferred first. The defaults are current and need no tuning,
 /// so set this only to narrow them, for example to meet a policy, or use <see cref="LegacyUnsafe"/> for old equipment.
-/// Names that aren't supported are refused.
+/// Names that aren't supported are refused, and so are the legacy names unless the instance comes from
+/// <see cref="LegacyUnsafe"/>. Use <c>with</c> to change a preset.
 /// </summary>
 /// <example>
 /// <code>
 /// Algorithms = new SshAlgorithms { Ciphers = ["aes256-gcm@openssh.com"] },
+/// Algorithms = SshAlgorithms.LegacyUnsafe with { KeyExchange = ["diffie-hellman-group14-sha256"] },
 /// </code>
 /// </example>
-public sealed class SshAlgorithms
+public sealed record SshAlgorithms
 {
     private readonly IReadOnlyList<string> _keyExchange = KeyExchangeCatalog.Default;
     private readonly IReadOnlyList<string> _hostKeys = HostKeyAlgorithms.Default;
     private readonly bool _keyExchangeIsExplicit;
     private readonly bool _hostKeysIsExplicit;
+
+    // Set only by the preset, and copied by with, so the legacy names can't be reached without the word Unsafe.
+    private readonly bool _allowsLegacy;
     private readonly KeyExchangeExtension? _keyExchangeExtension;
 
     /// <summary>Creates the defaults, for narrowing with an object initializer.</summary>
@@ -36,6 +42,7 @@ public sealed class SshAlgorithms
         _hostKeys = hostKeys;
         Macs = macs;
         _keyExchangeExtension = extension;
+        _allowsLegacy = true;
     }
 
     /// <summary>Gets the defaults.</summary>
@@ -58,12 +65,17 @@ public sealed class SshAlgorithms
     /// <para>
     /// On a server, finite-field Diffie-Hellman costs CPU that a client can make it spend before login, so a server offers
     /// it only when <see cref="KeyExchange"/> names it explicitly, as OpenSSH 10's sshd does. This preset adds <c>ssh-rsa</c>
-    /// and the SHA-1 MACs on a server, but not Diffie-Hellman. A narrowed list may name any of these algorithms directly.
+    /// and the SHA-1 MACs on a server, but not Diffie-Hellman.
+    /// </para>
+    /// <para>
+    /// The legacy names are accepted only on this preset and on copies made from it with <c>with</c>, so narrow or
+    /// reorder it that way. A plain <c>new SshAlgorithms { ... }</c> that names one is refused.
     /// </para>
     /// </remarks>
     /// <example>
     /// <code>
     /// SshClientOptions options = new() { Host = "switch.example", UserName = "admin", HostKeyPolicy = policy, Algorithms = SshAlgorithms.LegacyUnsafe };
+    /// SshAlgorithms serverAlgorithms = SshAlgorithms.LegacyUnsafe with { KeyExchange = ["curve25519-sha256", "diffie-hellman-group14-sha256"] };
     /// </code>
     /// </example>
     public static SshAlgorithms LegacyUnsafe => LegacyPreset.Instance;
@@ -74,12 +86,10 @@ public sealed class SshAlgorithms
         get => _keyExchange;
         init
         {
+            // A finite-field method can only be named on a copy of LegacyUnsafe, which already holds the extension.
+            // It's reached only from there, so an application that never uses the preset lets trimming drop it.
             _keyExchange = value;
             _keyExchangeIsExplicit = true;
-
-            // An explicit list may name a finite-field method. The extension is reached only from here and from
-            // LegacyUnsafe, so an application that does neither lets trimming drop it.
-            _keyExchangeExtension = FiniteFieldDhExtension.Instance;
         }
     }
 
@@ -105,6 +115,9 @@ public sealed class SshAlgorithms
 
     /// <summary>Gets whether <see cref="HostKeys"/> was set. Otherwise a client lets its host key policy put certificate algorithms first.</summary>
     internal bool HostKeysIsExplicit => _hostKeysIsExplicit;
+
+    /// <summary>Gets whether this instance comes from <see cref="LegacyUnsafe"/>, so that its lists may name the legacy algorithms.</summary>
+    internal bool AllowsLegacy => _allowsLegacy;
 
     /// <summary>Gets the creator of the key exchange methods outside the default catalog, or null when none can be named.</summary>
     internal KeyExchangeExtension? KeyExchangeExtension => _keyExchangeExtension;
@@ -136,21 +149,44 @@ public sealed class SshAlgorithms
         Check("Macs", Macs, PacketCipherCatalog.DefaultMacs, LegacyAlgorithms.Macs);
     }
 
-    private static void Check(string family, IReadOnlyList<string> chosen, IReadOnlyList<string> supported, IReadOnlyList<string> legacy)
+    private void Check(string family, IReadOnlyList<string> chosen, IReadOnlyList<string> supported, IReadOnlyList<string> legacy)
     {
-        if (chosen.Count == 0)
+        if (chosen is null || chosen.Count == 0)
         {
             throw new ArgumentException($"SshAlgorithms.{family} can't be empty.", family);
         }
 
         foreach (string name in chosen)
         {
-            if (!supported.Contains(name) && !legacy.Contains(name))
+            if (legacy.Contains(name))
+            {
+                if (!_allowsLegacy)
+                {
+                    throw new ArgumentException($"'{name}' is a legacy algorithm, so SshAlgorithms.{family} accepts it only on SshAlgorithms.LegacyUnsafe. Read docs/security.md, then use SshAlgorithms.LegacyUnsafe with {{ {family} = [...] }}.", family);
+                }
+            }
+            else if (!supported.Contains(name))
             {
                 string older = legacy.Count == 0 ? string.Empty : $" SshAlgorithms.LegacyUnsafe adds: {string.Join(", ", legacy)}.";
                 throw new ArgumentException($"'{name}' isn't a supported value for SshAlgorithms.{family}. Supported: {string.Join(", ", supported)}.{older}", family);
             }
         }
+    }
+
+    /// <summary>Prints the lists by name, not by type.</summary>
+    private bool PrintMembers(StringBuilder builder)
+    {
+        builder.Append("KeyExchange = [").AppendJoin(", ", KeyExchange)
+            .Append("], HostKeys = [").AppendJoin(", ", HostKeys)
+            .Append("], Ciphers = [").AppendJoin(", ", Ciphers)
+            .Append("], Macs = [").AppendJoin(", ", Macs)
+            .Append(']');
+        if (_allowsLegacy)
+        {
+            builder.Append(", LegacyUnsafe = true");
+        }
+
+        return true;
     }
 
     /// <summary>Holds the preset, so that it, and the code it reaches, exist only once something asks for it.</summary>

@@ -55,7 +55,7 @@ public sealed class SocksTests : IAsyncLifetime
         },
         Ct);
 
-    private static async Task<TcpClient> RawAsync(SshForward proxy, params byte[] bytes)
+    private static async Task<TcpClient> RawAsync(SshLocalForward proxy, params byte[] bytes)
     {
         TcpClient client = new();
         await client.ConnectAsync(proxy.LocalEndPoint, Ct);
@@ -99,7 +99,7 @@ public sealed class SocksTests : IAsyncLifetime
     public async Task A_proxy_binds_loopback_and_connects_by_name_and_by_address()
     {
         await using SshClient client = await ConnectAsync();
-        await using SshForward proxy = await client.ForwardDynamicPortAsync(null, Ct);
+        await using SshLocalForward proxy = await client.ForwardDynamicPortAsync(null, Ct);
         Assert.True(IPAddress.IsLoopback(proxy.LocalEndPoint.Address));
 
         using TcpClient byAddress = await Socks.GreetAsync(proxy.LocalEndPoint, Ct);
@@ -115,7 +115,7 @@ public sealed class SocksTests : IAsyncLifetime
     public async Task A_target_the_server_refuses_gets_a_reply_saying_so()
     {
         await using SshClient client = await ConnectAsync();
-        await using SshForward proxy = await client.ForwardDynamicPortAsync(null, Ct);
+        await using SshLocalForward proxy = await client.ForwardDynamicPortAsync(null, Ct);
 
         using TcpClient connection = await Socks.GreetAsync(proxy.LocalEndPoint, Ct);
         Assert.Equal(5, await Socks.RequestAsync(connection, Socks.IPv4Request(IPAddress.Loopback, 9), Ct));
@@ -126,7 +126,7 @@ public sealed class SocksTests : IAsyncLifetime
     public async Task Only_CONNECT_is_supported()
     {
         await using SshClient client = await ConnectAsync();
-        await using SshForward proxy = await client.ForwardDynamicPortAsync(null, Ct);
+        await using SshLocalForward proxy = await client.ForwardDynamicPortAsync(null, Ct);
 
         using TcpClient bind = await Socks.GreetAsync(proxy.LocalEndPoint, Ct);
         Assert.Equal(7, await Socks.RequestAsync(bind, Socks.DomainRequest("localhost", _echo.Port, command: 2), Ct));
@@ -138,7 +138,7 @@ public sealed class SocksTests : IAsyncLifetime
     public async Task An_unknown_address_type_is_refused()
     {
         await using SshClient client = await ConnectAsync();
-        await using SshForward proxy = await client.ForwardDynamicPortAsync(null, Ct);
+        await using SshLocalForward proxy = await client.ForwardDynamicPortAsync(null, Ct);
 
         using TcpClient connection = await Socks.GreetAsync(proxy.LocalEndPoint, Ct);
         Assert.Equal(8, await Socks.RequestAsync(connection, [5, 1, 0, 9], Ct));
@@ -149,7 +149,7 @@ public sealed class SocksTests : IAsyncLifetime
     public async Task SOCKS4_is_dropped_without_a_word()
     {
         await using SshClient client = await ConnectAsync();
-        await using SshForward proxy = await client.ForwardDynamicPortAsync(null, Ct);
+        await using SshLocalForward proxy = await client.ForwardDynamicPortAsync(null, Ct);
 
         using TcpClient connection = await RawAsync(proxy, 4, 1, 0, 80, 127, 0, 0, 1, 0);
         await AssertClosedAsync(connection);
@@ -160,7 +160,7 @@ public sealed class SocksTests : IAsyncLifetime
     public async Task A_client_that_offers_only_passwords_is_turned_away()
     {
         await using SshClient client = await ConnectAsync();
-        await using SshForward proxy = await client.ForwardDynamicPortAsync(null, Ct);
+        await using SshLocalForward proxy = await client.ForwardDynamicPortAsync(null, Ct);
 
         using TcpClient connection = await RawAsync(proxy, 5, 1, 2);
         byte[] answer = new byte[2];
@@ -173,7 +173,7 @@ public sealed class SocksTests : IAsyncLifetime
     public async Task A_greeting_with_no_methods_is_turned_away()
     {
         await using SshClient client = await ConnectAsync();
-        await using SshForward proxy = await client.ForwardDynamicPortAsync(null, Ct);
+        await using SshLocalForward proxy = await client.ForwardDynamicPortAsync(null, Ct);
 
         using TcpClient connection = await RawAsync(proxy, 5, 0);
         byte[] answer = new byte[2];
@@ -185,7 +185,7 @@ public sealed class SocksTests : IAsyncLifetime
     public async Task The_largest_greeting_the_format_allows_is_handled()
     {
         await using SshClient client = await ConnectAsync();
-        await using SshForward proxy = await client.ForwardDynamicPortAsync(null, Ct);
+        await using SshLocalForward proxy = await client.ForwardDynamicPortAsync(null, Ct);
 
         byte[] greeting = new byte[257];
         greeting[0] = 5;
@@ -205,7 +205,7 @@ public sealed class SocksTests : IAsyncLifetime
     public async Task An_oversized_host_name_is_refused_before_it_reaches_the_server(int length)
     {
         await using SshClient client = await ConnectAsync();
-        await using SshForward proxy = await client.ForwardDynamicPortAsync(null, Ct);
+        await using SshLocalForward proxy = await client.ForwardDynamicPortAsync(null, Ct);
 
         using TcpClient connection = await Socks.GreetAsync(proxy.LocalEndPoint, Ct);
         Assert.Equal(1, await Socks.RequestAsync(connection, Socks.DomainRequest(new string('a', length), _echo.Port), Ct));
@@ -222,7 +222,7 @@ public sealed class SocksTests : IAsyncLifetime
     public async Task A_host_name_that_is_no_name_is_refused(string host)
     {
         await using SshClient client = await ConnectAsync();
-        await using SshForward proxy = await client.ForwardDynamicPortAsync(null, Ct);
+        await using SshLocalForward proxy = await client.ForwardDynamicPortAsync(null, Ct);
 
         using TcpClient connection = await Socks.GreetAsync(proxy.LocalEndPoint, Ct);
         Assert.Equal(1, await Socks.RequestAsync(connection, Socks.DomainRequest(host, _echo.Port), Ct));
@@ -233,7 +233,7 @@ public sealed class SocksTests : IAsyncLifetime
     public async Task Port_zero_is_refused()
     {
         await using SshClient client = await ConnectAsync();
-        await using SshForward proxy = await client.ForwardDynamicPortAsync(null, Ct);
+        await using SshLocalForward proxy = await client.ForwardDynamicPortAsync(null, Ct);
 
         using TcpClient connection = await Socks.GreetAsync(proxy.LocalEndPoint, Ct);
         Assert.Equal(1, await Socks.RequestAsync(connection, Socks.DomainRequest("localhost", 0), Ct));
@@ -244,7 +244,7 @@ public sealed class SocksTests : IAsyncLifetime
     public async Task Bytes_after_the_request_go_through_the_tunnel()
     {
         await using SshClient client = await ConnectAsync();
-        await using SshForward proxy = await client.ForwardDynamicPortAsync(null, Ct);
+        await using SshLocalForward proxy = await client.ForwardDynamicPortAsync(null, Ct);
 
         using TcpClient connection = await Socks.GreetAsync(proxy.LocalEndPoint, Ct);
         byte[] request = Socks.IPv4Request(IPAddress.Loopback, _echo.Port);
@@ -265,7 +265,7 @@ public sealed class SocksTests : IAsyncLifetime
     public async Task A_client_that_stalls_is_dropped_and_loses_its_slot(int bytes)
     {
         await using SshClient client = await ConnectAsync(maxForwarded: 1, handshake: TimeSpan.FromMilliseconds(300));
-        await using SshForward proxy = await client.ForwardDynamicPortAsync(null, Ct);
+        await using SshLocalForward proxy = await client.ForwardDynamicPortAsync(null, Ct);
 
         byte[] script = [5, 1, 0, 5, 1, 0];
         using TcpClient stalled = await RawAsync(proxy, script[..bytes]);
@@ -300,8 +300,8 @@ public sealed class SocksTests : IAsyncLifetime
     public async Task Stalled_clients_cannot_take_more_than_the_cap_and_cost_the_rest_nothing()
     {
         await using SshClient client = await ConnectAsync(maxForwarded: 3, handshake: TimeSpan.FromSeconds(30));
-        await using SshForward proxy = await client.ForwardDynamicPortAsync(null, Ct);
-        await using SshForward other = await client.ForwardLocalPortAsync(null, "127.0.0.1", _echo.Port, Ct);
+        await using SshLocalForward proxy = await client.ForwardDynamicPortAsync(null, Ct);
+        await using SshLocalForward other = await client.ForwardLocalPortAsync("127.0.0.1", _echo.Port, Ct);
 
         using TcpClient first = await RawAsync(proxy);
         using TcpClient second = await RawAsync(proxy);

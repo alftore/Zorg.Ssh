@@ -265,7 +265,7 @@ public sealed class KeepAliveClientServerTests : IDisposable
         await using SftpClient sftp = await client.OpenSftpAsync(Ct);
 
         KillPath();
-        Task<SftpAttributes> call = sftp.GetAttributesAsync("/", cancellationToken: CancellationToken.None);
+        Task<SftpAttributes> call = sftp.GetAttributesAsync("/", CancellationToken.None);
         await ElapseAsync(4, () => client.Connection.Ended.IsCompleted);
 
         SshConnectionException ex = await Assert.ThrowsAnyAsync<SshConnectionException>(() => call.WaitAsync(Limit, Ct));

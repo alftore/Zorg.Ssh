@@ -30,7 +30,7 @@ internal static class ErrorExamples
         }
         catch (SshDisconnectedException ex)
         {
-            Console.Error.WriteLine($"The server hung up: {ex.ReasonCode} {ex.Description}");
+            Console.Error.WriteLine($"The server hung up: {ex.Reason} {ex.Description}");
         }
         catch (SshConnectionException ex)
         {

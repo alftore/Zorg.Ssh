@@ -29,30 +29,42 @@ public enum SshStrictHostKeyChecking
 }
 
 /// <summary>What a config file says about one host, with tokens expanded and defaults filled in.</summary>
-/// <param name="HostName">The name or address to connect to.</param>
-/// <param name="Port">The port.</param>
-/// <param name="User">The user to log in as.</param>
-/// <param name="IdentityFiles">The private key files, in order. They may not exist.</param>
-/// <param name="IdentitiesOnly">Whether to use only these files, and not the agent.</param>
-/// <param name="UserKnownHostsFiles">The known_hosts files, in order. Empty means <c>none</c>.</param>
-/// <param name="StrictHostKeyChecking">The host key setting.</param>
-/// <param name="ProxyJump">The <c>ProxyJump</c> value, if any. <see cref="SshClientOptions.FromConfig"/> refuses a host that has one.</param>
 /// <example>
 /// <code>
 /// SshHostConfig host = SshConfig.Load().Resolve("web");
 /// Console.WriteLine($"{host.User}@{host.HostName}:{host.Port}");
 /// </code>
 /// </example>
-public sealed record SshHostConfig(
-    string HostName,
-    int Port,
-    string User,
-    IReadOnlyList<string> IdentityFiles,
-    bool IdentitiesOnly,
-    IReadOnlyList<string> UserKnownHostsFiles,
-    SshStrictHostKeyChecking StrictHostKeyChecking,
-    string? ProxyJump)
+public sealed record SshHostConfig
 {
+    internal SshHostConfig()
+    {
+    }
+
+    /// <summary>Gets the name or address to connect to.</summary>
+    public required string HostName { get; init; }
+
+    /// <summary>Gets the port.</summary>
+    public required int Port { get; init; }
+
+    /// <summary>Gets the user to log in as.</summary>
+    public required string User { get; init; }
+
+    /// <summary>Gets the private key files, in order. They may not exist.</summary>
+    public required IReadOnlyList<string> IdentityFiles { get; init; }
+
+    /// <summary>Gets whether to use only these files, and not the agent.</summary>
+    public required bool IdentitiesOnly { get; init; }
+
+    /// <summary>Gets the known_hosts files, in order. Empty means <c>none</c>.</summary>
+    public required IReadOnlyList<string> UserKnownHostsFiles { get; init; }
+
+    /// <summary>Gets the host key setting.</summary>
+    public required SshStrictHostKeyChecking StrictHostKeyChecking { get; init; }
+
+    /// <summary>Gets the <c>ProxyJump</c> value, if any. <see cref="SshClientOptions.FromConfig"/> refuses a host that has one.</summary>
+    public string? ProxyJump { get; init; }
+
     /// <summary>Gets the files <c>GlobalKnownHostsFile</c> names, or OpenSSH's defaults. They're read and never written.</summary>
     internal IReadOnlyList<string> GlobalKnownHostsFiles { get; init; } = [];
 
@@ -101,7 +113,7 @@ public sealed record SshHostConfig(
 public sealed partial class SshConfig
 {
     /// <summary>The largest config file accepted, in bytes.</summary>
-    public const int MaxFileLength = 1 << 20;
+    internal const int MaxFileLength = 1 << 20;
 
     private const int MaxLineLength = 16 * 1024;
     private const int MaxIncludeDepth = 16; // The same limit as ssh.
@@ -306,16 +318,16 @@ public sealed partial class SshConfig
             .Distinct(StringComparer.Ordinal)
             .Order(StringComparer.Ordinal)];
 
-        return new SshHostConfig(
-            hostName,
-            port,
-            user,
-            identityFiles,
-            first.ContainsKey("IDENTITIESONLY") && IsYes(Value("IDENTITIESONLY")),
-            knownHosts,
-            first.ContainsKey("STRICTHOSTKEYCHECKING") ? ParseStrict(Value("STRICTHOSTKEYCHECKING")) : SshStrictHostKeyChecking.Yes,
-            first.ContainsKey("PROXYJUMP") && !Value("PROXYJUMP").Equals("none", StringComparison.OrdinalIgnoreCase) ? Value("PROXYJUMP") : null)
+        return new SshHostConfig
         {
+            HostName = hostName,
+            Port = port,
+            User = user,
+            IdentityFiles = identityFiles,
+            IdentitiesOnly = first.ContainsKey("IDENTITIESONLY") && IsYes(Value("IDENTITIESONLY")),
+            UserKnownHostsFiles = knownHosts,
+            StrictHostKeyChecking = first.ContainsKey("STRICTHOSTKEYCHECKING") ? ParseStrict(Value("STRICTHOSTKEYCHECKING")) : SshStrictHostKeyChecking.Yes,
+            ProxyJump = first.ContainsKey("PROXYJUMP") && !Value("PROXYJUMP").Equals("none", StringComparison.OrdinalIgnoreCase) ? Value("PROXYJUMP") : null,
             GlobalKnownHostsFiles = globalKnownHosts,
             ProxyCommand = IsSetAndNotNone("PROXYCOMMAND") ? first["PROXYCOMMAND"].Arguments[0] : null,
             UnhonouredTrustKeywords = refused,

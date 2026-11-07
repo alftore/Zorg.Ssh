@@ -6,15 +6,20 @@ using System.Threading.Tasks;
 namespace Zorg.Ssh;
 
 /// <summary>One prompt from a keyboard-interactive exchange.</summary>
-/// <param name="Text">The prompt to show. It's chosen by the server, so treat it as untrusted.</param>
-/// <param name="Echo">Whether the answer may be shown as it's typed.</param>
 /// <example>
 /// <code>
 /// SshCredential.FromKeyboardInteractive((prompts, ct) =>
 ///     ValueTask.FromResult&lt;IReadOnlyList&lt;string&gt;&gt;([.. prompts.Select(p => Ask(p.Text))]));
 /// </code>
 /// </example>
-public sealed record SshPrompt(string Text, bool Echo);
+public sealed record SshPrompt
+{
+    /// <summary>Gets the prompt to show. It's chosen by the server, so treat it as untrusted.</summary>
+    public required string Text { get; init; }
+
+    /// <summary>Gets whether the answer may be shown as it's typed.</summary>
+    public required bool Echo { get; init; }
+}
 
 /// <summary>A way to prove who the user is. List several in <see cref="SshClientOptions.Credentials"/>, and they're tried in order.</summary>
 /// <example>
@@ -106,7 +111,7 @@ public abstract class SshCredential
     }
 
     /// <summary>Creates a credential that answers keyboard-interactive prompts.</summary>
-    /// <param name="respond">Returns one answer per prompt.</param>
+    /// <param name="respond">Returns one answer per prompt. If it throws, or returns another number of answers, the login stops with <see cref="SshAuthenticationException"/>.</param>
     /// <returns>The credential.</returns>
     /// <example>
     /// <code>

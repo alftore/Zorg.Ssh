@@ -67,7 +67,35 @@ public sealed class ConfigTrustTests : IDisposable
     {
         SshConfig config = Config($"StrictHostKeyChecking accept-new\nUserKnownHostsFile {KnownHostsPath()}\n");
 
-        Assert.NotNull(SshClientOptions.FromConfig("web", config).HostKeyPolicy);
+        Assert.NotNull(SshClientOptions.FromConfig("web", config, acceptNewHostKeysUnsafe: true).HostKeyPolicy);
+    }
+
+    [Fact]
+    public void Accept_new_needs_the_callers_opt_in()
+    {
+        SshConfig config = Config($"StrictHostKeyChecking accept-new\nUserKnownHostsFile {KnownHostsPath()}\n");
+
+        SshConfigException ex = Refused(() => SshClientOptions.FromConfig("web", config));
+        Assert.Contains("accept-new", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("acceptNewHostKeysUnsafe: true", ex.Message, StringComparison.Ordinal);
+
+        // A policy of the caller's own replaces what the config says, so it needs no opt-in.
+        Assert.NotNull(SshClientOptions.FromConfig("web", config, HostKeyPolicy.KnownHostsFile(KnownHostsPath())));
+    }
+
+    [Fact]
+    public async Task Accept_new_with_the_opt_in_records_a_new_host_and_strict_checking_never_does()
+    {
+        string path = KnownHostsPath("tofu");
+        SshConfig tofu = Config($"StrictHostKeyChecking accept-new\nUserKnownHostsFile {path}\n");
+        Assert.True(await SshClientOptions.FromConfig("web", tofu, acceptNewHostKeysUnsafe: true).HostKeyPolicy.CheckAsync("web", 22, Key, Ct));
+        Assert.Single(await File.ReadAllLinesAsync(path, Ct));
+
+        string strictPath = KnownHostsPath("strict");
+        SshConfig strict = Config($"StrictHostKeyChecking yes\nUserKnownHostsFile {strictPath}\n");
+        HostKeyPolicy policy = SshClientOptions.FromConfig("web", strict, acceptNewHostKeysUnsafe: true).HostKeyPolicy;
+        await Assert.ThrowsAsync<SshHostKeyException>(async () => await policy.CheckAsync("web", 22, Key, Ct));
+        Assert.False(File.Exists(strictPath));
     }
 
     [Fact]
@@ -82,7 +110,7 @@ public sealed class ConfigTrustTests : IDisposable
     [Fact]
     public async Task T2_a_policy_that_records_into_a_null_device_refuses_the_key()
     {
-        HostKeyPolicy policy = HostKeyPolicy.KnownHostsFile(NullDevice, addUnknownHostsUnsafe: true);
+        HostKeyPolicy policy = HostKeyPolicy.KnownHostsFileAcceptNewUnsafe(NullDevice);
 
         await Assert.ThrowsAsync<SshHostKeyException>(async () => await policy.CheckAsync("web", 22, Key, Ct));
     }
@@ -202,7 +230,7 @@ public sealed class ConfigTrustTests : IDisposable
         string user = KnownHostsPath("user");
         string global = KnownHostsPath("global");
         await File.WriteAllTextAsync(global, Line(string.Empty, "other", NewKey()), Ct);
-        HostKeyPolicy policy = HostKeyPolicy.KnownHostsFile(user, addUnknownHostsUnsafe: true, globalPaths: [global]);
+        HostKeyPolicy policy = HostKeyPolicy.KnownHostsFileAcceptNewUnsafe(user, globalPaths: [global]);
         string before = await File.ReadAllTextAsync(global, Ct);
 
         Assert.True(await policy.CheckAsync("web", 22, Key, Ct));

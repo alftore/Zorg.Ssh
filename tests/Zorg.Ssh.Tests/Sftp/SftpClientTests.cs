@@ -374,7 +374,7 @@ public class SftpClientTests
             extensions: ["statvfs@openssh.com"]);
 
         SftpFileSystemInfo info = await fake.Client.GetFileSystemInfoAsync("/", Ct);
-        Assert.Equal(new SftpFileSystemInfo(4096, 512, 1000, 500, 400, 90, 80, 70, 12, true, 255), info);
+        Assert.Equal(new SftpFileSystemInfo { BlockSize = 4096, FragmentSize = 512, Blocks = 1000, FreeBlocks = 500, AvailableBlocks = 400, Files = 90, FreeFiles = 80, AvailableFiles = 70, FileSystemId = 12, IsReadOnly = true, MaxNameLength = 255 }, info);
         Assert.Equal(400UL * 512, info.AvailableBytes);
     }
 
@@ -419,7 +419,7 @@ public class SftpClientTests
             server.SendAsync(new Packet().U8(SftpMessage.Attrs).U32(request.Id).U32(0x8000000F).U64(77).U32(5).U32(6).U32(0x41ED).U32(1000).U32(2000).U32(2)
                 .Text("a").Text("b").Text("c").Text("d").ToFrame()));
 
-        SftpAttributes attributes = await fake.Client.GetAttributesAsync("x", cancellationToken: Ct);
+        SftpAttributes attributes = await fake.Client.GetAttributesAsync("x", Ct);
         Assert.Equal(77, attributes.Size);
         Assert.Equal(5u, attributes.Uid);
         Assert.Equal(6u, attributes.Gid);

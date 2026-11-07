@@ -50,7 +50,7 @@ internal static class LegacySmoke
             new SshServerOptions
             {
                 HostKeys = [hostKey],
-                Algorithms = new SshAlgorithms { KeyExchange = [kex], HostKeys = [LegacyAlgorithms.RsaSha1], Ciphers = ["aes128-ctr"], Macs = [mac] },
+                Algorithms = SshAlgorithms.LegacyUnsafe with { KeyExchange = [kex], HostKeys = [LegacyAlgorithms.RsaSha1], Ciphers = ["aes128-ctr"], Macs = [mac] },
                 PasswordHandler = static (request, _) => ValueTask.FromResult(
                     request.Password == "smoke-password" ? SshAuthDecision.Accept : SshAuthDecision.Reject),
                 SessionHandler = static async (session, token) =>

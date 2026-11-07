@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Net;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
@@ -60,18 +61,25 @@ public enum SshAuthDecision
 }
 
 /// <summary>A login attempt with a password.</summary>
-/// <param name="UserName">The user name. It's unverified, and chosen by the client.</param>
-/// <param name="Password">The password.</param>
 /// <example>
 /// <code>
 /// PasswordHandler = (request, ct) => users.CheckAsync(request.UserName, request.Password, ct),
 /// </code>
 /// </example>
-public sealed record SshPasswordRequest(string UserName, string Password)
+public sealed record SshPasswordRequest
 {
+    /// <summary>Gets the user name. It's unverified, and chosen by the client.</summary>
+    public required string UserName { get; init; }
+
+    /// <summary>Gets the password.</summary>
+    public required string Password { get; init; }
+
+    /// <summary>Gets the client's address and port, or null for a connection given to <see cref="SshServer.ServeStreamAsync"/>.</summary>
+    public IPEndPoint? RemoteEndPoint { get; init; }
+
     /// <summary>Returns a description with the password left out, so logging a request can't leak it.</summary>
     /// <returns>The description.</returns>
-    public override string ToString() => $"SshPasswordRequest {{ UserName = {UserName} }}";
+    public override string ToString() => $"SshPasswordRequest {{ UserName = {UserName}, RemoteEndPoint = {RemoteEndPoint} }}";
 }
 
 /// <summary>
@@ -79,21 +87,28 @@ public sealed record SshPasswordRequest(string UserName, string Password)
 /// only takes effect if the client proves it holds the key. OpenSSH certificates aren't supported on the server: one is
 /// a failed attempt, and the handler never sees it.
 /// </summary>
-/// <param name="UserName">The user name. It's unverified, and chosen by the client.</param>
-/// <param name="KeyType">The key type, for example <c>ssh-ed25519</c>.</param>
-/// <param name="Sha256Fingerprint">The key's fingerprint in OpenSSH form.</param>
 /// <example>
 /// <code>
 /// PublicKeyHandler = (request, ct) => ValueTask.FromResult(
 ///     allowed.Contains(request.Sha256Fingerprint) ? SshAuthDecision.Accept : SshAuthDecision.Reject),
 /// </code>
 /// </example>
-public sealed record SshPublicKeyRequest(string UserName, string KeyType, string Sha256Fingerprint);
+public sealed record SshPublicKeyRequest
+{
+    /// <summary>Gets the user name. It's unverified, and chosen by the client.</summary>
+    public required string UserName { get; init; }
+
+    /// <summary>Gets the key type, for example <c>ssh-ed25519</c>.</summary>
+    public required string KeyType { get; init; }
+
+    /// <summary>Gets the key's fingerprint in OpenSSH form.</summary>
+    public required string Sha256Fingerprint { get; init; }
+
+    /// <summary>Gets the client's address and port, or null for a connection given to <see cref="SshServer.ServeStreamAsync"/>.</summary>
+    public IPEndPoint? RemoteEndPoint { get; init; }
+}
 
 /// <summary>Who logged in.</summary>
-/// <param name="UserName">The authenticated user.</param>
-/// <param name="Methods">Every method that passed, in order.</param>
-/// <param name="KeyFingerprint">The fingerprint of the last key that was proven, if one was. With several keys, see <see cref="KeyFingerprints"/>.</param>
 /// <example>
 /// <code>
 /// if (!session.Principal.Methods.Contains("publickey"))
@@ -102,8 +117,14 @@ public sealed record SshPublicKeyRequest(string UserName, string KeyType, string
 /// }
 /// </code>
 /// </example>
-public sealed record SshPrincipal(string UserName, IReadOnlyList<string> Methods, string? KeyFingerprint)
+public sealed record SshPrincipal
 {
+    /// <summary>Gets the authenticated user.</summary>
+    public required string UserName { get; init; }
+
+    /// <summary>Gets every method that passed, in order.</summary>
+    public required IReadOnlyList<string> Methods { get; init; }
+
     /// <summary>
     /// Gets the fingerprint of every key the client proved it holds during login, in the order it proved them.
     /// It is empty if no key was used. A key counts once, however often it was offered, and a login can prove
@@ -135,9 +156,6 @@ public enum SshSessionKind
 }
 
 /// <summary>The terminal a client asked for.</summary>
-/// <param name="Terminal">The terminal type.</param>
-/// <param name="Columns">The width in characters.</param>
-/// <param name="Rows">The height in characters.</param>
 /// <example>
 /// <code>
 /// if (session.Pty is { } pty)
@@ -146,7 +164,17 @@ public enum SshSessionKind
 /// }
 /// </code>
 /// </example>
-public sealed record SshPtyRequest(string Terminal, int Columns, int Rows);
+public sealed record SshPtyRequest
+{
+    /// <summary>Gets the terminal type.</summary>
+    public required string Terminal { get; init; }
+
+    /// <summary>Gets the width in characters.</summary>
+    public required int Columns { get; init; }
+
+    /// <summary>Gets the height in characters.</summary>
+    public required int Rows { get; init; }
+}
 
 /// <summary>Everything a session handler needs. All of it comes from an authenticated client, but is still client-controlled.</summary>
 /// <example>
@@ -168,9 +196,11 @@ public sealed class SshServerSession
         IReadOnlyDictionary<string, string> environment,
         Stream input,
         Stream output,
-        Stream error)
+        Stream error,
+        IPEndPoint? remoteEndPoint)
     {
         Principal = principal;
+        RemoteEndPoint = remoteEndPoint;
         Kind = kind;
         Command = command;
         Pty = pty;
@@ -182,6 +212,9 @@ public sealed class SshServerSession
 
     /// <summary>Gets who logged in.</summary>
     public SshPrincipal Principal { get; }
+
+    /// <summary>Gets the client's address and port, or null for a connection given to <see cref="SshServer.ServeStreamAsync"/>.</summary>
+    public IPEndPoint? RemoteEndPoint { get; }
 
     /// <summary>Gets why the session started.</summary>
     public SshSessionKind Kind { get; }
@@ -216,20 +249,34 @@ public enum SshForwardDecision
 }
 
 /// <summary>A logged-in client asks the server to open a TCP connection for it.</summary>
-/// <param name="Principal">Who asked.</param>
-/// <param name="Host">The target host, chosen by the client. Names resolve on the server, so a rule on names alone can be dodged with an address.</param>
-/// <param name="Port">The target port.</param>
-/// <param name="OriginatorAddress">Where the client says the connection came from. It's unverified.</param>
-/// <param name="OriginatorPort">The port the client says the connection came from. It's unverified.</param>
 /// <example>
 /// <code>
 /// DirectTcpHandler = (request, ct) => ValueTask.FromResult(
 ///     request.Host == "db.internal" &amp;&amp; request.Port == 5432 ? SshForwardDecision.Allow : SshForwardDecision.Deny),
 /// </code>
 /// </example>
-public sealed record SshDirectTcpRequest(SshPrincipal Principal, string Host, int Port, string OriginatorAddress, int OriginatorPort);
+public sealed record SshDirectTcpRequest
+{
+    /// <summary>Gets who asked.</summary>
+    public required SshPrincipal Principal { get; init; }
 
-/// <summary>What <see cref="SshServer.StartAsync"/> needs. It listens on loopback unless told otherwise.</summary>
+    /// <summary>Gets the target host, chosen by the client. Names resolve on the server, so a rule on names alone can be dodged with an address.</summary>
+    public required string Host { get; init; }
+
+    /// <summary>Gets the target port.</summary>
+    public required int Port { get; init; }
+
+    /// <summary>Gets where the client says the connection came from. It's unverified.</summary>
+    public required string OriginatorAddress { get; init; }
+
+    /// <summary>Gets the port the client says the connection came from. It's unverified.</summary>
+    public required int OriginatorPort { get; init; }
+}
+
+/// <summary>
+/// What <see cref="SshServer.StartAsync"/> needs. It listens on loopback unless told otherwise. Use <c>with</c> to
+/// change a copy. <see cref="ToString"/> shows only the address and port, so logging options can't leak a key.
+/// </summary>
 /// <example>
 /// <code>
 /// SshServerOptions options = new()
@@ -241,7 +288,7 @@ public sealed record SshDirectTcpRequest(SshPrincipal Principal, string Host, in
 /// };
 /// </code>
 /// </example>
-public sealed class SshServerOptions
+public sealed record SshServerOptions
 {
     /// <summary>Gets the address to listen on. The default is loopback, so exposing a server is a deliberate choice.</summary>
     public IPAddress Address { get; init; } = IPAddress.Loopback;
@@ -252,13 +299,16 @@ public sealed class SshServerOptions
     /// <summary>Gets the host keys. At least one is required.</summary>
     public required IReadOnlyList<SshHostKey> HostKeys { get; init; }
 
-    /// <summary>Gets the password check. Without it, password login isn't offered.</summary>
+    /// <summary>Gets the password check. Without it, password login isn't offered. One that throws has rejected the attempt, and the failure is logged.</summary>
     public Func<SshPasswordRequest, CancellationToken, ValueTask<SshAuthDecision>>? PasswordHandler { get; init; }
 
-    /// <summary>Gets the public key check. Without it, publickey login isn't offered.</summary>
+    /// <summary>Gets the public key check. Without it, publickey login isn't offered. One that throws has rejected the attempt, and the failure is logged.</summary>
     public Func<SshPublicKeyRequest, CancellationToken, ValueTask<SshAuthDecision>>? PublicKeyHandler { get; init; }
 
-    /// <summary>Gets the code that serves a session, which returns the exit code. It runs once per exec, shell or subsystem request.</summary>
+    /// <summary>
+    /// Gets the code that serves a session, which returns the exit code. It runs once per exec, shell or subsystem
+    /// request. One that throws ends the session with exit code 1, and the failure is logged.
+    /// </summary>
     public required Func<SshServerSession, CancellationToken, Task<int>> SessionHandler { get; init; }
 
     /// <summary>
@@ -375,4 +425,11 @@ public sealed class SshServerOptions
 
     /// <summary>Gets the logger factory. Passwords and keys are never logged.</summary>
     public ILoggerFactory? LoggerFactory { get; init; }
+
+    /// <summary>Prints the address and port only. Guarantee 4: host keys and handlers never reach a string.</summary>
+    private bool PrintMembers(StringBuilder builder)
+    {
+        builder.Append("Address = ").Append(Address).Append(", Port = ").Append(Port);
+        return true;
+    }
 }

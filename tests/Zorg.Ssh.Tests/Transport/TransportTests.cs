@@ -193,7 +193,7 @@ public class TransportTests
             await server.SendAsync(payload, Ct);
 
             SshDisconnectedException ex = await Assert.ThrowsAsync<SshDisconnectedException>(async () => await client.ReceiveAsync(Ct));
-            Assert.Equal(11u, ex.ReasonCode);
+            Assert.Equal(SshDisconnectReason.ByApplication, ex.Reason);
             Assert.DoesNotContain('\n', ex.Description);
             Assert.DoesNotContain('\u001b', ex.Description);
             Assert.True(ex.Description.Length <= 256);
