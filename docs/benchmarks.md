@@ -1,15 +1,16 @@
 # Benchmarks
 
-Zorg.Ssh measured against SSH.NET 2026.0.0 and Tmds.Ssh 0.26.0, talking to a real OpenSSH server. These are first numbers from one machine, measured on 5 November 2026. Read [the limits](#limits) before you use them for anything.
+Zorg.Ssh measured against SSH.NET 2026.0.0 and Tmds.Ssh 0.26.0, talking to a real OpenSSH server. These numbers are from one machine, measured on 7 November 2026 on `fcb9e80`, one full run. The first numbers were measured on 5 November 2026 and are kept in [what changed](#what-changed-since-5-november). Read [the limits](#limits) before you use them for anything.
 
 ## Summary
 
-- **Zorg.Ssh isn't faster than the other two overall.** It beat SSH.NET by a margin that repeated in both runs in no test at all. It beat Tmds.Ssh in AES-GCM upload and ChaCha20 download.
-- **Login: the 110 ms in the tables below is out of date.** A later change cut it to 64 ms, against 68 ms for SSH.NET and 108 ms for Tmds.Ssh, by the `--phases` measure. The other numbers here predate that change too.
-- **Exec: a tie.** All three take about 45 ms, and most of that is the server. Tmds.Ssh was about 5% ahead in both runs.
-- **AES-GCM transfers: no result.** All three ran at about the speed of this machine's network path, so the test can't separate them on download. On upload, Zorg.Ssh and SSH.NET were level, and Tmds.Ssh took 33% to 62% longer than Zorg.Ssh.
-- **ChaCha20 transfers: mixed.** SSH.NET's download took 7% to 21% less time than Zorg.Ssh's. Tmds.Ssh's was about 2.5 times slower. Uploads were close to level, with a lot of noise.
-- **Memory: Zorg.Ssh allocates the most per command.** 73 KB against 13 KB and 3 KB. In transfers it allocates 8 to 40 times what Tmds.Ssh does, and is about level with SSH.NET.
+- **Zorg.Ssh isn't faster than the other two overall.** It is ahead in login and level in exec, and behind in AES-GCM download and in ChaCha20 transfers against SSH.NET. Most upload rows are inside the noise.
+- **Login: 67 ms, against 71 ms for SSH.NET and 111 ms for Tmds.Ssh.** The gap to SSH.NET (6%) is about one and a half standard deviations, so call it a tie with Zorg.Ssh slightly ahead. Tmds.Ssh is 66% slower. The `--phases` measure gives the same order: 66.6, 69.4 and 111.7 ms.
+- **Exec: a tie.** 44.3, 45.0 and 47.7 ms, and most of that is the server.
+- **AES-GCM download: Zorg.Ssh is slowest.** 475 ms against 415 ms for SSH.NET and 390 ms for Tmds.Ssh, so 13% and 18% more time. This is the reverse of 5 November, when all three were level at the speed of the path. The path (270 to 310 MiB/s) isn't the limit for Zorg.Ssh this time, at 269 MiB/s, but the standard deviations (4% to 7%) leave the gap to SSH.NET only about 3 deviations wide, and it moved between runs before.
+- **AES-GCM upload:** Zorg.Ssh 454 ms, SSH.NET 531 ms, Tmds.Ssh 606 ms. The standard deviations are 18% to 20%, so only Tmds.Ssh's lag is plausibly real, and it wasn't in the first run (it was 62% then).
+- **ChaCha20: SSH.NET is ahead.** Its download took 5% less than Zorg.Ssh's and its upload 12% less, in both cases inside the noise for upload. Tmds.Ssh's download is 2.7 times slower. Its upload is level.
+- **Memory: Zorg.Ssh now allocates 10 KB per command**, against 12.7 KB for SSH.NET and 3.1 KB for Tmds.Ssh. In transfers it allocates 9 to 33 times what Tmds.Ssh does. Against SSH.NET it allocates less on download (0.3 to 0.7 times) and more on upload (1.5 to 1.7 times).
 
 ## Setup
 
@@ -19,12 +20,13 @@ Zorg.Ssh measured against SSH.NET 2026.0.0 and Tmds.Ssh 0.26.0, talking to a rea
 | Operating system | Windows 11 23H2 (10.0.22631) |
 | Runtime | .NET 10.0.14, SDK 10.0.403, RyuJIT x86-64-v3, Release build |
 | Tool | BenchmarkDotNet 0.15.8 |
-| Zorg.Ssh | 0.1.0-alpha, at the commit that adds this file |
+| Zorg.Ssh | 0.1.0-alpha, commit `fcb9e80` |
 | SSH.NET | 2026.0.0 |
 | Tmds.Ssh | 0.26.0 |
 | Server | OpenSSH_10.6p1 with OpenSSL 3.5.7, on Alpine edge |
 | Container | Podman 6.1.4 on a WSL 2 machine with 8 CPUs and 2 GiB, Linux 6.18.54 |
 | Path | Client on Windows, through a port published on `127.0.0.1`, to the container |
+| Machine state | Quiet when it started: total CPU at 0 to 5% over three samples, no test run, no benchmark and no other container jobs. Other tools' idle build servers were running. Nothing was checked during the run, so a short burst of outside work can't be ruled out. |
 
 ### Algorithms
 
@@ -60,59 +62,57 @@ dotnet run -c Release --no-build --project benchmarks/Zorg.Ssh.Benchmarks -- --c
 dotnet run -c Release --no-build --project benchmarks/Zorg.Ssh.Benchmarks -- --phases
 ```
 
-The full run takes about 6.5 minutes, and needs Podman or Docker.
+The full run takes roughly a quarter of an hour with the other two commands (not timed exactly), and needs Podman or Docker.
 
 ## Results
 
-Two full runs were made. The tables show the second, which started with no other containers or test processes on the machine. The first was noisier, and other work may have been running during it, so its means are given as well. Lower is better for time and memory. `Ratio` is the mean divided by Zorg.Ssh's mean.
+One full run. Lower is better for time and memory. `Ratio` is the mean divided by Zorg.Ssh's mean, worked out from the means in the table, not BenchmarkDotNet's per-iteration ratio, which differs a little when the spread is large.
 
 ### Exec round trip
 
-| Library | Mean | Std dev | Ratio | Allocated | First run |
-|---|---:|---:|---:|---:|---:|
-| Zorg.Ssh | 46.8 ms | 1.9 ms | 1.00 | 73.1 KB | 46.2 ms |
-| SSH.NET | 45.1 ms | 1.7 ms | 0.97 | 12.7 KB | 46.0 ms |
-| Tmds.Ssh | 44.0 ms | 0.3 ms | 0.94 | 3.1 KB | 44.1 ms |
+| Library | Mean | Std dev | Ratio | Allocated |
+|---|---:|---:|---:|---:|
+| Zorg.Ssh | 44.3 ms | 0.4 ms | 1.00 | 10.0 KB |
+| SSH.NET | 45.0 ms | 1.2 ms | 1.02 | 12.7 KB |
+| Tmds.Ssh | 47.7 ms | 2.2 ms | 1.08 | 3.1 KB |
 
-Most of this time is the server starting a process. Zorg.Ssh's allocation is mainly the two 32 KiB read buffers that `ExecuteAsync` makes for each command.
+Most of this time is the server starting a process. Zorg.Ssh's allocation was 73 KB on 5 November, mainly two 32 KiB read buffers per command. It is 10 KB now, and the reason wasn't investigated here: the library changed between the two runs.
 
 ### Connect and login
 
-| Library | Key exchange | Mean | Std dev | Ratio | Allocated | First run |
-|---|---|---:|---:|---:|---:|---:|
-| Zorg.Ssh | `curve25519-sha256` | 109.9 ms | 1.9 ms | 1.00 | 46.7 KB | 108.9 ms |
-| SSH.NET | `curve25519-sha256` | 68.7 ms | 1.1 ms | 0.63 | 77.1 KB | 73.3 ms |
-| Tmds.Ssh | `curve25519-sha256` | 108.8 ms | 1.5 ms | 0.99 | 34.7 KB | 111.4 ms |
-| Zorg.Ssh | `mlkem768x25519-sha256` | 110.6 ms | 1.8 ms | 1.00 | 94.5 KB | 112.8 ms |
-| SSH.NET | `mlkem768x25519-sha256` | 69.3 ms | 1.4 ms | 0.63 | 126.3 KB | 70.0 ms |
-| Tmds.Ssh | `mlkem768x25519-sha256` | 110.5 ms | 1.9 ms | 1.00 | 82.0 KB | 112.5 ms |
+| Library | Key exchange | Mean | Std dev | Ratio | Allocated |
+|---|---|---:|---:|---:|---:|
+| Zorg.Ssh | `curve25519-sha256` | 67.2 ms | 2.6 ms | 1.00 | 49.1 KB |
+| SSH.NET | `curve25519-sha256` | 71.4 ms | 2.9 ms | 1.06 | 77.1 KB |
+| Tmds.Ssh | `curve25519-sha256` | 111.4 ms | 3.4 ms | 1.66 | 34.9 KB |
+| Zorg.Ssh | `mlkem768x25519-sha256` | 68.2 ms | 3.8 ms | 1.00 | 96.7 KB |
+| SSH.NET | `mlkem768x25519-sha256` | 87.0 ms | 26.0 ms | 1.27 | 126.3 KB |
+| Tmds.Ssh | `mlkem768x25519-sha256` | 110.6 ms | 3.1 ms | 1.62 | 82.1 KB |
 
-The hybrid post-quantum key exchange costs almost nothing here.
+The hybrid post-quantum key exchange costs about 1 ms for Zorg.Ssh. SSH.NET's ML-KEM row has a standard deviation of 26 ms, so one slow iteration or more is in it, and its 87 ms shouldn't be read as slower than its 71 ms without ML-KEM.
 
-Timing the two halves separately (`--phases`, medians of 30) puts the whole gap in login: 108.1 ms for Zorg.Ssh, 67.8 ms for SSH.NET and 107.7 ms for Tmds.Ssh. Closing takes under 0.5 ms for all three.
+Timing the two halves separately (`--phases`, medians of 30): login 66.6 ms for Zorg.Ssh, 69.4 ms for SSH.NET and 111.7 ms for Tmds.Ssh. Closing takes 0.2 to 0.3 ms for all three.
 
-**The 40 ms gap was a stall, and it's gone.** Zorg.Ssh used to wait for the server's identification line before sending KEXINIT. It now sends KEXINIT straight after its own identification, as RFC 4253 allows, and login fell to 64.4 ms (medians of 30), with SSH.NET at 68.0 ms and Tmds.Ssh at 107.7 ms in the same run. The cause was probably a TCP delayed acknowledgement, which would fit the size of the gap, but only the result was measured. It may not show up the same way off this port-forwarded path.
+Zorg.Ssh used to wait for the server's identification line before sending KEXINIT, and lost about 40 ms to it. It now sends KEXINIT straight after its own identification, as RFC 4253 allows. The cause of the stall was probably a TCP delayed acknowledgement, which would fit the size of the gap, but only the result was measured. It may not show up the same way off this port-forwarded path.
 
 ### SFTP: 128 MiB file
 
-| Library | Direction | Cipher | Mean | Std dev | MiB/s | Ratio | Allocated | First run |
-|---|---|---|---:|---:|---:|---:|---:|---:|
-| Zorg.Ssh | Download | AES-256-GCM | 430 ms | 18 ms | 298 | 1.00 | 6.4 MB | 456 ms |
-| SSH.NET | Download | AES-256-GCM | 415 ms | 8 ms | 308 | 0.97 | 9.8 MB | 432 ms |
-| Tmds.Ssh | Download | AES-256-GCM | 407 ms | 26 ms | 315 | 0.95 | 0.2 MB | 624 ms |
-| Zorg.Ssh | Upload | AES-256-GCM | 426 ms | 96 ms | 301 | 1.00 | 4.4 MB | 506 ms |
-| SSH.NET | Upload | AES-256-GCM | 442 ms | 16 ms | 289 | 1.07 | 2.7 MB | 439 ms |
-| Tmds.Ssh | Upload | AES-256-GCM | 667 ms | 75 ms | 192 | 1.62 | 0.2 MB | 673 ms |
-| Zorg.Ssh | Download | ChaCha20 | 687 ms | 38 ms | 186 | 1.00 | 4.1 MB | 683 ms |
-| SSH.NET | Download | ChaCha20 | 544 ms | 28 ms | 235 | 0.79 | 14.0 MB | 638 ms |
-| Tmds.Ssh | Download | ChaCha20 | 1,646 ms | 89 ms | 78 | 2.40 | 0.5 MB | 1,790 ms |
-| Zorg.Ssh | Upload | ChaCha20 | 913 ms | 124 ms | 140 | 1.00 | 11.2 MB | 893 ms |
-| SSH.NET | Upload | ChaCha20 | 862 ms | 107 ms | 149 | 0.96 | 7.6 MB | 731 ms |
-| Tmds.Ssh | Upload | ChaCha20 | 858 ms | 129 ms | 149 | 0.96 | 0.6 MB | 918 ms |
+| Library | Direction | Cipher | Mean | Std dev | MiB/s | Ratio | Allocated |
+|---|---|---|---:|---:|---:|---:|---:|
+| Zorg.Ssh | Download | AES-256-GCM | 476 ms | 21 ms | 269 | 1.00 | 6.7 MB |
+| SSH.NET | Download | AES-256-GCM | 415 ms | 20 ms | 308 | 0.87 | 9.7 MB |
+| Tmds.Ssh | Download | AES-256-GCM | 390 ms | 28 ms | 328 | 0.82 | 0.2 MB |
+| Zorg.Ssh | Upload | AES-256-GCM | 454 ms | 83 ms | 282 | 1.00 | 4.6 MB |
+| SSH.NET | Upload | AES-256-GCM | 531 ms | 105 ms | 241 | 1.17 | 2.7 MB |
+| Tmds.Ssh | Upload | AES-256-GCM | 606 ms | 55 ms | 211 | 1.34 | 0.2 MB |
+| Zorg.Ssh | Download | ChaCha20 | 618 ms | 25 ms | 207 | 1.00 | 4.3 MB |
+| SSH.NET | Download | ChaCha20 | 588 ms | 22 ms | 218 | 0.95 | 14.0 MB |
+| Tmds.Ssh | Download | ChaCha20 | 1,689 ms | 129 ms | 76 | 2.73 | 0.5 MB |
+| Zorg.Ssh | Upload | ChaCha20 | 894 ms | 109 ms | 143 | 1.00 | 11.3 MB |
+| SSH.NET | Upload | ChaCha20 | 787 ms | 109 ms | 163 | 0.88 | 7.6 MB |
+| Tmds.Ssh | Upload | ChaCha20 | 903 ms | 142 ms | 142 | 1.01 | 0.6 MB |
 
-The first run's Tmds.Ssh AES download of 624 ms had a large outlier: its median was 481 ms.
-
-Differences smaller than the standard deviations here mean nothing. That covers most of the upload rows. SSH.NET beat Zorg.Ssh on ChaCha20 download in both runs, by 7% in the first and 21% in the second, and on ChaCha20 upload in both. Zorg.Ssh's AES upload was ahead in the second run and behind in the first.
+Differences smaller than the standard deviations mean nothing. That covers the AES and ChaCha20 upload rows between Zorg.Ssh and the others, apart from Tmds.Ssh's AES upload, which is 1.3 deviations out. The download rows have deviations of 4% to 7%: SSH.NET and Tmds.Ssh beat Zorg.Ssh on AES download by 13% and 18%, and SSH.NET beat it on ChaCha20 download by 5%, which is just over one deviation.
 
 Zorg.Ssh rekeys after 1 GiB in one direction, and a run moves more than that, so at least one rekey falls inside each Zorg.Ssh upload and download case. It's counted in the result. Whether the other two rekeyed wasn't checked.
 
@@ -122,10 +122,10 @@ Plain TCP through the same published port, with no SSH (`--ceiling`), 1 GiB at a
 
 | Direction | Slowest | Fastest | Middle |
 |---|---:|---:|---:|
-| Container to client | 225 MiB/s | 282 MiB/s | 270 MiB/s |
-| Client to container | 524 MiB/s | 667 MiB/s | 545 MiB/s |
+| Container to client | 272 MiB/s | 309 MiB/s | 287 MiB/s |
+| Client to container | 528 MiB/s | 589 MiB/s | 579 MiB/s |
 
-Downloads with AES-GCM ran at or just above this figure. The path varies from run to run, and it sets the limit on that row of the table. So the AES download results say that no library is much slower than the path, and nothing about which is fastest. In a faster setup the order could differ.
+The path varies from run to run, and it sets the limit on the download rows. Tmds.Ssh's AES download, at 328 MiB/s, ran above this run's fastest plain TCP figure, so the path varied during the run, and a comparison across rows of a few percent says little. In a faster setup the order could differ.
 
 Upload has more room, but the server's `sftp-server` process and file writes also take their share, and those weren't measured apart.
 
@@ -135,25 +135,44 @@ Zorg.Ssh only. In process, on one thread, with a 32 KiB payload, the largest pac
 
 | Algorithm | `Seal` | MiB/s | `SealThenOpen` | `Seal`, 1 KiB | `SealThenOpen`, 1 KiB |
 |---|---:|---:|---:|---:|---:|
-| `aes128-gcm@openssh.com` | 5.1 µs | 6,159 | 10.6 µs | 0.30 µs | 0.63 µs |
-| `aes256-gcm@openssh.com` | 6.6 µs | 4,704 | 13.1 µs | 0.35 µs | 0.70 µs |
-| `aes256-ctr` with `hmac-sha2-512-etm@openssh.com` | 73.8 µs | 424 | 148.0 µs | 3.1 µs | 6.4 µs |
-| `aes128-ctr` with `hmac-sha2-256-etm@openssh.com` | 123.1 µs | 254 | 253.3 µs | 4.6 µs | 9.4 µs |
-| `aes256-ctr` with `hmac-sha2-256-etm@openssh.com` | 126.4 µs | 247 | 251.7 µs | 4.7 µs | 9.5 µs |
-| `chacha20-poly1305@openssh.com` | 138.4 µs | 226 | 270.2 µs | 4.6 µs | 9.4 µs |
+| `aes128-gcm@openssh.com` | 5.0 µs | 6,255 | 10.5 µs | 0.31 µs | 0.63 µs |
+| `aes256-gcm@openssh.com` | 6.4 µs | 4,883 | 13.0 µs | 0.35 µs | 0.69 µs |
+| `aes256-ctr` with `hmac-sha2-512-etm@openssh.com` | 73.0 µs | 428 | 146.7 µs | 3.0 µs | 6.4 µs |
+| `aes128-ctr` with `hmac-sha2-256-etm@openssh.com` | 123.9 µs | 252 | 243.2 µs | 4.7 µs | 9.7 µs |
+| `aes256-ctr` with `hmac-sha2-256-etm@openssh.com` | 123.3 µs | 253 | 265.6 µs | 4.6 µs | 9.3 µs |
+| `chacha20-poly1305@openssh.com` | 130.4 µs | 240 | 263.5 µs | 4.5 µs | 9.2 µs |
 
-AES-GCM runs on the CPU's AES instructions through the .NET library. ChaCha20-Poly1305 runs on BouncyCastle, about 20 times slower here. Its 226 MiB/s is close to what Zorg.Ssh reaches in ChaCha20 download, so the cipher is the likely limit there, not the network. The two CTR rows with SHA-256 are slow because this CPU has no SHA-NI, which is why SHA-512 comes first in the MAC list. A newer CPU may give a different order.
+AES-GCM runs on the CPU's AES instructions through the .NET library. ChaCha20-Poly1305 runs on BouncyCastle, about 20 times slower here. Its 240 MiB/s is close to what Zorg.Ssh reaches in ChaCha20 download (207 MiB/s), so the cipher is the likely limit there, not the network. The two CTR rows with SHA-256 are slow because this CPU has no SHA-NI, which is why SHA-512 comes first in the MAC list. A newer CPU may give a different order. The `aes256-ctr`/SHA-256 `SealThenOpen` row has a standard deviation of 41 µs (16%), so treat its 265.6 µs as rough.
 
 There's no equivalent figure for the other libraries' ciphers.
+
+## What changed since 5 November
+
+The first measurement used the code at the commit that added this file. Where the tables differ, the library may have changed, and the run-to-run spread is part of the difference.
+
+| Measure | 5 November | 7 November |
+|---|---:|---:|
+| Login, `curve25519-sha256`, Zorg.Ssh | 109.9 ms (64 ms after the KEXINIT change, by `--phases`) | 67.2 ms |
+| Login, SSH.NET | 68.7 ms | 71.4 ms |
+| Login, Tmds.Ssh | 108.8 ms | 111.4 ms |
+| Exec, Zorg.Ssh | 46.8 ms | 44.3 ms |
+| Exec allocation, Zorg.Ssh | 73.1 KB | 10.0 KB |
+| AES download, Zorg.Ssh / SSH.NET / Tmds.Ssh | 430 / 415 / 407 ms | 476 / 415 / 390 ms |
+| AES upload, Zorg.Ssh / SSH.NET / Tmds.Ssh | 426 / 442 / 667 ms | 454 / 531 / 606 ms |
+| ChaCha20 download, Zorg.Ssh / SSH.NET / Tmds.Ssh | 687 / 544 / 1,646 ms | 618 / 588 / 1,689 ms |
+| ChaCha20 upload, Zorg.Ssh / SSH.NET / Tmds.Ssh | 913 / 862 / 858 ms | 894 / 787 / 903 ms |
+| Plain TCP, container to client | 225 to 282 MiB/s | 272 to 309 MiB/s |
+
+Zorg.Ssh's AES download is 46 ms slower than before, while SSH.NET's is unchanged and the path is, if anything, faster. That could be a real regression in Zorg.Ssh since 5 November, or noise: the standard deviation then was 18 ms and is 21 ms now. Only one run was made this time, so it wasn't separated. Worth a second look before anything is said about it.
 
 ## Limits
 
 - **One machine, one run setup.** No other hardware, operating system or server was tried. A Linux client would avoid the Windows to WSL hop altogether.
 - **The network isn't a network.** The round trip is close to zero, so this says little about high latency, where pipelining depth and window sizes matter most. On a real link, all of these results could change order.
-- **The path is the limit** for AES-GCM download, as above.
+- **The path is the limit** for AES-GCM download in the best cases, as above.
 - **The server shares the machine,** and its 8 CPUs, with the client. Its work is part of every number, and it's most of the exec number.
-- **Noise.** Upload standard deviations reach 23% of the mean. Eight iterations don't settle small differences. BenchmarkDotNet also warned of a multimodal distribution for some cases.
-- **Two runs.** The second is in the tables because it was the last, on the final code, not because of what it showed. Both are given so you can compare.
+- **Noise.** Upload standard deviations reach 20% of the mean. Eight iterations don't settle small differences.
+- **One run.** The first measurement had two. This one has one, so run-to-run spread isn't shown, only the spread inside the run.
 - **Defaults only.** Each library might do better tuned. Their chunk sizes and pipelining differ, and that's part of what's measured.
 - **Single connection, single transfer.** Concurrent channels, many connections, small files and directory listing weren't measured.
 - **Client-side memory only.** `Allocated` is managed memory on the client. It doesn't include native memory or peak use.
