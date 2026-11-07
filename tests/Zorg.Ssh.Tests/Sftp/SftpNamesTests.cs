@@ -295,5 +295,5 @@ public sealed class SftpNamesTests : IDisposable
     [InlineData("a\\b", false)]
     [InlineData("a\0b", false)]
     public void IsSafeName_decides_on_the_name(string name, bool safe) =>
-        Assert.Equal(safe, new SftpEntry(name, new SftpAttributes()).IsSafeName);
+        Assert.Equal(safe, new SftpEntry { Name = name, Attributes = new SftpAttributes() }.IsSafeName);
 }

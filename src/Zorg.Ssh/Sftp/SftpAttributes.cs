@@ -265,12 +265,6 @@ public sealed record SftpAttributes
 }
 
 /// <summary>One directory entry from <see cref="SftpClient.ListDirectoryAsync"/>.</summary>
-/// <param name="Name">
-/// The name exactly as the server sent it, so it's untrusted: it can hold <c>../</c>, a slash or a control
-/// character. Check <see cref="IsSafeName"/> before using it in a local path. Bytes that aren't valid UTF-8
-/// become U+FFFD, so such a name can't be used to reach the file.
-/// </param>
-/// <param name="Attributes">What the server said about the entry, without following symbolic links.</param>
 /// <example>
 /// <code>
 /// await foreach (SftpEntry entry in sftp.ListDirectoryAsync("/var/log", cancellationToken))
@@ -282,8 +276,18 @@ public sealed record SftpAttributes
 /// }
 /// </code>
 /// </example>
-public sealed record SftpEntry(string Name, SftpAttributes Attributes)
+public sealed record SftpEntry
 {
+    /// <summary>
+    /// Gets the name exactly as the server sent it, so it's untrusted: it can hold <c>../</c>, a slash or a control
+    /// character. Check <see cref="IsSafeName"/> before using it in a local path. Bytes that aren't valid UTF-8
+    /// become U+FFFD, so such a name can't be used to reach the file.
+    /// </summary>
+    public required string Name { get; init; }
+
+    /// <summary>Gets what the server said about the entry, without following symbolic links.</summary>
+    public required SftpAttributes Attributes { get; init; }
+
     /// <summary>
     /// Gets a value saying whether <see cref="Name"/> is a plain file name on this machine: it isn't <c>.</c> or
     /// <c>..</c>, and has no slash, backslash, NUL or anything else this operating system would treat specially.
@@ -299,37 +303,52 @@ public sealed record SftpEntry(string Name, SftpAttributes Attributes)
     public bool IsSafeName => SftpLocalPath.IsSafeName(Name);
 }
 
-/// <summary>What <see cref="SftpClient.GetFileSystemInfoAsync"/> reports, in the terms of POSIX <c>statvfs</c>.</summary>
-/// <param name="BlockSize">The preferred block size.</param>
-/// <param name="FragmentSize">The unit the block counts use.</param>
-/// <param name="Blocks">The size of the file system, in fragments.</param>
-/// <param name="FreeBlocks">The free fragments.</param>
-/// <param name="AvailableBlocks">The fragments free for an unprivileged user.</param>
-/// <param name="Files">The number of file nodes.</param>
-/// <param name="FreeFiles">The free file nodes.</param>
-/// <param name="AvailableFiles">The file nodes free for an unprivileged user.</param>
-/// <param name="FileSystemId">The file system's id.</param>
-/// <param name="IsReadOnly">Whether it's mounted read-only.</param>
-/// <param name="MaxNameLength">The longest allowed file name.</param>
+/// <summary>What <see cref="SftpClient.GetFileSystemInfoAsync"/> reports, in the terms of POSIX <c>statvfs</c>. Every value is the server's.</summary>
 /// <example>
 /// <code>
 /// SftpFileSystemInfo info = await sftp.GetFileSystemInfoAsync("/srv", cancellationToken);
 /// Console.WriteLine($"{info.AvailableBytes} bytes free");
 /// </code>
 /// </example>
-public sealed record SftpFileSystemInfo(
-    ulong BlockSize,
-    ulong FragmentSize,
-    ulong Blocks,
-    ulong FreeBlocks,
-    ulong AvailableBlocks,
-    ulong Files,
-    ulong FreeFiles,
-    ulong AvailableFiles,
-    ulong FileSystemId,
-    bool IsReadOnly,
-    ulong MaxNameLength)
+public sealed record SftpFileSystemInfo
 {
+    internal SftpFileSystemInfo()
+    {
+    }
+
+    /// <summary>Gets the preferred block size.</summary>
+    public ulong BlockSize { get; init; }
+
+    /// <summary>Gets the unit the block counts use.</summary>
+    public ulong FragmentSize { get; init; }
+
+    /// <summary>Gets the size of the file system, in fragments.</summary>
+    public ulong Blocks { get; init; }
+
+    /// <summary>Gets the free fragments.</summary>
+    public ulong FreeBlocks { get; init; }
+
+    /// <summary>Gets the fragments free for an unprivileged user.</summary>
+    public ulong AvailableBlocks { get; init; }
+
+    /// <summary>Gets the number of file nodes.</summary>
+    public ulong Files { get; init; }
+
+    /// <summary>Gets the free file nodes.</summary>
+    public ulong FreeFiles { get; init; }
+
+    /// <summary>Gets the file nodes free for an unprivileged user.</summary>
+    public ulong AvailableFiles { get; init; }
+
+    /// <summary>Gets the file system's id.</summary>
+    public ulong FileSystemId { get; init; }
+
+    /// <summary>Gets whether it's mounted read-only.</summary>
+    public bool IsReadOnly { get; init; }
+
+    /// <summary>Gets the longest allowed file name.</summary>
+    public ulong MaxNameLength { get; init; }
+
     /// <summary>Gets the bytes free for an unprivileged user. It's computed from values the server chose.</summary>
     /// <example>
     /// <code>

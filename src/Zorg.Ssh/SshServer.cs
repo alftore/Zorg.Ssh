@@ -221,7 +221,9 @@ public sealed partial class SshServer : IAsyncDisposable
     {
         SshReader reader = new(data);
         string terminal = reader.ReadUtf8String();
-        return new SshPtyRequest(terminal, (int)Math.Min(reader.ReadUInt32(), 65535), (int)Math.Min(reader.ReadUInt32(), 65535));
+        int columns = (int)Math.Min(reader.ReadUInt32(), 65535);
+        int rows = (int)Math.Min(reader.ReadUInt32(), 65535);
+        return new SshPtyRequest { Terminal = terminal, Columns = columns, Rows = rows };
     }
 
     /// <summary>Reads a direct-tcpip open. Returns null for one that names no real target, which the handler never sees.</summary>
@@ -239,7 +241,14 @@ public sealed partial class SshServer : IAsyncDisposable
                 return null;
             }
 
-            return new SshDirectTcpRequest(principal, host, (int)port, PeerText.Clean(origin, MaxForwardHost), (int)Math.Min(originPort, 65535));
+            return new SshDirectTcpRequest
+            {
+                Principal = principal,
+                Host = host,
+                Port = (int)port,
+                OriginatorAddress = PeerText.Clean(origin, MaxForwardHost),
+                OriginatorPort = (int)Math.Min(originPort, 65535),
+            };
         }
         catch (SshProtocolException)
         {
@@ -266,11 +275,13 @@ public sealed partial class SshServer : IAsyncDisposable
                 continue;
             }
 
-            if (!TryConfigure(socket) || SourceAddress(socket) is not { } address)
+            if (!TryConfigure(socket) || SourceEndPoint(socket) is not { } remote)
             {
                 socket.Dispose();
                 continue;
             }
+
+            IPAddress address = remote.Address;
 
             // S6: refused before a single byte is read, so a flood costs almost nothing.
             if (!TryReserve(address))
@@ -283,7 +294,7 @@ public sealed partial class SshServer : IAsyncDisposable
             try
             {
 #pragma warning disable CA2000 // The connection owns the stream, and closes it on every path.
-                _ = Track(new NetworkStream(socket, ownsSocket: true), address);
+                _ = Track(new NetworkStream(socket, ownsSocket: true), remote);
 #pragma warning restore CA2000
             }
             catch (Exception ex) when (ex is IOException or SocketException or ObjectDisposedException)
@@ -312,12 +323,12 @@ public sealed partial class SshServer : IAsyncDisposable
         }
     }
 
-    /// <summary>Reads the peer's address, or null if the socket has already gone.</summary>
-    private static IPAddress? SourceAddress(Socket socket)
+    /// <summary>Reads the peer's address and port, or null if the socket has already gone.</summary>
+    private static IPEndPoint? SourceEndPoint(Socket socket)
     {
         try
         {
-            return (socket.RemoteEndPoint as IPEndPoint)?.Address;
+            return socket.RemoteEndPoint as IPEndPoint;
         }
         catch (Exception ex) when (ex is SocketException or ObjectDisposedException)
         {
@@ -364,9 +375,9 @@ public sealed partial class SshServer : IAsyncDisposable
         }
     }
 
-    private Task Track(Stream stream, IPAddress? address = null)
+    private Task Track(Stream stream, IPEndPoint? remote = null)
     {
-        Task connection = Task.Run(() => ServeAsync(stream, address), CancellationToken.None);
+        Task connection = Task.Run(() => ServeAsync(stream, remote), CancellationToken.None);
         _connections.TryAdd(connection, true);
         _ = connection.ContinueWith(
             finished => _connections.TryRemove(finished, out _),
@@ -376,8 +387,9 @@ public sealed partial class SshServer : IAsyncDisposable
         return connection;
     }
 
-    private async Task ServeAsync(Stream stream, IPAddress? address)
+    private async Task ServeAsync(Stream stream, IPEndPoint? remote)
     {
+        IPAddress? address = remote?.Address;
         bool authenticated = false;
         SshTransport? transport = null;
         try
@@ -389,16 +401,15 @@ public sealed partial class SshServer : IAsyncDisposable
             transport = await SshTransport.StartAsync(stream, _transportOptions, grace.Token).ConfigureAwait(false);
 #pragma warning restore CA2000
 
-            ServerAuthenticator authenticator = new(transport, BuildAuthOptions());
+            ServerAuthenticator authenticator = new(transport, BuildAuthOptions(remote));
             AuthenticatedUser user = await authenticator.AuthenticateAsync(grace.Token).ConfigureAwait(false);
             authenticated = true;
             ReleaseUnauthenticated(address);
 
-            SshPrincipal principal = new(
-                user.Name,
-                user.Methods,
-                user.Key is null ? null : HostKeyPolicy.ComputeFingerprint(user.Key.Blob.Span))
+            SshPrincipal principal = new()
             {
+                UserName = user.Name,
+                Methods = user.Methods,
                 KeyFingerprints = [.. user.ProvenKeys.Select(static k => HostKeyPolicy.ComputeFingerprint(k.Blob.Span))],
             };
 
@@ -412,7 +423,7 @@ public sealed partial class SshServer : IAsyncDisposable
             {
                 connection.Start();
                 _options.ConnectionStarted?.Invoke(connection);
-                await ServeChannelsAsync(connection, principal).ConfigureAwait(false);
+                await ServeChannelsAsync(connection, principal, remote).ConfigureAwait(false);
             }
         }
         catch (Exception ex) when (ex is SshException or OperationCanceledException or IOException)
@@ -439,7 +450,7 @@ public sealed partial class SshServer : IAsyncDisposable
         }
     }
 
-    private ServerAuthOptions BuildAuthOptions()
+    private ServerAuthOptions BuildAuthOptions(IPEndPoint? remote)
     {
         SshServerOptions options = _options;
         return new ServerAuthOptions
@@ -449,11 +460,17 @@ public sealed partial class SshServer : IAsyncDisposable
             RequiredMethods = options.RequiredAuthMethods,
             AllowRsaSha1 = options.Algorithms.AllowsRsaSha1,
             Password = options.PasswordHandler is { } password
-                ? (user, secret, ct) => CheckAsync(() => password(new SshPasswordRequest(user, secret), ct))
+                ? (user, secret, ct) => CheckAsync(() => password(new SshPasswordRequest { UserName = user, Password = secret, RemoteEndPoint = remote }, ct))
                 : null,
             PublicKey = options.PublicKeyHandler is { } key
                 ? (user, publicKey, ct) => CheckAsync(() => key(
-                    new SshPublicKeyRequest(user, publicKey.KeyType, HostKeyPolicy.ComputeFingerprint(publicKey.Blob.Span)),
+                    new SshPublicKeyRequest
+                    {
+                        UserName = user,
+                        KeyType = publicKey.KeyType,
+                        Sha256Fingerprint = HostKeyPolicy.ComputeFingerprint(publicKey.Blob.Span),
+                        RemoteEndPoint = remote,
+                    },
                     ct))
                 : null,
         };
@@ -479,7 +496,7 @@ public sealed partial class SshServer : IAsyncDisposable
         }
     }
 
-    private async Task ServeChannelsAsync(SshConnection connection, SshPrincipal principal)
+    private async Task ServeChannelsAsync(SshConnection connection, SshPrincipal principal, IPEndPoint? remote)
     {
         List<Task> sessions = [];
         IdleMonitor? idle = _options.IdleTimeout is { } timeout ? new IdleMonitor(timeout, _idleTime) : null;
@@ -505,7 +522,7 @@ public sealed partial class SshServer : IAsyncDisposable
                     sessions.Add(open.Channel is { } channel
                         ? Task.Run(() => RunCountedAsync(idle, async () =>
                         {
-                            await ServeSessionAsync(connection, channel, principal).ConfigureAwait(false);
+                            await ServeSessionAsync(connection, channel, principal, remote).ConfigureAwait(false);
                             return true;
                         }), CancellationToken.None)
                         : Task.Run(() => RunCountedAsync(idle, () => ServeDirectTcpAsync(connection, open, principal)), CancellationToken.None));
@@ -676,13 +693,13 @@ public sealed partial class SshServer : IAsyncDisposable
     /// Owns one session from start to end. The channel, the handler and the session slot all live and die here,
     /// so none of them can outlast the others: the slot is only freed once the handler has really ended.
     /// </summary>
-    private async Task ServeSessionAsync(SshConnection connection, SshChannel channel, SshPrincipal principal)
+    private async Task ServeSessionAsync(SshConnection connection, SshChannel channel, SshPrincipal principal, IPEndPoint? remote)
     {
         using CancellationTokenSource session = CancellationTokenSource.CreateLinkedTokenSource(_stop.Token);
         Task? running = null;
         try
         {
-            running = await ServeRequestsAsync(channel, principal, session).ConfigureAwait(false);
+            running = await ServeRequestsAsync(channel, principal, remote, session).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is SshException or OperationCanceledException)
         {
@@ -703,7 +720,7 @@ public sealed partial class SshServer : IAsyncDisposable
     }
 
     /// <summary>Handles requests until the channel closes. Returns the running handler, if one was started.</summary>
-    private async Task<Task?> ServeRequestsAsync(SshChannel channel, SshPrincipal principal, CancellationTokenSource session)
+    private async Task<Task?> ServeRequestsAsync(SshChannel channel, SshPrincipal principal, IPEndPoint? remote, CancellationTokenSource session)
     {
         Dictionary<string, string> environment = new(StringComparer.Ordinal);
         SshPtyRequest? pty = null;
@@ -745,7 +762,7 @@ public sealed partial class SshServer : IAsyncDisposable
                                 _ => SshSessionKind.Subsystem,
                             };
                             string? command = kind == SshSessionKind.Shell ? null : ParseString(request.Data);
-                            start = new(principal, kind, command, pty, environment, channel.Output, channel.Input, channel.ErrorInput);
+                            start = new(principal, kind, command, pty, environment, channel.Output, channel.Input, channel.ErrorInput, remote);
                             ok = true;
                             break;
                         default:

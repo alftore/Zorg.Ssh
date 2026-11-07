@@ -316,7 +316,7 @@ internal static class SftpParser
         {
             string name = DecodeString(reader.ReadBinary());
             reader.ReadBinary();
-            entries[i] = new SftpEntry(name, SftpAttributes.Read(ref reader));
+            entries[i] = new SftpEntry { Name = name, Attributes = SftpAttributes.Read(ref reader) };
         }
 
         return entries;
@@ -343,7 +343,20 @@ internal static class SftpParser
         ulong id = reader.ReadUInt64();
         ulong flags = reader.ReadUInt64();
         ulong maxName = reader.ReadUInt64();
-        return new SftpFileSystemInfo(blockSize, fragmentSize, blocks, freeBlocks, availableBlocks, files, freeFiles, availableFiles, id, (flags & ReadOnlyFlag) != 0, maxName);
+        return new SftpFileSystemInfo
+        {
+            BlockSize = blockSize,
+            FragmentSize = fragmentSize,
+            Blocks = blocks,
+            FreeBlocks = freeBlocks,
+            AvailableBlocks = availableBlocks,
+            Files = files,
+            FreeFiles = freeFiles,
+            AvailableFiles = availableFiles,
+            FileSystemId = id,
+            IsReadOnly = (flags & ReadOnlyFlag) != 0,
+            MaxNameLength = maxName,
+        };
     }
 
     /// <summary>Removes control characters and caps the length: this text is server-controlled and goes into exception messages.</summary>

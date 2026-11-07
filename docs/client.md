@@ -161,7 +161,7 @@ HostKeyPolicy pinned = HostKeyPolicy.Fingerprint("SHA256:n4cHVJ8c0vCpJiQJCbOgLEU
 
 - `KnownHostsFile` reads an OpenSSH `known_hosts` file, by default `~/.ssh/known_hosts`. It understands hashed host names, `[host]:port` entries and `@revoked`. An unknown host is refused, and so is a host whose key has changed. A file that doesn't exist counts as empty, so every host is unknown. One that exists but isn't a regular file, or is too large, throws `SshHostKeyException`. `@cert-authority` lines make host certificates trusted: see [the agent, certificates and config](#the-agent-certificates-and-sshconfig).
 - `Fingerprint` trusts one key. It's the strictest policy when you know the key. Get the value on the server with `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`. It's compared exactly, including the `SHA256:` prefix.
-- `Custom` runs your own check, once, during connection.
+- `Custom` runs your own check, once, during connection. `SshHostKeyInfo` gives the host, port, key type, fingerprint and `PublicKey`, the key in OpenSSH `type base64` form, so a store of your own can record the key and compare it next time.
 
 ```csharp
 HostKeyPolicy policy = HostKeyPolicy.Custom((key, ct) =>

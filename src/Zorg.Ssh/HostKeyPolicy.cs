@@ -12,16 +12,36 @@ using Zorg.Ssh.KnownHosts;
 namespace Zorg.Ssh;
 
 /// <summary>What a host key check sees about a server.</summary>
-/// <param name="Host">The host name that was connected to.</param>
-/// <param name="Port">The port.</param>
-/// <param name="KeyType">The key type, for example <c>ssh-ed25519</c>.</param>
-/// <param name="Sha256Fingerprint">The key's fingerprint in OpenSSH form, for example <c>SHA256:abc...</c>.</param>
 /// <example>
 /// <code>
 /// HostKeyPolicy.Custom((key, ct) => ValueTask.FromResult(key.Sha256Fingerprint == expected));
 /// </code>
 /// </example>
-public sealed record SshHostKeyInfo(string Host, int Port, string KeyType, string Sha256Fingerprint);
+public sealed record SshHostKeyInfo
+{
+    /// <summary>Gets the host name that was connected to.</summary>
+    public required string Host { get; init; }
+
+    /// <summary>Gets the port.</summary>
+    public required int Port { get; init; }
+
+    /// <summary>Gets the key type, for example <c>ssh-ed25519</c>.</summary>
+    public required string KeyType { get; init; }
+
+    /// <summary>Gets the key's fingerprint in OpenSSH form, for example <c>SHA256:abc...</c>.</summary>
+    public required string Sha256Fingerprint { get; init; }
+
+    /// <summary>
+    /// Gets the key in OpenSSH public key form, <c>type base64</c>, as a <c>known_hosts</c> line or a <c>.pub</c> file
+    /// holds it. A trust-on-first-use store can record this, and compare it next time.
+    /// </summary>
+    /// <example>
+    /// <code>
+    /// await File.AppendAllTextAsync(storePath, $"{key.Host} {key.PublicKey}\n", ct);
+    /// </code>
+    /// </example>
+    public required string PublicKey { get; init; }
+}
 
 /// <summary>
 /// Decides whether to trust a server's host key. There is no default that accepts unknown keys: without
@@ -219,5 +239,14 @@ internal sealed class CustomHostKeyPolicy(Func<SshHostKeyInfo, CancellationToken
     internal override ValueTask<bool> CheckAsync(string host, int port, SshPublicKey key, CancellationToken cancellationToken) =>
         key is SshCertificate
             ? throw new SshHostKeyException("The server sent a host certificate, which only HostKeyPolicy.KnownHostsFile can check.")
-            : check(new SshHostKeyInfo(host, port, key.KeyType, ComputeFingerprint(key.Blob.Span)), cancellationToken);
+            : check(
+                new SshHostKeyInfo
+                {
+                    Host = host,
+                    Port = port,
+                    KeyType = key.KeyType,
+                    Sha256Fingerprint = ComputeFingerprint(key.Blob.Span),
+                    PublicKey = $"{key.KeyType} {Convert.ToBase64String(key.Blob.Span)}",
+                },
+                cancellationToken);
 }

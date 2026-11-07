@@ -17,17 +17,26 @@ using Zorg.Ssh.Transport;
 namespace Zorg.Ssh;
 
 /// <summary>What a finished command produced.</summary>
-/// <param name="ExitCode">The exit code, or null if the command ended on a signal or the server sent none.</param>
-/// <param name="ExitSignal">The name of the signal that ended the command, if any.</param>
-/// <param name="StandardOutput">Everything on stdout, as UTF-8.</param>
-/// <param name="StandardError">Everything on stderr, as UTF-8.</param>
 /// <example>
 /// <code>
 /// SshCommandResult result = await client.ExecuteAsync("uname -a", cancellationToken);
 /// Console.WriteLine(result.StandardOutput);
 /// </code>
 /// </example>
-public sealed record SshCommandResult(int? ExitCode, string? ExitSignal, string StandardOutput, string StandardError);
+public sealed record SshCommandResult
+{
+    /// <summary>Gets the exit code, or null if the command ended on a signal or the server sent none.</summary>
+    public int? ExitCode { get; init; }
+
+    /// <summary>Gets the name of the signal that ended the command, if any.</summary>
+    public string? ExitSignal { get; init; }
+
+    /// <summary>Gets everything on stdout, as UTF-8.</summary>
+    public required string StandardOutput { get; init; }
+
+    /// <summary>Gets everything on stderr, as UTF-8.</summary>
+    public required string StandardError { get; init; }
+}
 
 /// <summary>Terminal settings for <see cref="SshProcessOptions.Pty"/>.</summary>
 /// <example>
@@ -210,7 +219,13 @@ public sealed partial class SshClient : IAsyncDisposable
 #pragma warning restore CA2025
             await Task.WhenAll(output, error).ConfigureAwait(false);
             await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
-            return new SshCommandResult(process.ExitCode, process.ExitSignal, await output.ConfigureAwait(false), await error.ConfigureAwait(false));
+            return new SshCommandResult
+            {
+                ExitCode = process.ExitCode,
+                ExitSignal = process.ExitSignal,
+                StandardOutput = await output.ConfigureAwait(false),
+                StandardError = await error.ConfigureAwait(false),
+            };
         }
     }
 

@@ -306,7 +306,7 @@ internal sealed class ClientAuthenticator(SshTransport transport, string userNam
         for (uint i = 0; i < count; i++)
         {
             string text = reader.ReadUtf8String();
-            prompts.Add(new SshPrompt(text, reader.ReadBoolean()));
+            prompts.Add(new SshPrompt { Text = text, Echo = reader.ReadBoolean() });
         }
 
         return prompts;

@@ -50,12 +50,11 @@ Zorg.Ssh.Sftp.SftpEntry
 Zorg.Ssh.Sftp.SftpEntry.<Clone>$() -> Zorg.Ssh.Sftp.SftpEntry!
 Zorg.Ssh.Sftp.SftpEntry.Attributes.get -> Zorg.Ssh.Sftp.SftpAttributes!
 Zorg.Ssh.Sftp.SftpEntry.Attributes.init -> void
-Zorg.Ssh.Sftp.SftpEntry.Deconstruct(out string! Name, out Zorg.Ssh.Sftp.SftpAttributes! Attributes) -> void
 Zorg.Ssh.Sftp.SftpEntry.Equals(Zorg.Ssh.Sftp.SftpEntry? other) -> bool
 Zorg.Ssh.Sftp.SftpEntry.IsSafeName.get -> bool
 Zorg.Ssh.Sftp.SftpEntry.Name.get -> string!
 Zorg.Ssh.Sftp.SftpEntry.Name.init -> void
-Zorg.Ssh.Sftp.SftpEntry.SftpEntry(string! Name, Zorg.Ssh.Sftp.SftpAttributes! Attributes) -> void
+Zorg.Ssh.Sftp.SftpEntry.SftpEntry() -> void
 Zorg.Ssh.Sftp.SftpException
 Zorg.Ssh.Sftp.SftpException.Path.get -> string?
 Zorg.Ssh.Sftp.SftpException.SftpException() -> void
@@ -86,7 +85,6 @@ Zorg.Ssh.Sftp.SftpFileSystemInfo.BlockSize.get -> ulong
 Zorg.Ssh.Sftp.SftpFileSystemInfo.BlockSize.init -> void
 Zorg.Ssh.Sftp.SftpFileSystemInfo.Blocks.get -> ulong
 Zorg.Ssh.Sftp.SftpFileSystemInfo.Blocks.init -> void
-Zorg.Ssh.Sftp.SftpFileSystemInfo.Deconstruct(out ulong BlockSize, out ulong FragmentSize, out ulong Blocks, out ulong FreeBlocks, out ulong AvailableBlocks, out ulong Files, out ulong FreeFiles, out ulong AvailableFiles, out ulong FileSystemId, out bool IsReadOnly, out ulong MaxNameLength) -> void
 Zorg.Ssh.Sftp.SftpFileSystemInfo.Equals(Zorg.Ssh.Sftp.SftpFileSystemInfo? other) -> bool
 Zorg.Ssh.Sftp.SftpFileSystemInfo.FileSystemId.get -> ulong
 Zorg.Ssh.Sftp.SftpFileSystemInfo.FileSystemId.init -> void
@@ -102,7 +100,6 @@ Zorg.Ssh.Sftp.SftpFileSystemInfo.IsReadOnly.get -> bool
 Zorg.Ssh.Sftp.SftpFileSystemInfo.IsReadOnly.init -> void
 Zorg.Ssh.Sftp.SftpFileSystemInfo.MaxNameLength.get -> ulong
 Zorg.Ssh.Sftp.SftpFileSystemInfo.MaxNameLength.init -> void
-Zorg.Ssh.Sftp.SftpFileSystemInfo.SftpFileSystemInfo(ulong BlockSize, ulong FragmentSize, ulong Blocks, ulong FreeBlocks, ulong AvailableBlocks, ulong Files, ulong FreeFiles, ulong AvailableFiles, ulong FileSystemId, bool IsReadOnly, ulong MaxNameLength) -> void
 Zorg.Ssh.Sftp.SftpPermissionDeniedException
 Zorg.Ssh.Sftp.SftpPermissionDeniedException.SftpPermissionDeniedException() -> void
 Zorg.Ssh.Sftp.SftpPermissionDeniedException.SftpPermissionDeniedException(string! message) -> void
@@ -212,13 +209,12 @@ Zorg.Ssh.SshClientOptions.UserName.get -> string!
 Zorg.Ssh.SshClientOptions.UserName.init -> void
 Zorg.Ssh.SshCommandResult
 Zorg.Ssh.SshCommandResult.<Clone>$() -> Zorg.Ssh.SshCommandResult!
-Zorg.Ssh.SshCommandResult.Deconstruct(out int? ExitCode, out string? ExitSignal, out string! StandardOutput, out string! StandardError) -> void
 Zorg.Ssh.SshCommandResult.Equals(Zorg.Ssh.SshCommandResult? other) -> bool
 Zorg.Ssh.SshCommandResult.ExitCode.get -> int?
 Zorg.Ssh.SshCommandResult.ExitCode.init -> void
 Zorg.Ssh.SshCommandResult.ExitSignal.get -> string?
 Zorg.Ssh.SshCommandResult.ExitSignal.init -> void
-Zorg.Ssh.SshCommandResult.SshCommandResult(int? ExitCode, string? ExitSignal, string! StandardOutput, string! StandardError) -> void
+Zorg.Ssh.SshCommandResult.SshCommandResult() -> void
 Zorg.Ssh.SshCommandResult.StandardError.get -> string!
 Zorg.Ssh.SshCommandResult.StandardError.init -> void
 Zorg.Ssh.SshCommandResult.StandardOutput.get -> string!
@@ -236,7 +232,6 @@ Zorg.Ssh.SshConnectionException.SshConnectionException(string! message, System.E
 Zorg.Ssh.SshCredential
 Zorg.Ssh.SshDirectTcpRequest
 Zorg.Ssh.SshDirectTcpRequest.<Clone>$() -> Zorg.Ssh.SshDirectTcpRequest!
-Zorg.Ssh.SshDirectTcpRequest.Deconstruct(out Zorg.Ssh.SshPrincipal! Principal, out string! Host, out int Port, out string! OriginatorAddress, out int OriginatorPort) -> void
 Zorg.Ssh.SshDirectTcpRequest.Equals(Zorg.Ssh.SshDirectTcpRequest? other) -> bool
 Zorg.Ssh.SshDirectTcpRequest.Host.get -> string!
 Zorg.Ssh.SshDirectTcpRequest.Host.init -> void
@@ -248,7 +243,7 @@ Zorg.Ssh.SshDirectTcpRequest.Port.get -> int
 Zorg.Ssh.SshDirectTcpRequest.Port.init -> void
 Zorg.Ssh.SshDirectTcpRequest.Principal.get -> Zorg.Ssh.SshPrincipal!
 Zorg.Ssh.SshDirectTcpRequest.Principal.init -> void
-Zorg.Ssh.SshDirectTcpRequest.SshDirectTcpRequest(Zorg.Ssh.SshPrincipal! Principal, string! Host, int Port, string! OriginatorAddress, int OriginatorPort) -> void
+Zorg.Ssh.SshDirectTcpRequest.SshDirectTcpRequest() -> void
 Zorg.Ssh.SshDisconnectedException
 Zorg.Ssh.SshDisconnectedException.Description.get -> string!
 Zorg.Ssh.SshDisconnectedException.ReasonCode.get -> uint
@@ -269,7 +264,6 @@ Zorg.Ssh.SshForwardDecision.Allow = 1 -> Zorg.Ssh.SshForwardDecision
 Zorg.Ssh.SshForwardDecision.Deny = 0 -> Zorg.Ssh.SshForwardDecision
 Zorg.Ssh.SshHostConfig
 Zorg.Ssh.SshHostConfig.<Clone>$() -> Zorg.Ssh.SshHostConfig!
-Zorg.Ssh.SshHostConfig.Deconstruct(out string! HostName, out int Port, out string! User, out System.Collections.Generic.IReadOnlyList<string!>! IdentityFiles, out bool IdentitiesOnly, out System.Collections.Generic.IReadOnlyList<string!>! UserKnownHostsFiles, out Zorg.Ssh.SshStrictHostKeyChecking StrictHostKeyChecking, out string? ProxyJump) -> void
 Zorg.Ssh.SshHostConfig.Equals(Zorg.Ssh.SshHostConfig? other) -> bool
 Zorg.Ssh.SshHostConfig.HostName.get -> string!
 Zorg.Ssh.SshHostConfig.HostName.init -> void
@@ -281,7 +275,6 @@ Zorg.Ssh.SshHostConfig.Port.get -> int
 Zorg.Ssh.SshHostConfig.Port.init -> void
 Zorg.Ssh.SshHostConfig.ProxyJump.get -> string?
 Zorg.Ssh.SshHostConfig.ProxyJump.init -> void
-Zorg.Ssh.SshHostConfig.SshHostConfig(string! HostName, int Port, string! User, System.Collections.Generic.IReadOnlyList<string!>! IdentityFiles, bool IdentitiesOnly, System.Collections.Generic.IReadOnlyList<string!>! UserKnownHostsFiles, Zorg.Ssh.SshStrictHostKeyChecking StrictHostKeyChecking, string? ProxyJump) -> void
 Zorg.Ssh.SshHostConfig.StrictHostKeyChecking.get -> Zorg.Ssh.SshStrictHostKeyChecking
 Zorg.Ssh.SshHostConfig.StrictHostKeyChecking.init -> void
 Zorg.Ssh.SshHostConfig.User.get -> string!
@@ -297,7 +290,6 @@ Zorg.Ssh.SshHostKeyException.SshHostKeyException(string! message) -> void
 Zorg.Ssh.SshHostKeyException.SshHostKeyException(string! message, System.Exception! innerException) -> void
 Zorg.Ssh.SshHostKeyInfo
 Zorg.Ssh.SshHostKeyInfo.<Clone>$() -> Zorg.Ssh.SshHostKeyInfo!
-Zorg.Ssh.SshHostKeyInfo.Deconstruct(out string! Host, out int Port, out string! KeyType, out string! Sha256Fingerprint) -> void
 Zorg.Ssh.SshHostKeyInfo.Equals(Zorg.Ssh.SshHostKeyInfo? other) -> bool
 Zorg.Ssh.SshHostKeyInfo.Host.get -> string!
 Zorg.Ssh.SshHostKeyInfo.Host.init -> void
@@ -305,9 +297,11 @@ Zorg.Ssh.SshHostKeyInfo.KeyType.get -> string!
 Zorg.Ssh.SshHostKeyInfo.KeyType.init -> void
 Zorg.Ssh.SshHostKeyInfo.Port.get -> int
 Zorg.Ssh.SshHostKeyInfo.Port.init -> void
+Zorg.Ssh.SshHostKeyInfo.PublicKey.get -> string!
+Zorg.Ssh.SshHostKeyInfo.PublicKey.init -> void
 Zorg.Ssh.SshHostKeyInfo.Sha256Fingerprint.get -> string!
 Zorg.Ssh.SshHostKeyInfo.Sha256Fingerprint.init -> void
-Zorg.Ssh.SshHostKeyInfo.SshHostKeyInfo(string! Host, int Port, string! KeyType, string! Sha256Fingerprint) -> void
+Zorg.Ssh.SshHostKeyInfo.SshHostKeyInfo() -> void
 Zorg.Ssh.SshKeyFileException
 Zorg.Ssh.SshKeyFileException.SshKeyFileException() -> void
 Zorg.Ssh.SshKeyFileException.SshKeyFileException(string! message) -> void
@@ -322,24 +316,22 @@ Zorg.Ssh.SshNegotiationException.SshNegotiationException(string! message) -> voi
 Zorg.Ssh.SshNegotiationException.SshNegotiationException(string! message, System.Exception! innerException) -> void
 Zorg.Ssh.SshPasswordRequest
 Zorg.Ssh.SshPasswordRequest.<Clone>$() -> Zorg.Ssh.SshPasswordRequest!
-Zorg.Ssh.SshPasswordRequest.Deconstruct(out string! UserName, out string! Password) -> void
 Zorg.Ssh.SshPasswordRequest.Equals(Zorg.Ssh.SshPasswordRequest? other) -> bool
 Zorg.Ssh.SshPasswordRequest.Password.get -> string!
 Zorg.Ssh.SshPasswordRequest.Password.init -> void
-Zorg.Ssh.SshPasswordRequest.SshPasswordRequest(string! UserName, string! Password) -> void
+Zorg.Ssh.SshPasswordRequest.RemoteEndPoint.get -> System.Net.IPEndPoint?
+Zorg.Ssh.SshPasswordRequest.RemoteEndPoint.init -> void
+Zorg.Ssh.SshPasswordRequest.SshPasswordRequest() -> void
 Zorg.Ssh.SshPasswordRequest.UserName.get -> string!
 Zorg.Ssh.SshPasswordRequest.UserName.init -> void
 Zorg.Ssh.SshPrincipal
 Zorg.Ssh.SshPrincipal.<Clone>$() -> Zorg.Ssh.SshPrincipal!
-Zorg.Ssh.SshPrincipal.Deconstruct(out string! UserName, out System.Collections.Generic.IReadOnlyList<string!>! Methods, out string? KeyFingerprint) -> void
 Zorg.Ssh.SshPrincipal.Equals(Zorg.Ssh.SshPrincipal? other) -> bool
-Zorg.Ssh.SshPrincipal.KeyFingerprint.get -> string?
-Zorg.Ssh.SshPrincipal.KeyFingerprint.init -> void
 Zorg.Ssh.SshPrincipal.KeyFingerprints.get -> System.Collections.Generic.IReadOnlyList<string!>!
 Zorg.Ssh.SshPrincipal.KeyFingerprints.init -> void
 Zorg.Ssh.SshPrincipal.Methods.get -> System.Collections.Generic.IReadOnlyList<string!>!
 Zorg.Ssh.SshPrincipal.Methods.init -> void
-Zorg.Ssh.SshPrincipal.SshPrincipal(string! UserName, System.Collections.Generic.IReadOnlyList<string!>! Methods, string? KeyFingerprint) -> void
+Zorg.Ssh.SshPrincipal.SshPrincipal() -> void
 Zorg.Ssh.SshPrincipal.UserName.get -> string!
 Zorg.Ssh.SshPrincipal.UserName.init -> void
 Zorg.Ssh.SshProcess
@@ -359,11 +351,10 @@ Zorg.Ssh.SshProcessOptions.Pty.init -> void
 Zorg.Ssh.SshProcessOptions.SshProcessOptions() -> void
 Zorg.Ssh.SshPrompt
 Zorg.Ssh.SshPrompt.<Clone>$() -> Zorg.Ssh.SshPrompt!
-Zorg.Ssh.SshPrompt.Deconstruct(out string! Text, out bool Echo) -> void
 Zorg.Ssh.SshPrompt.Echo.get -> bool
 Zorg.Ssh.SshPrompt.Echo.init -> void
 Zorg.Ssh.SshPrompt.Equals(Zorg.Ssh.SshPrompt? other) -> bool
-Zorg.Ssh.SshPrompt.SshPrompt(string! Text, bool Echo) -> void
+Zorg.Ssh.SshPrompt.SshPrompt() -> void
 Zorg.Ssh.SshPrompt.Text.get -> string!
 Zorg.Ssh.SshPrompt.Text.init -> void
 Zorg.Ssh.SshProtocolException
@@ -382,22 +373,22 @@ Zorg.Ssh.SshPtyRequest
 Zorg.Ssh.SshPtyRequest.<Clone>$() -> Zorg.Ssh.SshPtyRequest!
 Zorg.Ssh.SshPtyRequest.Columns.get -> int
 Zorg.Ssh.SshPtyRequest.Columns.init -> void
-Zorg.Ssh.SshPtyRequest.Deconstruct(out string! Terminal, out int Columns, out int Rows) -> void
 Zorg.Ssh.SshPtyRequest.Equals(Zorg.Ssh.SshPtyRequest? other) -> bool
 Zorg.Ssh.SshPtyRequest.Rows.get -> int
 Zorg.Ssh.SshPtyRequest.Rows.init -> void
-Zorg.Ssh.SshPtyRequest.SshPtyRequest(string! Terminal, int Columns, int Rows) -> void
+Zorg.Ssh.SshPtyRequest.SshPtyRequest() -> void
 Zorg.Ssh.SshPtyRequest.Terminal.get -> string!
 Zorg.Ssh.SshPtyRequest.Terminal.init -> void
 Zorg.Ssh.SshPublicKeyRequest
 Zorg.Ssh.SshPublicKeyRequest.<Clone>$() -> Zorg.Ssh.SshPublicKeyRequest!
-Zorg.Ssh.SshPublicKeyRequest.Deconstruct(out string! UserName, out string! KeyType, out string! Sha256Fingerprint) -> void
 Zorg.Ssh.SshPublicKeyRequest.Equals(Zorg.Ssh.SshPublicKeyRequest? other) -> bool
 Zorg.Ssh.SshPublicKeyRequest.KeyType.get -> string!
 Zorg.Ssh.SshPublicKeyRequest.KeyType.init -> void
+Zorg.Ssh.SshPublicKeyRequest.RemoteEndPoint.get -> System.Net.IPEndPoint?
+Zorg.Ssh.SshPublicKeyRequest.RemoteEndPoint.init -> void
 Zorg.Ssh.SshPublicKeyRequest.Sha256Fingerprint.get -> string!
 Zorg.Ssh.SshPublicKeyRequest.Sha256Fingerprint.init -> void
-Zorg.Ssh.SshPublicKeyRequest.SshPublicKeyRequest(string! UserName, string! KeyType, string! Sha256Fingerprint) -> void
+Zorg.Ssh.SshPublicKeyRequest.SshPublicKeyRequest() -> void
 Zorg.Ssh.SshPublicKeyRequest.UserName.get -> string!
 Zorg.Ssh.SshPublicKeyRequest.UserName.init -> void
 Zorg.Ssh.SshRemoteForward
@@ -464,6 +455,7 @@ Zorg.Ssh.SshServerSession.Kind.get -> Zorg.Ssh.SshSessionKind
 Zorg.Ssh.SshServerSession.Output.get -> System.IO.Stream!
 Zorg.Ssh.SshServerSession.Principal.get -> Zorg.Ssh.SshPrincipal!
 Zorg.Ssh.SshServerSession.Pty.get -> Zorg.Ssh.SshPtyRequest?
+Zorg.Ssh.SshServerSession.RemoteEndPoint.get -> System.Net.IPEndPoint?
 Zorg.Ssh.SshSessionKind
 Zorg.Ssh.SshSessionKind.Exec = 0 -> Zorg.Ssh.SshSessionKind
 Zorg.Ssh.SshSessionKind.Shell = 1 -> Zorg.Ssh.SshSessionKind

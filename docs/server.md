@@ -60,7 +60,7 @@ private static bool IsPasswordRight(string userName, string password)
 }
 ```
 
-`SshPasswordRequest.ToString` leaves the password out, so logging a request can't leak it. Don't log `request.Password` yourself. A slow check runs on the client's connection, so `LoginGraceTime` and `MaxUnauthenticatedConnections` bound how many can run at once.
+`SshPasswordRequest.ToString` leaves the password out, so logging a request can't leak it. Don't log `request.Password` yourself. `RemoteEndPoint` on both requests is the client's address and port, for your own rate limits or audit log. It's null for a connection given to `ServeStreamAsync`. A slow check runs on the client's connection, so `LoginGraceTime` and `MaxUnauthenticatedConnections` bound how many can run at once.
 
 ### Public keys
 
@@ -95,7 +95,7 @@ SshServerOptions options = new()
 };
 ```
 
-A client can pass them in either order, and a password alone gets no further. `Principal.Methods` lists every method that passed, in order. `Principal.KeyFingerprints` lists every key the client proved, in order, and `KeyFingerprint` is the last. A method passes once, so a second key never counts as the second method. A login can prove at most eight keys.
+A client can pass them in either order, and a password alone gets no further. `Principal.Methods` lists every method that passed, in order. `Principal.KeyFingerprints` lists every key the client proved, in order. A method passes once, so a second key never counts as the second method. A login can prove at most eight keys.
 
 ## Sessions
 
@@ -129,7 +129,8 @@ private static async Task<int> RunSessionAsync(SshServerSession session, Cancell
 
 | `SshServerSession` | Meaning |
 |---|---|
-| `Principal` | Who logged in: `UserName`, the `Methods` that passed, and `KeyFingerprint` (the last key proven) and `KeyFingerprints` (all of them). |
+| `Principal` | Who logged in: `UserName`, the `Methods` that passed, and `KeyFingerprints` (every key proven, in order). |
+| `RemoteEndPoint` | The client's address and port. Null for a connection given to `ServeStreamAsync`. |
 | `Kind` | `Exec`, `Shell` or `Subsystem`. |
 | `Command` | The command line or subsystem name. Null for a shell. |
 | `Pty` | The terminal the client asked for, if any. |
