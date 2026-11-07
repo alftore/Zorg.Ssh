@@ -106,7 +106,7 @@ public sealed record SftpAttributes
     /// </example>
     public bool IsRegularFile => _fileType == TypeRegular;
 
-    /// <summary>Gets a value saying whether this is a symbolic link. Only a listing or <c>followSymbolicLinks: false</c> can report one.</summary>
+    /// <summary>Gets a value saying whether this is a symbolic link. Only a listing or <see cref="SftpClient.GetLinkAttributesAsync"/> can report one.</summary>
     /// <example>
     /// <code>
     /// if (entry.Attributes.IsSymbolicLink)
