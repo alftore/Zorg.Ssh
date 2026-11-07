@@ -76,7 +76,7 @@ public class ForwardingTests
     /// full-duplex load with no SSH involved, even for one raw connection. The unit tests cover the flat-out
     /// case over real TCP. <paramref name="inFlight"/> runs with a chunk on its way, halfway through.
     /// </summary>
-    private static async Task AssertEchoesAsync(Stream stream, int size, Action? inFlight = null)
+    internal static async Task AssertEchoesAsync(Stream stream, int size, Action? inFlight = null)
     {
         const int Chunk = 64 * 1024;
         byte[] sent = RandomNumberGenerator.GetBytes(size);
@@ -97,7 +97,7 @@ public class ForwardingTests
     }
 
     /// <summary>A target for remote forwards, on this side of the tunnel. It says hello, reads to the end, then sends it all back.</summary>
-    private static (TcpListener Listener, Task Serving) StartLocalTarget(CancellationToken stop)
+    internal static (TcpListener Listener, Task Serving) StartLocalTarget(CancellationToken stop)
     {
         TcpListener listener = new(IPAddress.Loopback, 0);
         listener.Start();
@@ -140,7 +140,7 @@ public class ForwardingTests
         }
     }
 
-    private static int LocalPort(TcpListener listener) => ((IPEndPoint)listener.LocalEndpoint).Port;
+    internal static int LocalPort(TcpListener listener) => ((IPEndPoint)listener.LocalEndpoint).Port;
 
     [Fact]
     public async Task A_stream_reaches_a_service_inside_the_container()
@@ -426,10 +426,10 @@ public class ForwardingTests
         Assert.Equal(0, (await jump.ExecuteAsync("true", Ct)).ExitCode);
     }
 
-    private static byte[] AddressTarget(int port) =>
+    internal static byte[] AddressTarget(int port) =>
         [5, 1, 0, 1, 127, 0, 0, 1, (byte)(port >> 8), (byte)port];
 
-    private static byte[] NameTarget(string name, int port)
+    internal static byte[] NameTarget(string name, int port)
     {
         byte[] bytes = System.Text.Encoding.ASCII.GetBytes(name);
         return [5, 1, 0, 3, (byte)bytes.Length, .. bytes, (byte)(port >> 8), (byte)port];
