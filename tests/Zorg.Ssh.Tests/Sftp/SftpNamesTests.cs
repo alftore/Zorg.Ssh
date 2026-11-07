@@ -251,7 +251,7 @@ public sealed class SftpNamesTests : IDisposable
         files.Directories["/d/c"] = [];
         await using FakeSftpServer fake = await ServerWithAsync(files);
 
-        fake.Client.MaxDirectoryEntries = 2;
+        fake.Client.Options = new SftpClientOptions { MaxDirectoryEntries = 2 };
         await Assert.ThrowsAsync<SftpException>(() => fake.Client.DownloadDirectoryAsync("/d", Destination, cancellationToken: Ct));
     }
 

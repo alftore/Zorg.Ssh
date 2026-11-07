@@ -520,7 +520,7 @@ public class SftpTests
             cancellationToken: Ct);
         await using SshClient client = await ConnectAsync(container);
 
-        SftpClient sftp = await SftpClient.OpenOverChannelAsync(await client.OpenSubsystemAsync("noisy", Ct), client.ServerVersion, Ct);
+        SftpClient sftp = await SftpClient.OpenOverChannelAsync(await client.OpenSubsystemAsync("noisy", Ct), client.ServerVersion, new SftpClientOptions(), Ct);
         await using (sftp)
         {
             byte[] data = RandomNumberGenerator.GetBytes(4_000_000);

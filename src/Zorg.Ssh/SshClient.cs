@@ -203,9 +203,23 @@ public sealed partial class SshClient : IAsyncDisposable
     /// }
     /// </code>
     /// </example>
-    public async Task<SshCommandResult> ExecuteAsync(string command, CancellationToken cancellationToken = default)
+    public Task<SshCommandResult> ExecuteAsync(string command, CancellationToken cancellationToken) =>
+        ExecuteAsync(command, null, cancellationToken);
+
+    /// <summary>Runs a command to the end with environment or terminal settings, and returns its output.</summary>
+    /// <param name="command">The command line. The server's shell interprets it, so quote anything that comes from a user.</param>
+    /// <param name="options">Terminal and environment settings, as for <see cref="StartProcessAsync"/>. With a terminal, stderr arrives in <see cref="SshCommandResult.StandardOutput"/>.</param>
+    /// <param name="cancellationToken">Stops waiting and closes the channel.</param>
+    /// <returns>The exit status and output.</returns>
+    /// <example>
+    /// <code>
+    /// SshProcessOptions options = new() { Environment = new Dictionary&lt;string, string&gt; { ["LANG"] = "C" } };
+    /// SshCommandResult result = await client.ExecuteAsync("locale", options, cancellationToken);
+    /// </code>
+    /// </example>
+    public async Task<SshCommandResult> ExecuteAsync(string command, SshProcessOptions? options = null, CancellationToken cancellationToken = default)
     {
-        SshProcess process = await StartProcessAsync(command, null, cancellationToken).ConfigureAwait(false);
+        SshProcess process = await StartProcessAsync(command, options, cancellationToken).ConfigureAwait(false);
         await using (process.ConfigureAwait(false))
         {
             await process.StandardInput.DisposeAsync().ConfigureAwait(false);
@@ -264,7 +278,7 @@ public sealed partial class SshClient : IAsyncDisposable
     public Task<SshProcess> StartShellAsync(SshProcessOptions? options = null, CancellationToken cancellationToken = default) =>
         StartAsync("shell", null, options ?? new SshProcessOptions { Pty = new SshPtyOptions() }, cancellationToken);
 
-    /// <summary>Starts an SFTP session on a new channel. Several sessions can share one client.</summary>
+    /// <summary>Starts an SFTP session on a new channel, with the default limits. Several sessions can share one client.</summary>
     /// <param name="cancellationToken">Cancels the start. It doesn't affect a session that has started.</param>
     /// <returns>The session. Disposing it closes its channel, and leaves this client connected.</returns>
     /// <exception cref="SshException">The server refused the subsystem, so SFTP may not be enabled there.</exception>
@@ -274,10 +288,24 @@ public sealed partial class SshClient : IAsyncDisposable
     /// byte[] config = await sftp.ReadAllBytesAsync("/etc/app.conf", cancellationToken);
     /// </code>
     /// </example>
-    public async Task<SftpClient> OpenSftpAsync(CancellationToken cancellationToken = default)
+    public Task<SftpClient> OpenSftpAsync(CancellationToken cancellationToken) =>
+        OpenSftpAsync(null, cancellationToken);
+
+    /// <summary>Starts an SFTP session on a new channel, with limits of your own. Several sessions can share one client.</summary>
+    /// <param name="options">The session's limits. Null uses the defaults.</param>
+    /// <param name="cancellationToken">Cancels the start. It doesn't affect a session that has started.</param>
+    /// <returns>The session. Disposing it closes its channel, and leaves this client connected.</returns>
+    /// <exception cref="SshException">The server refused the subsystem, so SFTP may not be enabled there.</exception>
+    /// <example>
+    /// <code>
+    /// await using SftpClient sftp = await client.OpenSftpAsync(new SftpClientOptions { MaxReadAllBytes = 1024L * 1024 * 1024 }, cancellationToken);
+    /// </code>
+    /// </example>
+    public async Task<SftpClient> OpenSftpAsync(SftpClientOptions? options = null, CancellationToken cancellationToken = default)
     {
+        options ??= SftpClientOptions.Default;
         SshChannel channel = await OpenSubsystemAsync("sftp", cancellationToken).ConfigureAwait(false);
-        return await SftpClient.OpenOverChannelAsync(channel, ServerVersion, cancellationToken).ConfigureAwait(false);
+        return await SftpClient.OpenOverChannelAsync(channel, ServerVersion, options, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>Closes every forward, and then the connection. A client that used this one as a jump host loses its connection too.</summary>

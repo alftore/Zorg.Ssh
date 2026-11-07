@@ -207,6 +207,7 @@ else
 - Output is decoded as UTF-8. For binary output, use `StartProcessAsync`.
 - The server's shell interprets the command line, so quote anything that comes from a user. A NUL character in a command throws `ArgumentException`.
 - If either stream passes `MaxCommandOutputBytes`, the call fails with `SshException`. Use `StartProcessAsync` to stream it instead.
+- `ExecuteAsync(command, options, cancellationToken)` takes the same `SshProcessOptions` as `StartProcessAsync`, for environment variables or a terminal. With a terminal, stderr arrives in `StandardOutput`.
 
 Each command gets its own channel, so they can run side by side.
 

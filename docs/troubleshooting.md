@@ -185,7 +185,7 @@ The server refused an SFTP request. The session stays usable unless the message 
 
 `SftpFileNotFoundException` means nothing exists at the path, and `SftpPermissionDeniedException` means the account isn't allowed. Check the path, and the account's rights on it. With a relative path, remember that it starts from the home directory on OpenSSH: `GetFullPathAsync(".")` shows it.
 
-Limits reached in the library also arrive as `SftpException`: raise `MaxReadAllBytes`, `MaxDirectoryEntries` or `maxTotalBytes` if the size is expected.
+Limits reached in the library also arrive as `SftpException`: raise `MaxReadAllBytes` or `MaxDirectoryEntries` in `SftpClientOptions`, or `maxTotalBytes`, if the size is expected.
 
 `CreateDirectoryAsync` on an existing directory usually gives `Failure`. Check with `ExistsAsync` first.
 

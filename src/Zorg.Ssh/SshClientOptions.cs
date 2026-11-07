@@ -76,7 +76,7 @@ public sealed record SshClientOptions
     /// <summary>Gets the clock, for tests.</summary>
     internal TimeProvider TimeProvider { get; init; } = TimeProvider.System;
 
-    /// <summary>Gets the most output <see cref="SshClient.ExecuteAsync"/> keeps, per stream, before it fails. The default is 64 MiB. Use <see cref="SshClient.StartProcessAsync"/> for more.</summary>
+    /// <summary>Gets the most output <see cref="SshClient.ExecuteAsync(string, SshProcessOptions, System.Threading.CancellationToken)"/> keeps, per stream, before it fails. The default is 64 MiB. Use <see cref="SshClient.StartProcessAsync"/> for more.</summary>
     public int MaxCommandOutputBytes { get; init; } = 64 * 1024 * 1024;
 
     /// <summary>

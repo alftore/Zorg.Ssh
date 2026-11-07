@@ -399,9 +399,9 @@ public class SftpHostileServerTests
             ? server.SendDataAsync(request.Id, new byte[request.ReadArguments().Length])
             : files.HandleAsync(server, request));
 
-        fake.Client.MaxReadAllBytes = 1024 * 1024;
+        fake.Client.Options = new SftpClientOptions { MaxReadAllBytes = 1024 * 1024 };
         SftpException ex = await Assert.ThrowsAsync<SftpException>(() => fake.Client.ReadAllBytesAsync("f", Ct));
-        Assert.Contains(nameof(SftpClient.MaxReadAllBytes), ex.Message);
+        Assert.Contains("SftpClientOptions.MaxReadAllBytes", ex.Message);
 
         // That's a local limit, not a protocol failure, so the session lives on.
         Assert.False(await fake.Client.ExistsAsync("missing", Ct));
@@ -414,7 +414,7 @@ public class SftpHostileServerTests
             ? server.SendNamesAsync(request.Id, "a", "b", "c", "d")
             : request.Type == SftpMessage.OpenDir ? server.SendHandleAsync(request.Id, [1]) : server.SendStatusAsync(request.Id));
 
-        fake.Client.MaxDirectoryEntries = 1000;
+        fake.Client.Options = new SftpClientOptions { MaxDirectoryEntries = 1000 };
         int seen = 0;
         SftpException ex = await Assert.ThrowsAsync<SftpException>(async () =>
         {
@@ -423,7 +423,7 @@ public class SftpHostileServerTests
                 seen++;
             }
         });
-        Assert.Contains(nameof(SftpClient.MaxDirectoryEntries), ex.Message);
+        Assert.Contains("SftpClientOptions.MaxDirectoryEntries", ex.Message);
         Assert.True(seen <= 1000);
 
         // The handle was closed on the way out.
