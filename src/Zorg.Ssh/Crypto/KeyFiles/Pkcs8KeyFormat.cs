@@ -39,7 +39,12 @@ internal static class Pkcs8KeyFormat
     private const string Aes192Cbc = "2.16.840.1.101.3.4.1.22";
     private const string Aes256Cbc = "2.16.840.1.101.3.4.1.42";
 
+    private const string PrimeField = "1.2.840.10045.1.1";
+
     private const int Ed25519SeedLength = 32;
+
+    private static readonly Asn1Tag CurveTag = new(TagClass.ContextSpecific, 0, isConstructed: true);
+    private static readonly Asn1Tag PublicKeyTag = new(TagClass.ContextSpecific, 1, isConstructed: true);
     private const int AesBlock = 16;
 
     private const string UnsupportedEncryption = "The key file's encryption isn't supported: only PBES2 with PBKDF2 and AES-CBC is. Convert it to OpenSSH's format with: ssh-keygen -p -f <file>";
@@ -73,8 +78,13 @@ internal static class Pkcs8KeyFormat
         outer.ThrowIfNotEmpty();
         _ = key.TryReadInt32(out _);
         _ = key.TryReadPrimitiveOctetString(out _);
-        AsnReader parameters = key.ReadSequence(new Asn1Tag(TagClass.ContextSpecific, 0, isConstructed: true));
-        NistCurve curve = CurveFromOid(parameters.ReadObjectIdentifier());
+        AsnReader parameters = key.ReadSequence(CurveTag);
+        (NistCurve curve, bool named) = ReadCurve(parameters);
+        parameters.ThrowIfNotEmpty();
+        if (!named)
+        {
+            return ReadEcPrivateKey(der, curve);
+        }
 
         ECDsa ecdsa = ECDsa.Create();
         try
@@ -111,7 +121,21 @@ internal static class Pkcs8KeyFormat
                     ? ParsePkcs1(rsaKey)
                     : throw new SshKeyFileException(SshKeyFile.Malformed);
             case EcPublicKey:
-                return ImportEc(der, CurveFromOid(algorithm.ReadObjectIdentifier()));
+                (NistCurve curve, bool named) = ReadCurve(algorithm);
+                algorithm.ThrowIfNotEmpty();
+                if (named)
+                {
+                    return ImportEc(der, curve);
+                }
+
+                // The privateKey field is the SEC 1 structure. Attributes or a separate public key aren't expected.
+                if (!info.TryReadPrimitiveOctetString(out ReadOnlyMemory<byte> ecKey))
+                {
+                    throw new SshKeyFileException(SshKeyFile.Malformed);
+                }
+
+                info.ThrowIfNotEmpty();
+                return ReadEcPrivateKey(ecKey, curve);
             case Ed25519:
                 return ReadEd25519(info);
             default:
@@ -319,6 +343,129 @@ internal static class Pkcs8KeyFormat
 
         inner.ThrowIfNotEmpty();
         return Ed25519PrivateKey.FromSeed(seed.Span);
+    }
+
+    /// <summary>
+    /// Reads ECParameters: a named curve's OID, or the curve spelled out (SpecifiedECDomain). ssh-keygen on macOS writes
+    /// the second, and OpenSSH reads it when it is one of its curves. Spelled-out values are only compared with the
+    /// known curves, never used, and the key is then imported on the named curve.
+    /// </summary>
+    private static (NistCurve Curve, bool Named) ReadCurve(AsnReader parameters)
+    {
+        Asn1Tag tag = parameters.PeekTag();
+        if (tag.HasSameClassAndValue(Asn1Tag.ObjectIdentifier))
+        {
+            return (CurveFromOid(parameters.ReadObjectIdentifier()), true);
+        }
+
+        if (!tag.HasSameClassAndValue(Asn1Tag.Sequence))
+        {
+            // implicitCurve (NULL) names no curve at all.
+            throw new SshKeyFileException(SshKeyFile.UnsupportedKey);
+        }
+
+        // SpecifiedECDomain: version, fieldID, curve, base, order, cofactor. A hash or anything later isn't accepted.
+        AsnReader domain = parameters.ReadSequence();
+        if (!domain.TryReadInt32(out int version) || version is < 1 or > 3)
+        {
+            throw new SshKeyFileException(SshKeyFile.UnsupportedKey);
+        }
+
+        AsnReader field = domain.ReadSequence();
+        if (field.ReadObjectIdentifier() != PrimeField)
+        {
+            throw new SshKeyFileException(SshKeyFile.UnsupportedKey);
+        }
+
+        ReadOnlyMemory<byte> prime = field.ReadIntegerBytes();
+        field.ThrowIfNotEmpty();
+
+        // Curve: a, b and an optional seed. The seed only says how the curve was made.
+        AsnReader coefficients = domain.ReadSequence();
+        if (!coefficients.TryReadPrimitiveOctetString(out ReadOnlyMemory<byte> a)
+            || !coefficients.TryReadPrimitiveOctetString(out ReadOnlyMemory<byte> b)
+            || !domain.TryReadPrimitiveOctetString(out ReadOnlyMemory<byte> generator))
+        {
+            throw new SshKeyFileException(SshKeyFile.Malformed);
+        }
+
+        if (coefficients.HasData)
+        {
+            _ = coefficients.ReadBitString(out _);
+        }
+
+        coefficients.ThrowIfNotEmpty();
+        ReadOnlyMemory<byte> order = domain.ReadIntegerBytes();
+        if (domain.HasData && (!domain.TryReadInt32(out int cofactor) || cofactor != 1))
+        {
+            throw new SshKeyFileException(SshKeyFile.UnsupportedKey);
+        }
+
+        domain.ThrowIfNotEmpty();
+        NistCurve curve = NistCurve.FromExplicitParameters(prime.Span, a.Span, b.Span, generator.Span, order.Span)
+            ?? throw new SshKeyFileException(SshKeyFile.UnsupportedKey);
+        return (curve, false);
+    }
+
+    /// <summary>
+    /// Reads ECPrivateKey on a curve already known, and imports it on that named curve. The public key must be
+    /// there, on the curve, and match the scalar; any curve the structure repeats must be the same one.
+    /// </summary>
+    private static EcdsaPrivateKey ReadEcPrivateKey(ReadOnlyMemory<byte> der, NistCurve curve)
+    {
+        AsnReader outer = new(der, AsnEncodingRules.BER);
+        AsnReader key = outer.ReadSequence();
+        outer.ThrowIfNotEmpty();
+        if (!key.TryReadInt32(out int version) || version != 1
+            || !key.TryReadPrimitiveOctetString(out ReadOnlyMemory<byte> scalar)
+            || scalar.IsEmpty
+            || scalar.Length > curve.CoordinateLength)
+        {
+            throw new SshKeyFileException(SshKeyFile.Malformed);
+        }
+
+        if (key.HasData && key.PeekTag() == CurveTag)
+        {
+            AsnReader parameters = key.ReadSequence(CurveTag);
+            if (ReadCurve(parameters).Curve != curve)
+            {
+                throw new SshKeyFileException(SshKeyFile.Mismatch);
+            }
+
+            parameters.ThrowIfNotEmpty();
+        }
+
+        if (!key.HasData || key.PeekTag() != PublicKeyTag)
+        {
+            throw new SshKeyFileException(SshKeyFile.Malformed);
+        }
+
+        AsnReader publicKey = key.ReadSequence(PublicKeyTag);
+        if (!publicKey.TryReadPrimitiveBitString(out int unusedBits, out ReadOnlyMemory<byte> encodedPoint)
+            || unusedBits != 0
+            || !curve.TryDecodePoint(encodedPoint.Span, out ECPoint point))
+        {
+            throw new SshKeyFileException(SshKeyFile.Malformed);
+        }
+
+        publicKey.ThrowIfNotEmpty();
+        key.ThrowIfNotEmpty();
+
+        // The platform refuses a scalar that isn't the point's, as it does for OpenSSH's own format.
+        byte[] d = new byte[curve.CoordinateLength];
+        scalar.Span.CopyTo(d.AsSpan(d.Length - scalar.Length));
+        try
+        {
+            return EcdsaPrivateKey.Adopt(curve, ECDsa.Create(new ECParameters { Curve = curve.Curve, Q = point, D = d }));
+        }
+        catch (CryptographicException ex)
+        {
+            throw new SshKeyFileException(SshKeyFile.Malformed, ex);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(d);
+        }
     }
 
     private static NistCurve CurveFromOid(string oid) => oid switch

@@ -200,6 +200,17 @@ public class KeyExchangeTests
     {
         NistCurve curve = CurveOf(name);
         using ECDiffieHellman key = ECDiffieHellman.Create(curve.Curve);
+
+        // A key the platform made must pass our on-curve check, which proves the prime and b together. This is the
+        // whole check on macOS, which can't give a curve's explicit parameters.
+        ECPoint publicPoint = key.ExportParameters(includePrivateParameters: false).Q;
+        Assert.True(curve.TryDecodePoint(curve.EncodePoint(publicPoint), out _));
+        Assert.Equal(curve.CoordinateLength, publicPoint.X!.Length);
+        if (OperatingSystem.IsMacOS())
+        {
+            return;
+        }
+
         ECCurve explicitCurve = key.ExportExplicitParameters(includePrivateParameters: false).Curve;
         BigInteger prime = new(explicitCurve.Prime, isUnsigned: true, isBigEndian: true);
         BigInteger a = new(explicitCurve.A, isUnsigned: true, isBigEndian: true);
@@ -209,6 +220,13 @@ public class KeyExchangeTests
         byte[] generator = curve.EncodePoint(explicitCurve.G);
         Assert.True(curve.TryDecodePoint(generator, out _));
         Assert.Equal(curve.CoordinateLength, explicitCurve.Prime!.Length);
+
+        // Each value a key file's spelled-out curve is compared with is the platform's.
+        Assert.Equal(explicitCurve.Prime, curve.Prime);
+        Assert.Equal(new BigInteger(explicitCurve.B, isUnsigned: true, isBigEndian: true), new BigInteger(curve.B, isUnsigned: true, isBigEndian: true));
+        Assert.Equal(generator, curve.Generator.ToArray());
+        Assert.Equal(new BigInteger(explicitCurve.Order, isUnsigned: true, isBigEndian: true), new BigInteger(curve.Order, isUnsigned: true, isBigEndian: true));
+        Assert.Same(curve, NistCurve.FromExplicitParameters([0, .. explicitCurve.Prime], explicitCurve.A, explicitCurve.B, generator, [0, .. explicitCurve.Order!]));
     }
 
     // RFC 9941 appendix A, which gives the KEM key, the X25519 secret and the final encoded K.
