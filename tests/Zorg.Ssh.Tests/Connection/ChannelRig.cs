@@ -187,9 +187,9 @@ internal sealed class ChannelRig : IAsyncDisposable
     }
 
     /// <summary>Opens a channel the peer knows as <paramref name="remoteId"/>.</summary>
-    public async Task<SshChannel> OpenAsync(uint remoteId, uint window = 1 << 24)
+    public async Task<SshChannel> OpenAsync(uint remoteId, uint window = 1 << 24, string type = "session")
     {
-        Task<SshChannel> open = Connection.OpenChannelAsync("session", _token);
+        Task<SshChannel> open = Connection.OpenChannelAsync(type, _token);
         byte[] request = await _other.Reader.ReadAsync(_token).AsTask().WaitAsync(Limit, _token);
         SshReader reader = new(request);
         reader.ReadByte();

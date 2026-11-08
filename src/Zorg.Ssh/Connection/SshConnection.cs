@@ -226,6 +226,7 @@ internal sealed class SshConnection : IAsyncDisposable
             }
 
             channel = Register();
+            channel.IsOwnSession = type == SessionChannel;
             _opening.Add(channel.LocalId, confirmed);
         }
 

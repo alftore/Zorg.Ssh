@@ -181,6 +181,9 @@ internal sealed class SshChannel : IAsyncDisposable
     /// <summary>Gets or sets whether requests go to <see cref="Requests"/>. Clients leave this off.</summary>
     public bool QueueIncomingRequests { get; set; }
 
+    /// <summary>Gets or sets whether this side opened the channel as a session, which is what the peer's exit-status is about.</summary>
+    public bool IsOwnSession { get; set; }
+
     /// <summary>Records what the peer told us when the channel opened.</summary>
     public void SetRemote(uint remoteId, uint window, uint maxPacket)
     {
@@ -617,7 +620,10 @@ internal sealed class SshChannel : IAsyncDisposable
     /// <summary>Handles an incoming request. Returns true if the caller must send CHANNEL_FAILURE.</summary>
     public bool OnRequest(string type, bool wantReply, ReadOnlySpan<byte> data)
     {
-        if (type == "exit-status")
+        // RFC 4254 section 6.10: only a server sends these, about a session the client opened. Anywhere else they go the way of any
+        // other request this side doesn't handle, so a client can't set what a server's channel reports (C5).
+        bool exitAllowed = IsOwnSession && !QueueIncomingRequests;
+        if (type == "exit-status" && exitAllowed)
         {
             SshReader reader = new(data);
             uint status = reader.ReadUInt32();
@@ -625,7 +631,7 @@ internal sealed class SshChannel : IAsyncDisposable
             return false;
         }
 
-        if (type == "exit-signal")
+        if (type == "exit-signal" && exitAllowed)
         {
             SshReader reader = new(data);
             ExitSignal = PeerText.Clean(reader.ReadUtf8String(), MaxExitSignalLength);
