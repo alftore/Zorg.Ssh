@@ -60,6 +60,19 @@ public sealed class SftpServerUnreadableDirectoryTests : IDisposable
         Assert.Throws<UnauthorizedAccessException>(() => SftpServerListing.Open(locked));
     }
 
+    // A failed openat once came back as descriptor 4294967295, which passed for an open one, so a missing directory
+    // gave "isn't a directory" or EBADF instead. These run as root too, where the denial above can't be made.
+    [Fact]
+    public void The_linux_raw_reader_says_a_missing_directory_is_missing()
+    {
+        Assert.SkipUnless(OperatingSystem.IsLinux() && SftpServerLinux.IsSupported, "The raw reader is used on Linux only.");
+        string missing = Path2("missing");
+        Assert.Throws<DirectoryNotFoundException>(() => SftpServerListing.Open(missing));
+
+        int budget = 100;
+        Assert.Throws<DirectoryNotFoundException>(() => SftpServerLinux.ScanForClimbs(missing, 0, ref budget, static (_, _) => false));
+    }
+
     [Fact]
     public void An_empty_readable_directory_still_lists_as_empty()
     {

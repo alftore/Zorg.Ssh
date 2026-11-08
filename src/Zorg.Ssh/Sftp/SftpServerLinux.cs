@@ -12,10 +12,8 @@ namespace Zorg.Ssh.Sftp;
 /// <summary>A file descriptor from <c>openat</c>, closed when disposed. A negative value is the invalid one, as 0 is a real descriptor.</summary>
 internal sealed class SftpServerLinuxFd : SafeHandle
 {
-    public SftpServerLinuxFd()
-        : base(-1, ownsHandle: true)
-    {
-    }
+    public SftpServerLinuxFd(int fd)
+        : base(-1, ownsHandle: true) => SetHandle(fd);
 
     public override bool IsInvalid => handle < 0;
 
@@ -392,18 +390,20 @@ internal static partial class SftpServerLinux
         return bytes;
     }
 
-    private static SftpServerLinuxFd OpenAt(int directory, byte[] nameZ, out int errno)
-    {
-        SftpServerLinuxFd fd = OpenAtCwd(directory, nameZ, OpenDirectoryFlags, 0);
-        errno = fd.IsInvalid ? Marshal.GetLastPInvokeError() : 0;
-        return fd;
-    }
+    // openat returns an int. Taken as a handle, which is pointer-sized, a failure's -1 can arrive as 4294967295: the
+    // upper half of the register isn't part of an int (glibc 2.39 on x64 left it zero). That looked like an open
+    // descriptor, so EACCES and ENOENT turned into a failed statx or getdents on a descriptor that isn't there: the
+    // request was still refused, but with the wrong status, and a directory gone during a move scan refused the move.
+    private static SftpServerLinuxFd OpenAt(int directory, byte[] nameZ, out int errno) =>
+        Wrap(OpenAtCwd(directory, nameZ, OpenDirectoryFlags, 0), out errno);
 
-    private static SftpServerLinuxFd OpenAt(SftpServerLinuxFd directory, byte[] nameZ, out int errno)
+    private static SftpServerLinuxFd OpenAt(SftpServerLinuxFd directory, byte[] nameZ, out int errno) =>
+        Wrap(OpenAtFd(directory, nameZ, OpenDirectoryFlags, 0), out errno);
+
+    private static SftpServerLinuxFd Wrap(int fd, out int errno)
     {
-        SftpServerLinuxFd fd = OpenAtFd(directory, nameZ, OpenDirectoryFlags, 0);
-        errno = fd.IsInvalid ? Marshal.GetLastPInvokeError() : 0;
-        return fd;
+        errno = fd < 0 ? Marshal.GetLastPInvokeError() : 0;
+        return new SftpServerLinuxFd(fd);
     }
 
     private static Exception Error(int errno) => errno switch
@@ -435,7 +435,7 @@ internal static partial class SftpServerLinux
     {
         try
         {
-            using SftpServerLinuxFd fd = OpenAtCwd(AtFdCwd, "/\0"u8.ToArray(), OpenDirectoryFlags, 0);
+            using SftpServerLinuxFd fd = OpenAt(AtFdCwd, "/\0"u8.ToArray(), out _);
             if (fd.IsInvalid)
             {
                 return false;
@@ -476,11 +476,11 @@ internal static partial class SftpServerLinux
 
     [DefaultDllImportSearchPaths(DllImportSearchPath.SafeDirectories)]
     [LibraryImport("libc", EntryPoint = "openat", SetLastError = true)]
-    private static partial SftpServerLinuxFd OpenAtCwd(int directory, byte[] path, int flags, int mode);
+    private static partial int OpenAtCwd(int directory, byte[] path, int flags, int mode);
 
     [DefaultDllImportSearchPaths(DllImportSearchPath.SafeDirectories)]
     [LibraryImport("libc", EntryPoint = "openat", SetLastError = true)]
-    private static partial SftpServerLinuxFd OpenAtFd(SftpServerLinuxFd directory, byte[] path, int flags, int mode);
+    private static partial int OpenAtFd(SftpServerLinuxFd directory, byte[] path, int flags, int mode);
 
     [DefaultDllImportSearchPaths(DllImportSearchPath.SafeDirectories)]
     [LibraryImport("libc", EntryPoint = "close", SetLastError = true)]
