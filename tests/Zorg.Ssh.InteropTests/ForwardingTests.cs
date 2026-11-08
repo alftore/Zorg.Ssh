@@ -497,8 +497,11 @@ public class ForwardingTests
 
     private static async Task<string> ContainerAddressAsync(SshPeerContainer container)
     {
-        string address = await ContainerCli.RunAsync(TimeSpan.FromSeconds(30), Ct, "inspect", "--format", "{{.NetworkSettings.IPAddress}}", container.Id);
-        Assert.False(string.IsNullOrWhiteSpace(address), "The container has no address on the default network.");
-        return address.Trim();
+        // Per network: Docker 29 dropped the top-level NetworkSettings.IPAddress, which Podman still fills. Both fill this.
+        string addresses = await ContainerCli.RunAsync(
+            TimeSpan.FromSeconds(30), Ct, "inspect", "--format", "{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}", container.Id);
+        string? address = addresses.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).FirstOrDefault();
+        Assert.True(address is not null, "The container has no address on its network.");
+        return address;
     }
 }
