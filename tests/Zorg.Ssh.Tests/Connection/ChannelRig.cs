@@ -6,6 +6,7 @@ using System.Threading;
 using System.Threading.Channels;
 using System.Threading.Tasks;
 using Xunit;
+using Zorg.Ssh.Auth;
 using Zorg.Ssh.Connection;
 using Zorg.Ssh.Protocol;
 using Zorg.Ssh.Tests.Transport;
@@ -238,6 +239,35 @@ internal sealed class ChannelRig : IAsyncDisposable
             {
                 w.Byte(number);
                 w.UInt32(localId);
+            }),
+            _token).AsTask();
+
+    /// <summary>Sends channel data, or extended data of type 1, to a channel.</summary>
+    public Task SendDataAsync(uint localId, byte[] data, bool extended = false) =>
+        _peer.SendAsync(
+            Message(w =>
+            {
+                w.Byte(extended ? MessageNumber.ChannelExtendedData : MessageNumber.ChannelData);
+                w.UInt32(localId);
+                if (extended)
+                {
+                    w.UInt32(1);
+                }
+
+                w.Bytes(data);
+            }),
+            _token).AsTask();
+
+    /// <summary>Sends a channel request, with whatever <paramref name="extra"/> writes after the want-reply flag.</summary>
+    public Task SendRequestAsync(uint localId, string type, bool wantReply, Action<SshRequestWriter>? extra = null) =>
+        _peer.SendAsync(
+            Message(w =>
+            {
+                w.Byte(MessageNumber.ChannelRequest);
+                w.UInt32(localId);
+                w.String(type);
+                w.Bool(wantReply);
+                extra?.Invoke(w);
             }),
             _token).AsTask();
 

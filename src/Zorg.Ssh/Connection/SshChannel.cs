@@ -56,6 +56,13 @@ internal sealed class SshChannel : IAsyncDisposable
     private uint _remoteMaxPacket;
     private long _receiveWindow = DefaultWindow;
     private uint _consumed;
+
+    // Bytes written to each output pipe and not yet read, and whether that pipe's reader has gone. When a reader goes, what it
+    // left is credited at once, and later data is credited as it arrives, so a dropped stream can't shrink the shared window (C1).
+    private long _outputBuffered;
+    private long _errorBuffered;
+    private bool _outputDropped;
+    private bool _errorDropped;
     private bool _creditQueued;
     private TaskCompletionSource? _windowWaiter;
     private TaskCompletionSource<bool>? _requestReply;
@@ -82,8 +89,8 @@ internal sealed class SshChannel : IAsyncDisposable
     {
         _connection = connection;
         LocalId = localId;
-        Output = new ChannelReadStream(this, _output.Reader);
-        ErrorOutput = new ChannelReadStream(this, _errorOutput.Reader);
+        Output = new ChannelReadStream(this, _output.Reader, extended: false);
+        ErrorOutput = new ChannelReadStream(this, _errorOutput.Reader, extended: true);
         Input = new ChannelWriteStream(this);
         ErrorInput = new ChannelWriteStream(this, extendedType: 1);
     }
@@ -424,6 +431,7 @@ internal sealed class SshChannel : IAsyncDisposable
 
     public void OnData(ReadOnlySpan<byte> data, bool extended)
     {
+        bool dropped;
         lock (_gate)
         {
             if (_eofReceived || _closeReceived)
@@ -443,16 +451,84 @@ internal sealed class SshChannel : IAsyncDisposable
             {
                 return;
             }
+
+            dropped = extended ? _errorDropped : _outputDropped;
+            if (!dropped)
+            {
+                // Counted before the write, so a reader that goes between here and the write credits this too.
+                if (extended)
+                {
+                    _errorBuffered += data.Length;
+                }
+                else
+                {
+                    _outputBuffered += data.Length;
+                }
+            }
         }
 
-        // No pause threshold is set, so this flush completes at once. The window is what bounds the pipe.
-        PipeWriter writer = (extended ? _errorOutput : _output).Writer;
-        writer.Write(data);
-        ValueTask<FlushResult> flush = writer.FlushAsync(CancellationToken.None);
-        if (flush.IsCompletedSuccessfully && flush.Result.IsCompleted)
+        if (dropped)
         {
             // Nobody will read this stream any more, so the data is consumed as it arrives.
             OnConsumed(data.Length);
+            return;
+        }
+
+        // No pause threshold is set, so this flush completes at once. The window is what bounds the pipe. If the reader went after
+        // the count above, the pipe drops this data, and the reader's going has already credited it.
+        PipeWriter writer = (extended ? _errorOutput : _output).Writer;
+        writer.Write(data);
+        ValueTask<FlushResult> flush = writer.FlushAsync(CancellationToken.None);
+        if (!flush.IsCompleted)
+        {
+            _ = flush.AsTask();
+        }
+    }
+
+    /// <summary>Credits data the application read from one of the output streams.</summary>
+    public void OnRead(int bytes, bool extended)
+    {
+        lock (_gate)
+        {
+            if (extended)
+            {
+                _errorBuffered -= bytes;
+            }
+            else
+            {
+                _outputBuffered -= bytes;
+            }
+        }
+
+        OnConsumed(bytes);
+    }
+
+    /// <summary>
+    /// Records that an output stream's reader has completed its pipe, and credits what it left unread. Its stream calls this once,
+    /// after its last read has credited what it took, so nothing is credited twice (C1).
+    /// </summary>
+    public void OnReaderCompleted(bool extended)
+    {
+        long unread;
+        lock (_gate)
+        {
+            if (extended)
+            {
+                unread = _errorBuffered;
+                _errorBuffered = 0;
+                _errorDropped = true;
+            }
+            else
+            {
+                unread = _outputBuffered;
+                _outputBuffered = 0;
+                _outputDropped = true;
+            }
+        }
+
+        if (unread != 0)
+        {
+            OnConsumed((int)unread);
         }
     }
 
@@ -569,7 +645,7 @@ internal sealed class SshChannel : IAsyncDisposable
     }
 
     /// <summary>Credits data the application has read, and grows the window once half of it is used.</summary>
-    public void OnConsumed(int bytes)
+    private void OnConsumed(int bytes)
     {
         bool queue = false;
         lock (_gate)
