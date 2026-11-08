@@ -362,7 +362,7 @@ public sealed class DeferredEofTests
     {
         using SshHostKey key = SshHostKey.GenerateEd25519();
         TaskCompletionSource<long> total = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        await using SshServer server = await SshServer.StartAsync(
+        await using SshServer server = SshServer.Create(
             new SshServerOptions
             {
                 HostKeys = [key],
@@ -380,8 +380,7 @@ public sealed class DeferredEofTests
                     total.TrySetResult(sum);
                     return 0;
                 },
-            },
-            Ct);
+            });
         (Stream clientSide, Stream serverSide) = DuplexStream.CreatePair();
         GatedStream gate = new(clientSide);
         Task serving = server.ServeStreamAsync(serverSide, Ct);

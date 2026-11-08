@@ -17,7 +17,7 @@ using Zorg.Ssh.Transport;
 
 namespace Zorg.Ssh;
 
-/// <summary>An SSH server. Start with <see cref="StartAsync"/>, and dispose it to stop.</summary>
+/// <summary>An SSH server. Start it with <see cref="StartAsync"/>, or make one that never listens with <see cref="Create"/>. Dispose it to stop.</summary>
 /// <remarks>
 /// Don't expose it to the public internet or to users you don't trust. It hasn't had an external security review or
 /// time in production, and a version number won't change that. It suits tests, local tools, and a trusted internal
@@ -47,7 +47,7 @@ public sealed partial class SshServer : IAsyncDisposable
 
     private readonly SshServerOptions _options;
     private readonly ILogger _logger;
-    private readonly TcpListener _listener;
+    private readonly TcpListener? _listener;
     // Never disposed: a handler that ignored cancellation can outlive the server, and still hold a token from it.
 #pragma warning disable CA2213
     private readonly CancellationTokenSource _stop = new();
@@ -61,7 +61,7 @@ public sealed partial class SshServer : IAsyncDisposable
     private int _disposed;
     private Task? _acceptLoop;
 
-    private SshServer(SshServerOptions options, TcpListener listener, TimeProvider idleTime)
+    private SshServer(SshServerOptions options, TcpListener? listener, TimeProvider idleTime)
     {
         _options = options;
         _idleTime = idleTime;
@@ -90,7 +90,10 @@ public sealed partial class SshServer : IAsyncDisposable
     internal int UnauthenticatedAddressCount => _perAddress.Entries;
 
     /// <summary>Gets the address and port the server listens on.</summary>
-    public IPEndPoint LocalEndPoint => (IPEndPoint)_listener.LocalEndpoint;
+    /// <exception cref="InvalidOperationException">The server came from <see cref="Create"/>, so it listens on nothing.</exception>
+    public IPEndPoint LocalEndPoint => _listener is { } listener
+        ? (IPEndPoint)listener.LocalEndpoint
+        : throw new InvalidOperationException("This server was made with SshServer.Create and listens on nothing. Hand it connections with ServeStreamAsync, or use SshServer.StartAsync to listen.");
 
     /// <summary>Starts listening.</summary>
     /// <param name="options">The host keys, handlers and limits.</param>
@@ -105,11 +108,46 @@ public sealed partial class SshServer : IAsyncDisposable
     public static Task<SshServer> StartAsync(SshServerOptions options, CancellationToken cancellationToken = default)
         => StartWithClockAsync(options, TimeProvider.System, cancellationToken);
 
+    /// <summary>
+    /// Makes a server that never listens. Hand it connections with <see cref="ServeStreamAsync"/>: from a tunnel, a
+    /// proxy you accepted on, a pipe, or an in-memory stream in a test. It checks <paramref name="options"/> exactly
+    /// as <see cref="StartAsync"/> does, and applies the same limits and timeouts. <see cref="SshServerOptions.Address"/>
+    /// and <see cref="SshServerOptions.Port"/> are ignored, and no socket is opened, so
+    /// <see cref="LocalEndPoint"/> throws <see cref="InvalidOperationException"/>. Dispose it to close every connection
+    /// and cancel every handler's token.
+    /// </summary>
+    /// <param name="options">The host keys, handlers and limits.</param>
+    /// <returns>A server with no listener.</returns>
+    /// <exception cref="ArgumentException">The options are invalid, for example there is no host key or no login handler.</exception>
+    /// <example>
+    /// <code>
+    /// await using SshServer server = SshServer.Create(options);
+    /// await server.ServeStreamAsync(tunnelStream, cancellationToken);
+    /// </code>
+    /// </example>
+    public static SshServer Create(SshServerOptions options)
+    {
+        Validate(options);
+        return new SshServer(options, null, TimeProvider.System);
+    }
+
     /// <summary>Starts listening with a time source for the idle timeout, so tests don't have to sleep.</summary>
     internal static Task<SshServer> StartWithClockAsync(SshServerOptions options, TimeProvider idleTime, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(options);
         cancellationToken.ThrowIfCancellationRequested();
+        Validate(options);
+        TcpListener listener = new(options.Address, options.Port);
+        listener.Start();
+        SshServer server = new(options, listener, idleTime);
+        server._acceptLoop = Task.Run(server.AcceptLoopAsync, CancellationToken.None);
+        return Task.FromResult(server);
+    }
+
+    /// <summary>The checks <see cref="StartAsync"/> and <see cref="Create"/> share.</summary>
+    private static void Validate(SshServerOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
         if (options.HostKeys.Count == 0)
         {
             throw new ArgumentException("A server needs at least one host key.", nameof(options));
@@ -131,12 +169,6 @@ public sealed partial class SshServer : IAsyncDisposable
         {
             throw new ArgumentOutOfRangeException(nameof(options), idle, "IdleTimeout must be above zero. Leave it null for no idle timeout.");
         }
-
-        TcpListener listener = new(options.Address, options.Port);
-        listener.Start();
-        SshServer server = new(options, listener, idleTime);
-        server._acceptLoop = Task.Run(server.AcceptLoopAsync, CancellationToken.None);
-        return Task.FromResult(server);
     }
 
     /// <summary>
@@ -176,7 +208,7 @@ public sealed partial class SshServer : IAsyncDisposable
         }
 
         await _stop.CancelAsync().ConfigureAwait(false);
-        _listener.Stop();
+        _listener?.Stop();
         if (_acceptLoop is not null)
         {
             await _acceptLoop.ConfigureAwait(false);
@@ -192,7 +224,7 @@ public sealed partial class SshServer : IAsyncDisposable
             LogShutdownTimedOut(_logger);
         }
 
-        _listener.Dispose();
+        _listener?.Dispose();
     }
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Refused a connection: limit reached")]
@@ -274,7 +306,7 @@ public sealed partial class SshServer : IAsyncDisposable
             Socket socket;
             try
             {
-                socket = await _listener.AcceptSocketAsync(_stop.Token).ConfigureAwait(false);
+                socket = await _listener!.AcceptSocketAsync(_stop.Token).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is OperationCanceledException or ObjectDisposedException or SocketException or InvalidOperationException)
             {

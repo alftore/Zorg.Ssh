@@ -76,7 +76,7 @@ public sealed class ConnectionClosedTests : IDisposable
     [Fact]
     public async Task A_live_connection_has_neither_signalled()
     {
-        await using SshServer server = await SshServer.StartAsync(ServerOptions(), Ct);
+        await using SshServer server = SshServer.Create(ServerOptions());
         (SshClient client, _, _) = await ConnectAsync(server, ClientOptions());
         await using (client)
         {
@@ -91,7 +91,7 @@ public sealed class ConnectionClosedTests : IDisposable
     [Fact]
     public async Task A_server_that_disconnects_gives_SshDisconnectedException_with_its_reason()
     {
-        SshServer server = await SshServer.StartAsync(ServerOptions(), Ct);
+        SshServer server = SshServer.Create(ServerOptions());
         (SshClient client, _, _) = await ConnectAsync(server, ClientOptions());
         await using (client)
         {
@@ -140,7 +140,7 @@ public sealed class ConnectionClosedTests : IDisposable
     [Fact]
     public async Task A_lost_connection_gives_SshConnectionException()
     {
-        await using SshServer server = await SshServer.StartAsync(ServerOptions(), Ct);
+        await using SshServer server = SshServer.Create(ServerOptions());
         (SshClient client, Link link, _) = await ConnectAsync(server, ClientOptions());
         await using (client)
         {
@@ -155,7 +155,7 @@ public sealed class ConnectionClosedTests : IDisposable
     [Fact]
     public async Task A_keepalive_timeout_gives_SshConnectionException()
     {
-        await using SshServer server = await SshServer.StartAsync(ServerOptions(), Ct);
+        await using SshServer server = SshServer.Create(ServerOptions());
         (SshClient client, Link link, _) = await ConnectAsync(server, ClientOptions(keepAlive: true));
         await using (client)
         {
@@ -176,7 +176,7 @@ public sealed class ConnectionClosedTests : IDisposable
     [Fact]
     public async Task Disposing_a_healthy_connection_gives_null_and_the_token_stays_readable()
     {
-        await using SshServer server = await SshServer.StartAsync(ServerOptions(), Ct);
+        await using SshServer server = SshServer.Create(ServerOptions());
         (SshClient client, _, _) = await ConnectAsync(server, ClientOptions());
         Task<SshException?> waiting = client.WaitForCloseAsync(Ct);
         CancellationToken token = client.ConnectionClosed;
@@ -203,7 +203,7 @@ public sealed class ConnectionClosedTests : IDisposable
     [Fact]
     public async Task A_failure_before_dispose_stays_the_reason()
     {
-        await using SshServer server = await SshServer.StartAsync(ServerOptions(), Ct);
+        await using SshServer server = SshServer.Create(ServerOptions());
         (SshClient client, Link link, _) = await ConnectAsync(server, ClientOptions());
         link.Sever();
         SshException? first = await ClosedAsync(client);
@@ -230,7 +230,7 @@ public sealed class ConnectionClosedTests : IDisposable
     [Fact]
     public async Task Everything_pending_has_failed_when_the_wait_ends()
     {
-        await using SshServer server = await SshServer.StartAsync(ServerOptions(), Ct);
+        await using SshServer server = SshServer.Create(ServerOptions());
         (SshClient client, Link link, _) = await ConnectAsync(server, ClientOptions());
         await using (client)
         {
@@ -287,7 +287,7 @@ public sealed class ConnectionClosedTests : IDisposable
         TaskScheduler.UnobservedTaskException += watch;
         try
         {
-            await using SshServer server = await SshServer.StartAsync(ServerOptions(), Ct);
+            await using SshServer server = SshServer.Create(ServerOptions());
             (SshClient client, Link link, _) = await ConnectAsync(server, ClientOptions());
             (SshClient other, _, _) = await ConnectAsync(server, ClientOptions());
             await using (client)
@@ -343,7 +343,7 @@ public sealed class ConnectionClosedTests : IDisposable
     [Fact]
     public async Task WaitForCloseAsync_honours_its_own_token()
     {
-        await using SshServer server = await SshServer.StartAsync(ServerOptions(), Ct);
+        await using SshServer server = SshServer.Create(ServerOptions());
         (SshClient client, _, _) = await ConnectAsync(server, ClientOptions());
         await using (client)
         {

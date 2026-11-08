@@ -115,7 +115,7 @@ public sealed class KeepAliveClientServerTests : IDisposable
     [Fact]
     public async Task The_defaults_are_5_minutes_and_3_on_both_roles()
     {
-        await using SshServer server = await SshServer.StartAsync(new SshServerOptions { HostKeys = [_hostKey], SessionHandler = WaitForeverAsync, PasswordHandler = (_, _) => ValueTask.FromResult(SshAuthDecision.Accept) }, Ct);
+        await using SshServer server = SshServer.Create(new SshServerOptions { HostKeys = [_hostKey], SessionHandler = WaitForeverAsync, PasswordHandler = (_, _) => ValueTask.FromResult(SshAuthDecision.Accept) });
         SshClientOptions options = new() { Host = "h", UserName = "u", HostKeyPolicy = HostKeyPolicy.AcceptAnyUnsafe() };
         SshServerOptions serverOptions = new() { HostKeys = [], SessionHandler = WaitForeverAsync };
 
@@ -191,7 +191,7 @@ public sealed class KeepAliveClientServerTests : IDisposable
     [Fact]
     public async Task Our_client_and_server_keep_each_other_alive_through_a_long_silence()
     {
-        await using SshServer server = await SshServer.StartAsync(ServerOptions((_, _) => Task.FromResult(5), keepAlive: false), Ct);
+        await using SshServer server = SshServer.Create(ServerOptions((_, _) => Task.FromResult(5), keepAlive: false));
         await using SshClient client = await ConnectAsync(server, clientKeepAlive: true);
         await _clock.WaitForTimerAsync();
 
@@ -212,7 +212,7 @@ public sealed class KeepAliveClientServerTests : IDisposable
     [Fact]
     public async Task ExecuteAsync_with_no_token_ends_when_the_server_dies()
     {
-        await using SshServer server = await SshServer.StartAsync(ServerOptions(WaitForeverAsync, keepAlive: false), Ct);
+        await using SshServer server = SshServer.Create(ServerOptions(WaitForeverAsync, keepAlive: false));
         await using SshClient client = await ConnectAsync(server, clientKeepAlive: true);
         await _clock.WaitForTimerAsync();
 
@@ -236,7 +236,7 @@ public sealed class KeepAliveClientServerTests : IDisposable
     [Fact]
     public async Task A_stream_read_with_no_token_ends_when_the_server_dies()
     {
-        await using SshServer server = await SshServer.StartAsync(ServerOptions(WaitForeverAsync, keepAlive: false), Ct);
+        await using SshServer server = SshServer.Create(ServerOptions(WaitForeverAsync, keepAlive: false));
         await using SshClient client = await ConnectAsync(server, clientKeepAlive: true);
         await _clock.WaitForTimerAsync();
 
@@ -275,7 +275,7 @@ public sealed class KeepAliveClientServerTests : IDisposable
     [Fact]
     public async Task A_handler_reading_with_no_token_wakes_and_frees_its_slot_when_the_client_dies()
     {
-        await using SshServer server = await SshServer.StartAsync(ServerOptions(ReadWithNoTokenAsync, keepAlive: true), Ct);
+        await using SshServer server = SshServer.Create(ServerOptions(ReadWithNoTokenAsync, keepAlive: true));
         await using SshClient client = await ConnectAsync(server, clientKeepAlive: false);
         await using SshProcess process = await client.StartProcessAsync("wait", null, Ct);
         await _handlerStarted.Task.WaitAsync(Limit, Ct);
@@ -294,7 +294,7 @@ public sealed class KeepAliveClientServerTests : IDisposable
     [Fact]
     public async Task A_handler_waiting_on_its_token_is_cancelled_when_the_client_dies()
     {
-        await using SshServer server = await SshServer.StartAsync(ServerOptions(WaitForeverAsync, keepAlive: true), Ct);
+        await using SshServer server = SshServer.Create(ServerOptions(WaitForeverAsync, keepAlive: true));
         await using SshClient client = await ConnectAsync(server, clientKeepAlive: false);
         await using SshProcess process = await client.StartProcessAsync("wait", null, Ct);
         await _handlerStarted.Task.WaitAsync(Limit, Ct);

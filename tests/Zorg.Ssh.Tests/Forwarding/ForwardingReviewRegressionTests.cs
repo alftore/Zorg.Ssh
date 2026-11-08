@@ -64,15 +64,14 @@ public sealed class ForwardingReviewRegressionTests
     public async Task A_host_name_dns_refuses_is_an_ordinary_refusal()
     {
         using SshHostKey key = SshHostKey.GenerateEd25519();
-        await using SshServer server = await SshServer.StartAsync(
+        await using SshServer server = SshServer.Create(
             new SshServerOptions
             {
                 HostKeys = [key],
                 PasswordHandler = Accept,
                 SessionHandler = static (_, _) => Task.FromResult(0),
                 DirectTcpHandler = static (_, _) => ValueTask.FromResult(SshForwardDecision.Allow),
-            },
-            Ct);
+            });
         (Stream clientSide, Stream serverSide) = DuplexStream.CreatePair();
         Task serving = server.ServeStreamAsync(serverSide, Ct);
         SshClient client = await SshClient.ConnectOverStreamAsync(

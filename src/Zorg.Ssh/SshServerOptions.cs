@@ -297,7 +297,7 @@ public sealed record SshServerOptions
     /// </remarks>
     public IPAddress Address { get; init; } = IPAddress.Loopback;
 
-    /// <summary>Gets the port. Zero, the default, picks a free one: read it from <see cref="SshServer.LocalEndPoint"/>.</summary>
+    /// <summary>Gets the port. Zero, the default, picks a free one: read it from <see cref="SshServer.LocalEndPoint"/>. <see cref="SshServer.Create"/> ignores it.</summary>
     public int Port { get; init; }
 
     /// <summary>Gets the host keys. At least one is required.</summary>

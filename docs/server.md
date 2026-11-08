@@ -43,6 +43,25 @@ The server listens on loopback unless you set `Address`, so exposing it is a del
 
 Disposing the server stops listening, closes every connection, cancels the handlers' tokens, and waits for the handlers to end. A handler that ignores its token holds up disposal.
 
+### Serving streams without a listener
+
+`ServeStreamAsync` serves a connection you accepted yourself: from a tunnel, a pipe, or an in-memory stream in a test. `SshServer.Create` makes a server for that alone. It opens no socket and starts no accept loop.
+
+```csharp
+await using SshServer server = SshServer.Create(new SshServerOptions
+{
+    HostKeys = [hostKey],
+    PasswordHandler = (request, ct) => ValueTask.FromResult(
+        IsPasswordRight(request.UserName, request.Password) ? SshAuthDecision.Accept : SshAuthDecision.Reject),
+    SessionHandler = (session, ct) => Task.FromResult(0),
+});
+
+// Returns when the connection ends. Several streams can be served at once.
+await server.ServeStreamAsync(tunnelStream, cancellationToken);
+```
+
+`Create` checks the options exactly as `StartAsync` does, and the limits, timeouts and handlers work the same. `Address` and `Port` are ignored. `LocalEndPoint` throws `InvalidOperationException`, because there is nothing to report and a made-up address would mislead. Disposing the server closes every connection it is serving and cancels the handlers' tokens, as for a listening server. `MaxUnauthenticatedPerAddress` doesn't apply, because a stream has no address.
+
 ## Host keys
 
 `HostKeys` needs at least one key. `SshHostKey.Load` takes the text of a private key file in OpenSSH, PKCS#1, SEC1 or PKCS#8 form, with a passphrase if it's encrypted.

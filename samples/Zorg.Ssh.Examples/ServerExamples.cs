@@ -38,6 +38,22 @@ internal static class ServerExamples
         // end-doc
     }
 
+    public static async Task WithoutListener(SshHostKey hostKey, Stream tunnelStream, CancellationToken cancellationToken)
+    {
+        // doc:server-create
+        await using SshServer server = SshServer.Create(new SshServerOptions
+        {
+            HostKeys = [hostKey],
+            PasswordHandler = (request, ct) => ValueTask.FromResult(
+                IsPasswordRight(request.UserName, request.Password) ? SshAuthDecision.Accept : SshAuthDecision.Reject),
+            SessionHandler = (session, ct) => Task.FromResult(0),
+        });
+
+        // Returns when the connection ends. Several streams can be served at once.
+        await server.ServeStreamAsync(tunnelStream, cancellationToken);
+        // end-doc
+    }
+
     public static SshServerOptions KeyOnly(SshHostKey hostKey, ISet<string> allowedKeys)
     {
         // doc:server-public-key
