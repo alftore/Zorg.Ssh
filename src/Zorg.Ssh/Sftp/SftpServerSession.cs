@@ -54,6 +54,13 @@ internal sealed partial class SftpServerSession : IAsyncDisposable
     /// </summary>
     internal static readonly TimeSpan GateHoldForOpen = TimeSpan.FromMilliseconds(100);
 
+    /// <summary>
+    /// Serialises appends where the kernel can't place them (finding S5): finding the end and writing there is two
+    /// calls, and two sessions appending to one file would both write at the same end. Only this process's sessions
+    /// wait here. On Linux the descriptor has <c>O_APPEND</c> instead, which holds against other processes too.
+    /// </summary>
+    private static readonly SemaphoreSlim AppendGate = new(1, 1);
+
 #pragma warning disable CA2213 // The streams belong to the caller.
     private readonly Stream _input;
     private readonly Stream _output;
@@ -467,12 +474,16 @@ internal sealed partial class SftpServerSession : IAsyncDisposable
             }
 
             bool append = flags.HasFlag(SftpOpenFlags.Append);
+
+            // S5: set on the descriptor already checked, so it changes how writes land, not what was opened.
+            bool appendInKernel = append && SftpServerLinux.TrySetAppend(stream.SafeFileHandle);
 #pragma warning disable CA2000 // The handle table owns it from here.
             BuildHandle(id, _handles.Add(new SftpServerFile(
                 stream,
                 canRead: !mutating || flags.HasFlag(SftpOpenFlags.Read),
                 canWrite: flags.HasFlag(SftpOpenFlags.Write) || append,
-                append)));
+                append,
+                appendInKernel)));
 #pragma warning restore CA2000
         }
         catch
@@ -660,8 +671,26 @@ internal sealed partial class SftpServerSession : IAsyncDisposable
             throw Refuse(SftpStatusCode.Failure);
         }
 
-        long position = file.Append ? RandomAccess.GetLength(file.Handle) : (long)offset;
-        await RandomAccess.WriteAsync(file.Handle, body.Slice(dataStart, dataLength), position, cancellationToken).ConfigureAwait(false);
+        ReadOnlyMemory<byte> data = body.Slice(dataStart, dataLength);
+        if (file.Append && !file.AppendInKernel)
+        {
+            // S5: the end is found and written to under one gate, so another session's append can't land between.
+            await AppendGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                await RandomAccess.WriteAsync(file.Handle, data, RandomAccess.GetLength(file.Handle), cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                AppendGate.Release();
+            }
+        }
+        else
+        {
+            // With O_APPEND the kernel writes at the end and ignores the offset, as OpenSSH's server does.
+            await RandomAccess.WriteAsync(file.Handle, data, file.Append ? 0 : (long)offset, cancellationToken).ConfigureAwait(false);
+        }
+
         BuildStatus(id, SftpStatusCode.Ok);
     }
 

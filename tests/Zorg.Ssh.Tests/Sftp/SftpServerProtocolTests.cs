@@ -815,6 +815,56 @@ public sealed class SftpServerProtocolTests : IDisposable
         Assert.Equal(SftpMessage.Handle, (await normal.OpenAsync("plain.txt", OpenRead)).Type);
     }
 
+    [Fact]
+    public async Task S5_appends_from_two_sessions_never_overwrite_each_other()
+    {
+        // Finding S5: each APPEND write found the end and then wrote there, in two calls, so two sessions could both
+        // write at the same end and one record was lost. Without the fix this loses records on most runs.
+        await File.WriteAllBytesAsync(_sandbox.InRoot("log"), [], Ct);
+        await using SftpServerHarness first = await StartAsync(Options);
+        await using SftpServerHarness second = await StartAsync(Options);
+        byte[] firstHandle = await first.OpenHandleAsync("log", OpenWrite | OpenAppend);
+        byte[] secondHandle = await second.OpenHandleAsync("log", OpenWrite | OpenAppend);
+        const int Records = 300;
+
+        static async Task AppendAsync(SftpServerHarness client, byte[] handle, char who)
+        {
+            for (int i = 0; i < Records; i++)
+            {
+                byte[] record = Encoding.ASCII.GetBytes($"{who}{i:D6}\n");
+                Assert.Equal(Ok, (await client.WriteAsync(handle, 0, record)).Status);
+            }
+        }
+
+        await Task.WhenAll(Task.Run(() => AppendAsync(first, firstHandle, 'a'), Ct), Task.Run(() => AppendAsync(second, secondHandle, 'b'), Ct));
+        await first.CloseAsync(firstHandle);
+        await second.CloseAsync(secondHandle);
+
+        string[] lines = (await File.ReadAllTextAsync(_sandbox.InRoot("log"), Ct)).Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        Assert.Equal(2 * Records, lines.Length);
+        Assert.Equal(2 * Records, lines.Distinct().Count());
+    }
+
+    [Fact]
+    public async Task S5_an_append_handle_has_O_APPEND_on_Linux()
+    {
+        // Finding S5: on Linux the kernel places each append, which also holds against writers outside this process.
+        Assert.SkipUnless(OperatingSystem.IsLinux(), "Only Linux sets O_APPEND here.");
+        string path = _sandbox.InRoot("log");
+        await File.WriteAllTextAsync(path, "AAAA", Ct);
+        await using SftpServerHarness client = await StartAsync(Options);
+        byte[] handle = await client.OpenHandleAsync("log", OpenWrite | OpenAppend);
+
+        string fd = new DirectoryInfo("/proc/self/fd").EnumerateFileSystemInfos().First(f => f.LinkTarget == path).Name;
+        string flags = (await File.ReadAllLinesAsync($"/proc/self/fdinfo/{fd}", Ct)).First(l => l.StartsWith("flags:", StringComparison.Ordinal))["flags:".Length..].Trim();
+        Assert.NotEqual(0, Convert.ToInt32(flags, 8) & 0x400);
+
+        // A write the test makes outside the server lands before the server's next append, which still goes at the end.
+        await File.AppendAllTextAsync(path, "XX", Ct);
+        Assert.Equal(Ok, (await client.WriteAsync(handle, 0, "B"u8.ToArray())).Status);
+        Assert.Equal("AAAAXXB", await File.ReadAllTextAsync(path, Ct));
+    }
+
     private void MakeFifo(string name)
     {
         using System.Diagnostics.Process mkfifo = System.Diagnostics.Process.Start("mkfifo", _sandbox.InRoot(name));
