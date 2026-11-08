@@ -223,6 +223,23 @@ internal sealed class KnownHostsFile
         return otherKey ? KnownHostStatus.Changed : KnownHostStatus.Unknown;
     }
 
+    /// <summary>Gets the key types of the host keys recorded for a host. CA and revoked lines don't count.</summary>
+    public IReadOnlyList<string> HostKeyTypes(string host, int port)
+    {
+        string name = LookupName(host, port);
+        byte[] nameBytes = Encoding.UTF8.GetBytes(name);
+        List<string> types = [];
+        foreach (KnownHostsEntry entry in _entries)
+        {
+            if (entry.Marker == KnownHostMarker.None && entry.MatchesHost(name, nameBytes) && !types.Contains(entry.KeyType))
+            {
+                types.Add(entry.KeyType);
+            }
+        }
+
+        return types;
+    }
+
     /// <summary>Gets whether any <c>@cert-authority</c> line applies to a host.</summary>
     public bool HasCertificateAuthority(string host, int port) =>
         AnyLine(host, port, KnownHostMarker.CertificateAuthority, default, anyKey: true);

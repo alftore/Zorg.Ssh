@@ -192,11 +192,21 @@ internal sealed class KnownHostsPolicy(IReadOnlyList<string> paths, bool addUnkn
 
     internal override IReadOnlyList<string> HostKeyAlgorithmsFor(string host, int port)
     {
+        IReadOnlyList<string> algorithms = HostKeyAlgorithms.Default;
         try
         {
-            if (Load().Any(file => file.HasCertificateAuthority(host, port)))
+            KnownHosts.KnownHostsFile[] files = Load();
+            if (files.Any(file => file.HasCertificateAuthority(host, port)))
             {
-                return [.. SshCertificate.HostKeyAlgorithmNames, .. HostKeyAlgorithms.Default];
+                algorithms = [.. SshCertificate.HostKeyAlgorithmNames, .. HostKeyAlgorithms.Default];
+            }
+
+            // A2: like OpenSSH's order_hostkeyalgs, put the types already recorded for this host first. Otherwise a host
+            // recorded with one type is refused as changed when the server also has a type we'd rather use.
+            HashSet<string> known = [.. files.SelectMany(file => file.HostKeyTypes(host, port)).Select(KeyFamily)];
+            if (known.Count > 0)
+            {
+                algorithms = [.. algorithms.Where(a => known.Contains(KeyFamily(a))), .. algorithms.Where(a => !known.Contains(KeyFamily(a)))];
             }
         }
         catch (Exception ex) when (ex is SshHostKeyException or IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
@@ -204,7 +214,14 @@ internal sealed class KnownHostsPolicy(IReadOnlyList<string> paths, bool addUnkn
             // Plain algorithms never trust anything by themselves, and the check itself reports this failure.
         }
 
-        return HostKeyAlgorithms.Default;
+        return algorithms;
+    }
+
+    /// <summary>Names the key a key type or algorithm belongs to, so ssh-rsa, rsa-sha2-256 and their certificate forms compare equal.</summary>
+    private static string KeyFamily(string name)
+    {
+        string plain = SshCertificate.PlainSignatureAlgorithm(name) ?? (SshCertificate.IsCertificateType(name) ? "ssh-rsa" : name);
+        return plain is "rsa-sha2-512" or "rsa-sha2-256" ? "ssh-rsa" : plain;
     }
 
     internal override ValueTask<bool> CheckAsync(string host, int port, SshPublicKey key, CancellationToken cancellationToken)
