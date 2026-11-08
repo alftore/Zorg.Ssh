@@ -865,6 +865,62 @@ public sealed class SftpServerProtocolTests : IDisposable
         Assert.Equal("AAAAXXB", await File.ReadAllTextAsync(path, Ct));
     }
 
+    [Fact]
+    public async Task S6_statvfs_of_a_missing_path_is_no_such_file()
+    {
+        // Finding S6: statvfs answered with the root volume's numbers for a path that doesn't exist.
+        Directory.CreateDirectory(_sandbox.InRoot("there"));
+        await using SftpServerHarness client = await StartAsync(Options);
+
+        Assert.Equal(NoSuchFile, (await client.ExtendedAsync("statvfs@openssh.com", Path("does-not-exist/nor-this"))).Status);
+        Assert.Equal(NoSuchFile, (await client.ExtendedAsync("statvfs@openssh.com", Path("missing"))).Status);
+        Assert.Equal(SftpMessage.ExtendedReply, (await client.ExtendedAsync("statvfs@openssh.com", Path("there"))).Type);
+        Assert.Equal(SftpMessage.ExtendedReply, (await client.ExtendedAsync("statvfs@openssh.com", Path("/"))).Type);
+    }
+
+    [Fact]
+    public async Task S6_posix_rename_of_a_directory_replaces_an_empty_directory_as_rename_does()
+    {
+        // Finding S6: posix-rename has rename(2)'s meaning in OpenSSH, which replaces an empty directory. Directory.Move
+        // refused any existing target.
+        Directory.CreateDirectory(_sandbox.InRoot("src"));
+        Directory.CreateDirectory(_sandbox.InRoot("dst"));
+        await File.WriteAllTextAsync(_sandbox.InRoot("src/x"), "x", Ct);
+        await using SftpServerHarness client = await StartAsync(Options);
+
+        Assert.Equal(Ok, (await client.ExtendedAsync("posix-rename@openssh.com", Path("src").Text("dst"))).Status);
+        Assert.False(Directory.Exists(_sandbox.InRoot("src")));
+        Assert.Equal("x", await File.ReadAllTextAsync(_sandbox.InRoot("dst/x"), Ct));
+
+        // Plain RENAME still refuses an existing target, as OpenSSH's does.
+        Directory.CreateDirectory(_sandbox.InRoot("other"));
+        Directory.CreateDirectory(_sandbox.InRoot("empty"));
+        Assert.Equal(Failure, (await client.RequestAsync(SftpMessage.Rename, Path("other").Text("empty"))).Status);
+        Assert.True(Directory.Exists(_sandbox.InRoot("other")));
+    }
+
+    [Fact]
+    public async Task S6_posix_rename_of_a_directory_leaves_what_rename_would_refuse()
+    {
+        // Finding S6: only an empty directory is replaced. Nothing is lost on the way to a refusal.
+        Directory.CreateDirectory(_sandbox.InRoot("a/sub"));
+        await File.WriteAllTextAsync(_sandbox.InRoot("a/x"), "x", Ct);
+        Directory.CreateDirectory(_sandbox.InRoot("full"));
+        await File.WriteAllTextAsync(_sandbox.InRoot("full/y"), "y", Ct);
+        await File.WriteAllTextAsync(_sandbox.InRoot("file"), "f", Ct);
+        await using SftpServerHarness client = await StartAsync(Options);
+
+        Assert.Equal(Failure, (await client.ExtendedAsync("posix-rename@openssh.com", Path("a").Text("full"))).Status);
+        Assert.Equal(Failure, (await client.ExtendedAsync("posix-rename@openssh.com", Path("a").Text("file"))).Status);
+        Assert.Equal(Failure, (await client.ExtendedAsync("posix-rename@openssh.com", Path("a").Text("a/sub"))).Status);
+        await client.ExtendedAsync("posix-rename@openssh.com", Path("a").Text("a"));
+
+        Assert.Equal("x", await File.ReadAllTextAsync(_sandbox.InRoot("a/x"), Ct));
+        Assert.True(Directory.Exists(_sandbox.InRoot("a/sub")));
+        Assert.Equal("y", await File.ReadAllTextAsync(_sandbox.InRoot("full/y"), Ct));
+        Assert.Equal("f", await File.ReadAllTextAsync(_sandbox.InRoot("file"), Ct));
+    }
+
     private void MakeFifo(string name)
     {
         using System.Diagnostics.Process mkfifo = System.Diagnostics.Process.Start("mkfifo", _sandbox.InRoot(name));

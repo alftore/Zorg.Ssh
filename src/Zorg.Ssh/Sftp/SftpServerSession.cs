@@ -3,6 +3,8 @@ using System.Buffers;
 using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
+using System.Runtime.InteropServices;
 using System.Security;
 using System.Text;
 using System.Threading;
@@ -31,6 +33,8 @@ internal sealed partial class SftpServerSession : IAsyncDisposable
     private const ulong StatvfsReadOnly = 1;
     private const ulong StatvfsBlockSize = 4096;
     private const ulong StatvfsMaxName = 255;
+    private const int EPerm = 1;
+    private const int EAcces = 13;
 
     private const string PosixRename = "posix-rename@openssh.com";
     private const string Fsync = "fsync@openssh.com";
@@ -194,7 +198,11 @@ internal sealed partial class SftpServerSession : IAsyncDisposable
 
     private static void Move(SftpServerResolved source, SftpServerResolved target, bool overwrite)
     {
-        if (source.IsDirectory)
+        if (source.IsDirectory && overwrite && target.Exists)
+        {
+            ReplaceWithDirectory(source, target);
+        }
+        else if (source.IsDirectory)
         {
             Directory.Move(source.RealPath, target.RealPath);
         }
@@ -203,6 +211,51 @@ internal sealed partial class SftpServerSession : IAsyncDisposable
             File.Move(source.RealPath, target.RealPath, overwrite);
         }
     }
+
+    /// <summary>
+    /// Moves a directory onto an existing entry, as <c>posix-rename</c> does with <c>rename(2)</c> in OpenSSH (finding
+    /// S6): an empty directory is replaced, and anything else is a failure. <see cref="Directory.Move"/> refuses any
+    /// existing target. On Unix this is <c>rename(2)</c> itself, the call <see cref="Directory.Move"/> makes after its
+    /// check, so the kernel decides, atomically, and refuses a move into the directory's own subtree. Windows has no
+    /// such call for directories, so an empty directory there is removed first and made again if the move then fails.
+    /// </summary>
+    private static void ReplaceWithDirectory(SftpServerResolved source, SftpServerResolved target)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            if (Rename(source.RealPath, target.RealPath) != 0)
+            {
+                int error = Marshal.GetLastPInvokeError();
+                throw error is EAcces or EPerm ? new UnauthorizedAccessException() : new IOException(null, error);
+            }
+
+            return;
+        }
+
+        bool same = string.Equals(source.RealPath, target.RealPath, StringComparison.OrdinalIgnoreCase);
+        bool inside = target.RealPath.StartsWith(source.RealPath + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
+        if (same || inside || !target.IsDirectory || target.IsLink || Directory.EnumerateFileSystemEntries(target.RealPath).Any())
+        {
+            // Directory.Move refuses all of these, as rename(2) would: the same directory is left as it is.
+            Directory.Move(source.RealPath, target.RealPath);
+            return;
+        }
+
+        Directory.Delete(target.RealPath, recursive: false);
+        try
+        {
+            Directory.Move(source.RealPath, target.RealPath);
+        }
+        catch
+        {
+            _ = Directory.CreateDirectory(target.RealPath);
+            throw;
+        }
+    }
+
+    [DefaultDllImportSearchPaths(DllImportSearchPath.SafeDirectories)]
+    [LibraryImport("libc", EntryPoint = "rename", StringMarshalling = StringMarshalling.Utf8, SetLastError = true)]
+    private static partial int Rename(string oldPath, string newPath);
 
     private async ValueTask<int> ReadPacketAsync(CancellationToken cancellationToken)
     {
@@ -1138,7 +1191,13 @@ internal sealed partial class SftpServerSession : IAsyncDisposable
     private void FileSystemInfo(uint id, ReadOnlySpan<byte> body)
     {
         SshReader reader = new(body);
-        _paths.Resolve(reader.ReadUtf8String(), SftpServerFinalLink.Follow);
+
+        // S6: a path that isn't there gets NoSuchFile, as OpenSSH's statvfs(2) answers, not the root's numbers.
+        if (!_paths.Resolve(reader.ReadUtf8String(), SftpServerFinalLink.Follow).Exists)
+        {
+            throw Refuse(SftpStatusCode.NoSuchFile);
+        }
+
         DriveInfo drive = new(_paths.Root);
         SshWriter writer = new(128, ReplyHeaderLength);
         try
