@@ -335,6 +335,7 @@ public sealed record SshServerOptions
     /// <summary>
     /// Gets the methods that must all pass, for example <c>["publickey", "password"]</c> for two-factor login.
     /// Null, the default, means any one offered method is enough. The server enforces this, whatever handlers return.
+    /// Each entry must be <c>publickey</c> or <c>password</c>, once, with its handler set, and the list can't be empty.
     /// </summary>
     public IReadOnlyList<string>? RequiredAuthMethods { get; init; }
 

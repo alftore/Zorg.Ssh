@@ -111,7 +111,7 @@ The handler runs before the signature is checked, because a client may ask wheth
 
 ### Two steps
 
-`RequiredAuthMethods` lists methods that must all pass. The server enforces it, whatever the handlers return.
+`RequiredAuthMethods` lists methods that must all pass, each of them `"publickey"` or `"password"`, once, with its handler set. The server enforces it, whatever the handlers return. `StartAsync` and `Create` throw `ArgumentException` for an empty list, a misspelt or repeated name, or a method without a handler, because none of those could ever log anyone in.
 
 ```csharp
 SshServerOptions options = new()
