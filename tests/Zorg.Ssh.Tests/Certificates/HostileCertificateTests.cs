@@ -159,20 +159,35 @@ public sealed class HostileCertificateTests : IDisposable
         Assert.Contains("other.example.com", message);
     }
 
-    // OpenSSH lower-cases the host name it connects to (sshconnect.c, ssh_login: lowercase(host)), then matches each
-    // principal as a case-sensitive pattern against it (sshkey.c, sshkey_cert_check_authority: match_pattern(name,
-    // principal), and match.c match_pattern, which only knows * and ?). So the name's case doesn't matter, and the
-    // principal's does. See M5 review T9.
+    // OpenSSH lower-cases the host name it connects to (sshconnect.c, ssh_login: lowercase(host)), then compares it with
+    // each principal exactly (sshconnect.c check_host_cert: sshkey_cert_check_host(..., wildcard_principals 0, ...),
+    // which reaches strcmp). So the name's case doesn't matter, and the principal's does. See M5 review T9.
     [Fact]
-    public async Task The_host_name_is_lower_cased_and_principals_are_case_sensitive_wildcard_patterns_as_in_OpenSSH()
+    public async Task The_host_name_is_lower_cased_and_compared_with_each_principal_exactly_as_in_OpenSSH()
     {
         Assert.True(await TrustingCa().CheckAsync("HOST.Example.COM", 22, Good().Parse(), Ct));
-        Assert.True(await TrustingCa().CheckAsync(Host, 22, new CertificateBuilder(Subject, Ca) { Principals = ["*.example.com"] }.Parse(), Ct));
 
-        // A principal with capitals can never match, because the name it is matched against is lower case.
+        // A principal with capitals can never match, because the name it is compared with is lower case.
         SshCertificate capitals = new CertificateBuilder(Subject, Ca) { Principals = ["HOST.example.com"] }.Parse();
         Assert.Contains("isn't valid for this host name", await RefusedAsync(capitals));
         Assert.Contains("isn't valid for this host name", await RefusedAsync(capitals, host: "HOST.example.com"));
+    }
+
+    // Review A3: a principal was matched as a pattern, so a CA-issued certificate naming '*' or '*.example.com' passed for
+    // every matching host under the CA. OpenSSH never reads a principal as a pattern; neither does this library.
+    [Theory]
+    [InlineData("*")]
+    [InlineData("*.example.com")]
+    [InlineData("?ost.example.com")]
+    [InlineData("host.example.*")]
+    public async Task A3_a_wildcard_principal_is_a_literal_name_and_matches_no_host(string principal)
+    {
+        SshCertificate certificate = new CertificateBuilder(Subject, Ca) { Principals = [principal] }.Parse();
+        Assert.Contains("isn't valid for this host name", await RefusedAsync(certificate));
+        Assert.Contains("isn't valid for this host name", await RefusedAsync(certificate, host: "anything.else.example.com"));
+
+        // The exact name beside it is still accepted.
+        Assert.True(await TrustingCa().CheckAsync(Host, 22, new CertificateBuilder(Subject, Ca) { Principals = [principal, Host] }.Parse(), Ct));
     }
 
     [Fact]

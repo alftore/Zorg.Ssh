@@ -82,7 +82,8 @@ public abstract class HostKeyPolicy
     /// <returns>The policy.</returns>
     /// <remarks>
     /// A host certificate is accepted when a <c>@cert-authority</c> line for the host names its CA, and it's a host
-    /// certificate, in date, with a principal that matches the host name and no critical options. A certificate with
+    /// certificate, in date, with a principal equal to the lower-cased host name and no critical options. As in
+    /// OpenSSH, a principal is never a pattern, so <c>*.example.com</c> matches no host. A certificate with
     /// no principals is refused, although OpenSSH reads that as valid for any host. Any failure is a
     /// <see cref="SshHostKeyException"/> that says which check failed. <c>@revoked</c> applies to the certificate, its
     /// key and its CA.

@@ -68,7 +68,7 @@ The host key wasn't trusted, or the server didn't prove it holds that key. **Thi
 | The known_hosts file can't be read, isn't a regular file, or is too large | Name an ordinary file under 16 MiB. A directory, device (`/dev/null`, `NUL`) or FIFO is refused. |
 | A line of the known_hosts file is over 1 MiB | Remove or shorten it. It isn't skipped, because that could drop a revocation. |
 | A new host key can't be recorded: the file isn't a regular file, or didn't keep what was written | Name an ordinary file for the known hosts, or use a policy that doesn't record keys. |
-| The certificate isn't valid for this host name | The name is lower-cased and compared with each principal as a case-sensitive pattern. Connect by a name the certificate lists, and have the CA reissue it if a principal has capitals. |
+| The certificate isn't valid for this host name | The name is lower-cased and compared with each principal exactly: a principal is never a pattern. Connect by a name the certificate lists, and have the CA reissue it if a principal has capitals. |
 | The key isn't trusted | A `Fingerprint` or `Custom` policy refused it. Compare the fingerprint exactly, including `SHA256:`. |
 | The host key check threw | Your `HostKeyPolicy.Custom` check threw, so the key wasn't trusted. `InnerException` is your exception. |
 | The signature is invalid, or the key doesn't match the negotiated type | Treat it as an attack until you know otherwise. |
