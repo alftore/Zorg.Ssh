@@ -11,6 +11,9 @@ namespace Zorg.Ssh.Tests.Server;
 /// <summary>R10: one address can't take every unauthenticated slot.</summary>
 public sealed class PerAddressLimitTests : IDisposable
 {
+    private const string OnlyOneLoopbackAddress =
+        "macOS has only 127.0.0.1 on lo0. A second loopback address needs 'ifconfig lo0 alias 127.0.0.2', a system setting.";
+
     private readonly SshHostKey _hostKey = SshHostKey.GenerateEd25519();
     private readonly List<TcpClient> _sockets = [];
 
@@ -90,9 +93,10 @@ public sealed class PerAddressLimitTests : IDisposable
     public async Task One_address_at_its_limit_cannot_lock_out_another()
     {
         // 127.0.0.2 is loopback on Windows and on Linux (the whole of 127.0.0.0/8 is), so no seam is needed.
+        Assert.SkipWhen(OperatingSystem.IsMacOS(), OnlyOneLoopbackAddress);
         await using SshServer server = await SshServer.StartAsync(Options(perAddress: 3), Ct);
         int port = server.LocalEndPoint.Port;
-        IPAddress hostile = IPAddress.Parse("127.0.0.2");
+        IPAddress hostile = Other(2);
         for (int i = 0; i < 3; i++)
         {
             await ConnectFromAsync(hostile, port);
@@ -112,14 +116,14 @@ public sealed class PerAddressLimitTests : IDisposable
     {
         await using SshServer server = await SshServer.StartAsync(Options(perAddress: 1), Ct);
         int port = server.LocalEndPoint.Port;
-        TcpClient first = await ConnectFromAsync(IPAddress.Parse("127.0.0.2"), port);
-        TcpClient refused = await ConnectFromAsync(IPAddress.Parse("127.0.0.2"), port);
+        TcpClient first = await ConnectFromAsync(Other(2), port);
+        TcpClient refused = await ConnectFromAsync(Other(2), port);
         await AssertClosedWithoutDataAsync(refused);
 
         first.Dispose();
         await WaitForAsync(() => server.UnauthenticatedAddressCount == 0);
 
-        TcpClient again = await ConnectFromAsync(IPAddress.Parse("127.0.0.2"), port);
+        TcpClient again = await ConnectFromAsync(Other(2), port);
         Assert.True(again.Connected);
         await WaitForAsync(() => server.UnauthenticatedAddressCount == 1);
     }
@@ -142,17 +146,17 @@ public sealed class PerAddressLimitTests : IDisposable
         // Dropped by the client mid-handshake, and expired at the grace time.
         for (int i = 0; i < 4; i++)
         {
-            (await ConnectFromAsync(IPAddress.Parse("127.0.0.2"), port)).Dispose();
+            (await ConnectFromAsync(Other(2), port)).Dispose();
         }
 
-        await ConnectFromAsync(IPAddress.Parse("127.0.0.3"), port);
+        await ConnectFromAsync(Other(3), port);
         await WaitForAsync(() => server.UnauthenticatedAddressCount == 0);
 
         // Still unauthenticated when the server stops.
         SshServer stopping = await SshServer.StartAsync(Options(), Ct);
         for (int i = 0; i < 3; i++)
         {
-            await ConnectFromAsync(IPAddress.Parse("127.0.0.2"), stopping.LocalEndPoint.Port);
+            await ConnectFromAsync(Other(2), stopping.LocalEndPoint.Port);
         }
 
         await WaitForAsync(() => stopping.UnauthenticatedAddressCount == 1);
@@ -204,6 +208,12 @@ public sealed class PerAddressLimitTests : IDisposable
         Credentials = [SshCredential.FromPassword(password)],
         HostKeyPolicy = HostKeyPolicy.Fingerprint(_hostKey.Sha256Fingerprint),
     };
+
+    /// <summary>
+    /// 127.0.0.<paramref name="last"/>, or 127.0.0.1 on macOS (see <see cref="OnlyOneLoopbackAddress"/>). The tests
+    /// that use it count one address at a time, so there they still run, with the client's address.
+    /// </summary>
+    private static IPAddress Other(byte last) => OperatingSystem.IsMacOS() ? IPAddress.Loopback : new IPAddress([127, 0, 0, last]);
 
     private async Task<TcpClient> ConnectFromAsync(IPAddress source, int port)
     {
