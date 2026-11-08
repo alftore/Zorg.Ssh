@@ -346,6 +346,28 @@ public class SftpClientTests
     }
 
     [Fact(Timeout = Limit)]
+    public async Task S3_limits_below_the_floor_dont_bring_requests_down_to_a_byte()
+    {
+        // Finding S3: max-read and max-write of 1 made every READ ask for one byte and every WRITE carry one.
+        FakeFiles files = new() { Files = { ["f"] = new byte[10_000] } };
+        await using FakeSftpServer fake = await FakeSftpServer.StartAsync(
+            (server, request) => request.Type == SftpMessage.Extended && request.FirstString() == "limits@openssh.com"
+                ? server.SendAsync(new Packet().U8(SftpMessage.ExtendedReply).U32(request.Id).U64(1025).U64(1).U64(1).U64(0).ToFrame())
+                : files.HandleAsync(server, request),
+            extensions: ["limits@openssh.com"]);
+
+        Assert.Equal(10_000, (await fake.Client.ReadAllBytesAsync("f", Ct)).Length);
+        await fake.Client.WriteAllBytesAsync("g", new byte[10_000], Ct);
+        Assert.Equal(10_000, files.Files["g"].Length);
+        FakeRequest[] reads = [.. fake.Requests.Where(r => r.Type == SftpMessage.Read)];
+        FakeRequest[] writes = [.. fake.Requests.Where(r => r.Type == SftpMessage.Write)];
+        Assert.True(reads.Length <= 200, $"{reads.Length} reads");
+        Assert.Equal(512u, reads.Max(r => r.ReadArguments().Length));
+        Assert.Equal(512, writes.Max(w => w.WriteArguments().Data.Length));
+        Assert.Equal(20, writes.Length);
+    }
+
+    [Fact(Timeout = Limit)]
     public async Task Missing_extensions_are_refused_without_a_round_trip()
     {
         await using FakeSftpServer fake = await FakeSftpServer.StartAsync((server, request) => server.SendStatusAsync(request.Id));

@@ -47,6 +47,14 @@ public sealed class SftpClient : IAsyncDisposable
     private const int MaxEmptyBatches = 16;
     private const int MinServerPacketLength = 1024;
 
+    /// <summary>
+    /// The smallest read or write a server's <c>limits@openssh.com</c> can bring a request down to (finding S3), so a
+    /// server can't make a transfer crawl a byte at a time. The draft has every server take 34,000-byte packets, and
+    /// a path alone can be longer than this, so no working server has a lower limit. Small real limits, such as
+    /// 700 bytes, are still honoured.
+    /// </summary>
+    private const int MinLimitedChunk = 512;
+
     private static readonly TimeSpan CloseLimit = TimeSpan.FromSeconds(5);
 
     private readonly SftpSession _session;
@@ -1127,21 +1135,27 @@ public sealed class SftpClient : IAsyncDisposable
 
         (ulong maxPacket, ulong maxRead, ulong maxWrite) = _session.Parse(response, ReadLimits);
 
-        // Zero means the server states no limit. A limit can only lower what we'd use anyway.
+        // Zero means the server states no limit. A limit can only lower what we'd use anyway, and no lower than
+        // MinLimitedChunk (or what we'd use, if that's smaller).
+        int readChunk = _readChunk;
+        int writeChunk = _writeChunk;
         if (maxRead != 0)
         {
-            _readChunk = (int)Math.Min((ulong)_readChunk, maxRead);
+            readChunk = (int)Math.Min((ulong)readChunk, maxRead);
         }
 
         if (maxWrite != 0)
         {
-            _writeChunk = (int)Math.Min((ulong)_writeChunk, maxWrite);
+            writeChunk = (int)Math.Min((ulong)writeChunk, maxWrite);
         }
 
         if (maxPacket > MinServerPacketLength)
         {
-            _writeChunk = (int)Math.Min((ulong)_writeChunk, maxPacket - MinServerPacketLength);
+            writeChunk = (int)Math.Min((ulong)writeChunk, maxPacket - MinServerPacketLength);
         }
+
+        _readChunk = Math.Max(readChunk, Math.Min(_readChunk, MinLimitedChunk));
+        _writeChunk = Math.Max(writeChunk, Math.Min(_writeChunk, MinLimitedChunk));
     }
 
     private static (ulong MaxPacket, ulong MaxRead, ulong MaxWrite) ReadLimits(SftpResponse response)
