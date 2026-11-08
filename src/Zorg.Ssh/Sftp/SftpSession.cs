@@ -28,7 +28,16 @@ internal sealed class SftpPendingRequest(uint id, byte requestType, byte expecte
     public void Fail(Exception failure) => _response.TrySetException(failure);
 
     /// <summary>Waits for the response. If the wait is cancelled, the response is discarded when it comes.</summary>
-    public async ValueTask<SftpResponse> WaitAsync(CancellationToken cancellationToken)
+    public ValueTask<SftpResponse> WaitAsync(CancellationToken cancellationToken)
+    {
+        // With requests pipelined, the answer is often here already, and needs no state machine or extra task.
+        Task<SftpResponse> response = Response;
+        return response.IsCompletedSuccessfully && !cancellationToken.IsCancellationRequested
+            ? new ValueTask<SftpResponse>(response)
+            : WaitSlowAsync(cancellationToken);
+    }
+
+    private async ValueTask<SftpResponse> WaitSlowAsync(CancellationToken cancellationToken)
     {
         try
         {
@@ -227,6 +236,20 @@ internal sealed class SftpSession : IAsyncDisposable
         try
         {
             return parse(response);
+        }
+        catch (SshProtocolException ex)
+        {
+            Fail(ex);
+            throw;
+        }
+    }
+
+    /// <summary>Runs a parser that takes an argument, so a caller needs no closure per response.</summary>
+    public T Parse<TState, T>(SftpResponse response, TState state, Func<SftpResponse, TState, T> parse)
+    {
+        try
+        {
+            return parse(response, state);
         }
         catch (SshProtocolException ex)
         {

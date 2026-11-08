@@ -275,6 +275,22 @@ internal static class SftpParser
         return (code, message);
     }
 
+    /// <summary>
+    /// Reads only the code of a status, with the same checks on its shape as <see cref="ReadStatus"/>, for the callers
+    /// that have no use for the text: OK and EOF. Decoding and cleaning the text would cost a few allocations a reply.
+    /// </summary>
+    public static SftpStatusCode ReadStatusCode(SftpResponse response)
+    {
+        SshReader reader = new(response.Body);
+        SftpStatusCode code = (SftpStatusCode)reader.ReadUInt32();
+        if (reader.Remaining != 0)
+        {
+            reader.ReadBinary();
+        }
+
+        return code;
+    }
+
     public static byte[] ReadHandle(SftpResponse response)
     {
         SshReader reader = new(response.Body);

@@ -750,7 +750,7 @@ public sealed class SftpClient : IAsyncDisposable
                 return 0;
             }
 
-            (int start, int length) = _session.Parse(response, r => SftpParser.ReadData(r, wanted));
+            (int start, int length) = _session.Parse(response, wanted, static (r, n) => SftpParser.ReadData(r, n));
             if (length != 0)
             {
                 response.Slice(start, length).CopyTo(buffer);
@@ -815,7 +815,7 @@ public sealed class SftpClient : IAsyncDisposable
                     return written;
                 }
 
-                (int start, int length) = _session.Parse(response, r => SftpParser.ReadData(r, current.Length));
+                (int start, int length) = _session.Parse(response, current.Length, static (r, n) => SftpParser.ReadData(r, n));
                 empty = length == 0 ? empty + 1 : 0;
                 if (empty > _session.Limits.MaxEmptyResponses)
                 {
@@ -1146,6 +1146,11 @@ public sealed class SftpClient : IAsyncDisposable
 
     private void EnsureOk(SftpResponse response, string? path)
     {
+        if (_session.Parse(response, SftpParser.ReadStatusCode) == SftpStatusCode.Ok)
+        {
+            return;
+        }
+
         (SftpStatusCode code, string message) = _session.Parse(response, SftpParser.ReadStatus);
         if (code != SftpStatusCode.Ok)
         {
@@ -1170,7 +1175,7 @@ public sealed class SftpClient : IAsyncDisposable
             return false;
         }
 
-        (SftpStatusCode code, _) = _session.Parse(response, SftpParser.ReadStatus);
+        SftpStatusCode code = _session.Parse(response, SftpParser.ReadStatusCode);
         return code == SftpStatusCode.EndOfFile ? true : throw StatusFailure(response, path);
     }
 
