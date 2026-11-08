@@ -231,7 +231,7 @@ if (sftp.ServerExtensions.ContainsKey("copy-data"))
 |---|---|
 | `GetFileSystemInfoAsync` | `statvfs@openssh.com` |
 | `CreateHardLinkAsync` | `hardlink@openssh.com` |
-| `CopyFileAsync` | `copy-data`. The bytes stay on the server. |
+| `CopyFileAsync` | `copy-data`. The bytes stay on the server. Without `overwrite`, the destination must be new. A server that ignores that and opens an existing file gets a size check first: a file that isn't empty is left alone and the call throws. |
 | `SftpFile.SyncAsync` | `fsync@openssh.com` |
 
 Without the extension, these fail with `SftpException` and `SftpStatusCode.OperationUnsupported`. Zorg.Ssh also respects `limits@openssh.com` when a server sends it.

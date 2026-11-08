@@ -660,10 +660,14 @@ public sealed class SftpClient : IAsyncDisposable
     /// <summary>Copies a file on the server, through <c>copy-data</c>, so the bytes never cross the network.</summary>
     /// <param name="sourcePath">The file to copy.</param>
     /// <param name="destinationPath">The new file.</param>
-    /// <param name="overwrite">Whether an existing destination may be replaced.</param>
+    /// <param name="overwrite">
+    /// Whether an existing destination may be replaced. Without it the destination is opened as a new file, which the
+    /// server must refuse if it exists. Some servers ignore that, so the new file is also checked to be empty before
+    /// anything is copied.
+    /// </param>
     /// <param name="cancellationToken">Stops waiting. The server may finish the copy anyway.</param>
     /// <returns>A task that completes when the copy is done.</returns>
-    /// <exception cref="SftpException">The server refused, or doesn't have the extension (<see cref="SftpStatusCode.OperationUnsupported"/>).</exception>
+    /// <exception cref="SftpException">The server refused, or doesn't have the extension (<see cref="SftpStatusCode.OperationUnsupported"/>), or the destination exists and <paramref name="overwrite"/> is false.</exception>
     /// <example>
     /// <code>
     /// if (sftp.ServerExtensions.ContainsKey("copy-data"))
@@ -685,9 +689,34 @@ public sealed class SftpClient : IAsyncDisposable
             source => UseHandleAsync(
                 destinationPath,
                 writeFlags,
-                destination => StatusRequestAsync(SftpFrames.CopyData(source, destination), SftpMessage.Extended, destinationPath, cancellationToken),
+                async destination =>
+                {
+                    if (!overwrite)
+                    {
+                        await RefuseExistingDestinationAsync(destination, destinationPath, cancellationToken).ConfigureAwait(false);
+                    }
+
+                    await StatusRequestAsync(SftpFrames.CopyData(source, destination), SftpMessage.Extended, destinationPath, cancellationToken).ConfigureAwait(false);
+                },
                 cancellationToken),
             cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Finding S2: a server that ignores <c>SSH_FXF_EXCL</c> opens an existing destination, and copy-data from offset 0
+    /// without truncating would leave a mix of new bytes and the old tail. A file this open created is empty, so one
+    /// that isn't was there before, and it's left as it was. An existing empty file can't be told from a new one.
+    /// </summary>
+    private async Task RefuseExistingDestinationAsync(byte[] destination, string destinationPath, CancellationToken cancellationToken)
+    {
+        SftpAttributes attributes = await GetHandleAttributesAsync(destination, destinationPath, cancellationToken).ConfigureAwait(false);
+        if (attributes.Size is > 0)
+        {
+            throw new SftpException(
+                $"'{SftpParser.Sanitise(destinationPath)}' already exists, although the server was asked for a new file: it doesn't honour SSH_FXF_EXCL. Nothing was copied. Pass overwrite: true to replace it.",
+                SftpStatusCode.Failure,
+                destinationPath);
+        }
     }
 
     /// <summary>Closes the session and its channel. Open files stop working.</summary>

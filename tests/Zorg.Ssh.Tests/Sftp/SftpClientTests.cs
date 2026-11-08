@@ -379,6 +379,26 @@ public class SftpClientTests
     }
 
     [Fact(Timeout = Limit)]
+    public async Task S2_copy_without_overwrite_leaves_an_existing_file_alone_on_a_server_that_ignores_exclusive()
+    {
+        // Finding S2: FakeFiles ignores SSH_FXF_EXCL, as some servers do, so the open of an existing "b" succeeds.
+        byte[] old = new byte[50];
+        new Random(50).NextBytes(old);
+        FakeFiles files = new() { Files = { ["a"] = new byte[10], ["b"] = old } };
+        await using FakeSftpServer fake = await FakeSftpServer.StartAsync(files.HandleAsync, extensions: ["copy-data"]);
+
+        SftpException ex = await Assert.ThrowsAsync<SftpException>(() => fake.Client.CopyFileAsync("a", "b", overwrite: false, Ct));
+        Assert.Equal(SftpStatusCode.Failure, ex.StatusCode);
+        Assert.Equal(old, files.Files["b"]);
+        Assert.DoesNotContain(fake.Requests, r => r.Type == SftpMessage.Extended);
+        Assert.Equal(0, files.OpenHandles);
+
+        // A new destination is still copied.
+        await fake.Client.CopyFileAsync("a", "c", overwrite: false, Ct);
+        Assert.Single(fake.Requests, r => r.Type == SftpMessage.Extended);
+    }
+
+    [Fact(Timeout = Limit)]
     public async Task Copy_data_opens_both_files_and_copies_the_whole_source()
     {
         FakeFiles files = new() { Files = { ["a"] = new byte[10] } };
