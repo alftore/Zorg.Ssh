@@ -2,6 +2,7 @@ using System;
 using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.IO;
+using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
@@ -213,6 +214,8 @@ internal sealed partial class SshTransport : IAsyncDisposable
     /// Returns the next message for the layers above, including its message number. The result is valid
     /// until the next call. Every message has already passed <see cref="MessagePolicy"/>.
     /// </summary>
+    // Runs once per packet or reply, so its state machine comes from a pool instead of a new allocation each time.
+    [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
     public async ValueTask<ReadOnlyMemory<byte>> ReceiveAsync(CancellationToken cancellationToken)
     {
         while (true)
@@ -461,6 +464,8 @@ internal sealed partial class SshTransport : IAsyncDisposable
     }
 
     /// <summary>Reads one packet and handles it. Returns a payload only for the layers above.</summary>
+    // Runs once per packet or reply, so its state machine comes from a pool instead of a new allocation each time.
+    [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
     private async ValueTask<ReadOnlyMemory<byte>?> ReceiveOneAsync(CancellationToken cancellationToken)
     {
         ThrowIfFailed();

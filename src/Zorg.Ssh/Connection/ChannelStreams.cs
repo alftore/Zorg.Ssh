@@ -2,6 +2,7 @@ using System;
 using System.Buffers;
 using System.IO;
 using System.IO.Pipelines;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -28,6 +29,8 @@ internal sealed class ChannelReadStream(SshChannel channel, PipeReader reader) :
         set => throw new NotSupportedException();
     }
 
+    // Runs once per packet or reply, so its state machine comes from a pool instead of a new allocation each time.
+    [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
     public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
     {
         lock (_gate)

@@ -1,6 +1,7 @@
 using System;
 using System.Buffers;
 using System.IO;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Zorg.Ssh.Crypto;
@@ -95,6 +96,8 @@ internal sealed class PacketReader : IDisposable
     /// <summary>
     /// Reads and opens one packet, and returns its payload. The result is valid until the next call.
     /// </summary>
+    // Runs once per packet or reply, so its state machine comes from a pool instead of a new allocation each time.
+    [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
     public async ValueTask<ReadOnlyMemory<byte>> ReadPacketAsync(PacketCipher cipher, uint sequenceNumber, CancellationToken cancellationToken)
     {
         // The caller has finished with the last packet, and its plaintext can hold passwords.
@@ -173,6 +176,8 @@ internal sealed class PacketReader : IDisposable
     }
 
     /// <summary>Reads until at least <paramref name="needed"/> bytes are available from the current position.</summary>
+    // Runs once per packet or reply, so its state machine comes from a pool instead of a new allocation each time.
+    [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder))]
     private async ValueTask FillAsync(int needed, CancellationToken cancellationToken)
     {
         if (_start + needed > _buffer.Length)

@@ -3,6 +3,7 @@ using System.Buffers;
 using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.IO;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Zorg.Ssh.Protocol;
@@ -37,6 +38,8 @@ internal sealed class SftpPendingRequest(uint id, byte requestType, byte expecte
             : WaitSlowAsync(cancellationToken);
     }
 
+    // Runs once per packet or reply, so its state machine comes from a pool instead of a new allocation each time.
+    [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
     private async ValueTask<SftpResponse> WaitSlowAsync(CancellationToken cancellationToken)
     {
         try
@@ -412,6 +415,8 @@ internal sealed class SftpSession : IAsyncDisposable
     }
 
     /// <summary>Reads a body into a pooled buffer. Ownership passes to the request, unless the session ended meanwhile.</summary>
+    // Runs once per packet or reply, so its state machine comes from a pool instead of a new allocation each time.
+    [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder))]
     private async ValueTask ReadBodyAsync(SftpPendingRequest pending, byte type, int bodyLength)
     {
         byte[] body = ArrayPool<byte>.Shared.Rent(Math.Max(bodyLength, 16));
