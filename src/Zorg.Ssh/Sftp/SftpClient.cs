@@ -830,7 +830,13 @@ public sealed class SftpClient : IAsyncDisposable
                 await destination.WriteAsync(response.Slice(start, length), cancellationToken).ConfigureAwait(false);
                 written += length;
                 reporter?.Advance(length);
-                window = Math.Min(window * 2, _session.Limits.TransferDepth);
+                // A short answer is usually the end of the file, so only a full one earns more reads in flight. Otherwise
+                // a small file costs reads past its end, each answered before the next request is.
+                if (length == current.Length)
+                {
+                    window = Math.Min(window * 2, _session.Limits.TransferDepth);
+                }
+
                 if (length < current.Length)
                 {
                     long rest = current.Offset + length;
