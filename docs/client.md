@@ -149,7 +149,7 @@ Public keys are offered before they're signed with, so a key the server doesn't 
 
 A key file is read when its turn comes. If it can't be loaded, for example because the passphrase is wrong, `ConnectAsync` fails with `SshKeyFileException` at that point, and later credentials aren't tried.
 
-`~/` at the start of a path means the user's home directory.
+`~/` at the start of a path means the user's home directory. If the home directory can't be determined (no `HOME` and no passwd entry, as with some container users), it throws (`SshHostKeyException`, `SshKeyFileException` or `SshConfigException`) instead of reading a path under the working directory. Set `HOME` or use absolute paths.
 
 A keyboard-interactive handler must return exactly one answer per prompt. `SshPrompt.Text` comes from the server, so treat it as untrusted, and `SshPrompt.Echo` says whether the answer may be shown as it's typed.
 
@@ -165,7 +165,7 @@ HostKeyPolicy ownFile = HostKeyPolicy.KnownHostsFile("/etc/myapp/known_hosts");
 HostKeyPolicy pinned = HostKeyPolicy.Fingerprint("SHA256:n4cHVJ8c0vCpJiQJCbOgLEUxOkKrDhVJzcEKHnSSd9E");
 ```
 
-- `KnownHostsFile` reads an OpenSSH `known_hosts` file, by default `~/.ssh/known_hosts`. It understands hashed host names, `[host]:port` entries and `@revoked`. An unknown host is refused, and so is a host whose key has changed. A file that doesn't exist counts as empty, so every host is unknown. One that exists but isn't a regular file, or is too large, throws `SshHostKeyException`. `@cert-authority` lines make host certificates trusted: see [the agent, certificates and config](#the-agent-certificates-and-sshconfig).
+- `KnownHostsFile` reads an OpenSSH `known_hosts` file, by default `~/.ssh/known_hosts`. It understands hashed host names, `[host]:port` entries and `@revoked`. An unknown host is refused, and so is a host whose key has changed. Like `ssh`, it offers the key types already recorded for the host first, so a host recorded with an ECDSA key still connects when the server also has an Ed25519 key. A server that offers only another type is still refused as changed. A file that doesn't exist counts as empty, so every host is unknown. One that exists but isn't a regular file, or is too large, throws `SshHostKeyException`. `@cert-authority` lines make host certificates trusted: see [the agent, certificates and config](#the-agent-certificates-and-sshconfig).
 - `Fingerprint` trusts one key. It's the strictest policy when you know the key. Get the value on the server with `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`. It's compared exactly, including the `SHA256:` prefix.
 - `Custom` runs your own check, once, during connection. `SshHostKeyInfo` gives the host, port, key type, fingerprint and `PublicKey`, the key in OpenSSH `type base64` form, so a store of your own can record the key and compare it next time.
 

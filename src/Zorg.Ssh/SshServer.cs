@@ -170,6 +170,8 @@ public sealed partial class SshServer : IAsyncDisposable
             throw new ArgumentException("Set PasswordHandler or PublicKeyHandler, or nobody can log in.", nameof(options));
         }
 
+        ValidateRequiredAuthMethods(options);
+
         if (options.MaxUnauthenticatedPerAddress < 1)
         {
             throw new ArgumentOutOfRangeException(nameof(options), options.MaxUnauthenticatedPerAddress, "MaxUnauthenticatedPerAddress must be at least 1, or nobody can log in.");
@@ -178,6 +180,49 @@ public sealed partial class SshServer : IAsyncDisposable
         if (options.IdleTimeout is { } idle && idle <= TimeSpan.Zero)
         {
             throw new ArgumentOutOfRangeException(nameof(options), idle, "IdleTimeout must be above zero. Leave it null for no idle timeout.");
+        }
+    }
+
+    /// <summary>
+    /// A5: a required method that is misspelt, listed twice, or has no handler would lock everyone out, and an odd name would
+    /// reach the wire in a malformed name-list. Better to refuse the options than to fail every login.
+    /// </summary>
+    private static void ValidateRequiredAuthMethods(SshServerOptions options)
+    {
+        if (options.RequiredAuthMethods is not { } required)
+        {
+            return;
+        }
+
+        if (required.Count == 0)
+        {
+            throw new ArgumentException("RequiredAuthMethods is empty, so nobody could log in. Leave it null to accept any one method.", nameof(options));
+        }
+
+        HashSet<string> seen = [];
+        foreach (string? method in required)
+        {
+            if (method is null)
+            {
+                throw new ArgumentException("RequiredAuthMethods holds a null entry.", nameof(options));
+            }
+
+            bool hasHandler = method switch
+            {
+                "password" => options.PasswordHandler is not null,
+                "publickey" => options.PublicKeyHandler is not null,
+                _ => throw new ArgumentException($"RequiredAuthMethods names \"{PeerText.Clean(method, 64)}\", which isn't a method this server supports. Use \"publickey\" or \"password\".", nameof(options)),
+            };
+            if (!hasHandler)
+            {
+                string handler = method == "password" ? nameof(SshServerOptions.PasswordHandler) : nameof(SshServerOptions.PublicKeyHandler);
+                throw new ArgumentException($"RequiredAuthMethods names \"{method}\", but {handler} isn't set, so nobody could log in.", nameof(options));
+            }
+
+            if (!seen.Add(method))
+            {
+                throw new ArgumentException($"RequiredAuthMethods names \"{method}\" twice.", nameof(options));
+            }
         }
     }
 
@@ -545,6 +590,7 @@ public sealed partial class SshServer : IAsyncDisposable
             MaxAttempts = options.MaxAuthAttempts,
             RequiredMethods = options.RequiredAuthMethods,
             AllowRsaSha1 = options.Algorithms.AllowsRsaSha1,
+            PublicKeyAlgorithms = options.Algorithms.ServerSignatureAlgorithms,
             Password = options.PasswordHandler is { } password
                 ? (user, secret, ct) => CheckAsync(() => password(new SshPasswordRequest { UserName = user, Password = secret, RemoteEndPoint = remote }, ct))
                 : null,

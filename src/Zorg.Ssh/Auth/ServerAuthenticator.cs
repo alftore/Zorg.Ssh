@@ -38,6 +38,12 @@ internal sealed class ServerAuthOptions
 
     /// <summary>Gets whether a client may sign with legacy <c>ssh-rsa</c> (SHA-1): only when the server's algorithm list names it.</summary>
     public bool AllowRsaSha1 { get; init; }
+
+    /// <summary>
+    /// Gets the signature algorithms a client may use with a key (A4), other than legacy <c>ssh-rsa</c>, which <see cref="AllowRsaSha1"/>
+    /// governs. Null means every algorithm the library implements.
+    /// </summary>
+    public IReadOnlyList<string>? PublicKeyAlgorithms { get; init; }
 }
 
 /// <summary>
@@ -295,7 +301,7 @@ internal sealed class ServerAuthenticator(SshTransport transport, ServerAuthOpti
         }
 
         bool rsaSha1 = options.AllowRsaSha1 && parsed.Algorithm == LegacyAlgorithms.RsaSha1 && LegacyRsa.CanVerify(key);
-        if (!rsaSha1 && !key.SupportsSignatureAlgorithm(parsed.Algorithm))
+        if (!rsaSha1 && (!key.SupportsSignatureAlgorithm(parsed.Algorithm) || options.PublicKeyAlgorithms?.Contains(parsed.Algorithm) == false))
         {
             return AuthDecision.Reject;
         }

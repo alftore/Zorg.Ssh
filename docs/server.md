@@ -90,7 +90,7 @@ private static bool IsPasswordRight(string userName, string password)
 }
 ```
 
-`SshPasswordRequest.ToString` leaves the password out, so logging a request can't leak it. Don't log `request.Password` yourself. `RemoteEndPoint` on both requests is the client's address and port, for your own rate limits or audit log. It's null for a connection given to `ServeStreamAsync`. A slow check runs on the client's connection, so `LoginGraceTime` and `MaxUnauthenticatedConnections` bound how many can run at once.
+`SshPasswordRequest.ToString` leaves the password out, so logging a request can't leak it. The user name is the client's own text and may hold line breaks: `ToString` on both requests and on `SshPrincipal` removes control and invisible characters from it and caps it at 256 characters, but `UserName` itself is exact, so escape it yourself if you log it. Don't log `request.Password` yourself. `RemoteEndPoint` on both requests is the client's address and port, for your own rate limits or audit log. It's null for a connection given to `ServeStreamAsync`. A slow check runs on the client's connection, so `LoginGraceTime` and `MaxUnauthenticatedConnections` bound how many can run at once.
 
 ### Public keys
 
@@ -111,7 +111,7 @@ The handler runs before the signature is checked, because a client may ask wheth
 
 ### Two steps
 
-`RequiredAuthMethods` lists methods that must all pass. The server enforces it, whatever the handlers return.
+`RequiredAuthMethods` lists methods that must all pass, each of them `"publickey"` or `"password"`, once, with its handler set. The server enforces it, whatever the handlers return. `StartAsync` and `Create` throw `ArgumentException` for an empty list, a misspelt or repeated name, or a method without a handler, because none of those could ever log anyone in.
 
 ```csharp
 SshServerOptions options = new()
@@ -254,7 +254,7 @@ If accepting a connection fails, as it does on every try when the process is out
 
 `Banner` is text sent to clients before login. `LoggerFactory` takes a standard `ILoggerFactory`, and passwords and keys aren't logged. `SshServerOptions` is a record, so `with` makes a changed copy, and its `ToString` shows only the address and port.
 
-`Algorithms` narrows what the server offers, as on the client. For old clients, `SshAlgorithms.LegacyUnsafe` adds `ssh-rsa` (SHA-1) host key signatures, when a host key is RSA, `ssh-rsa` user signatures, and the `hmac-sha1` MACs. It doesn't add finite-field Diffie-Hellman: a client can make the server spend milliseconds of CPU per handshake on it before logging in, so the server offers `diffie-hellman-*` only when its `KeyExchange` list names them, as OpenSSH 10's sshd does. Name them on a copy of the preset: `Algorithms = SshAlgorithms.LegacyUnsafe with { KeyExchange = ["curve25519-sha256", "diffie-hellman-group14-sha256"] }`. A plain `new SshAlgorithms` refuses legacy names. [security.md](security.md#legacy-algorithms) has the details.
+`Algorithms` narrows what the server offers, as on the client. On a server, `HostKeys` is also the list of signature algorithms a user key may sign with, and what `server-sig-algs` advertises: with `HostKeys = ["ssh-ed25519"]`, an RSA or ECDSA user key is refused before the handler runs. Name `rsa-sha2-256` or `rsa-sha2-512` to allow RSA users. For old clients, `SshAlgorithms.LegacyUnsafe` adds `ssh-rsa` (SHA-1) host key signatures, when a host key is RSA, `ssh-rsa` user signatures, and the `hmac-sha1` MACs. It doesn't add finite-field Diffie-Hellman: a client can make the server spend milliseconds of CPU per handshake on it before logging in, so the server offers `diffie-hellman-*` only when its `KeyExchange` list names them, as OpenSSH 10's sshd does. Name them on a copy of the preset: `Algorithms = SshAlgorithms.LegacyUnsafe with { KeyExchange = ["curve25519-sha256", "diffie-hellman-group14-sha256"] }`. A plain `new SshAlgorithms` refuses legacy names. [security.md](security.md#legacy-algorithms) has the details.
 
 ### Keepalive
 

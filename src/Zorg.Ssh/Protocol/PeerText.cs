@@ -7,6 +7,9 @@ namespace Zorg.Ssh.Protocol;
 /// <summary>Cleans text a peer chose, before it reaches exceptions, logs or callers.</summary>
 internal static class PeerText
 {
+    /// <summary>The longest user name shown in a description. The property itself keeps the whole name.</summary>
+    public const int MaxDisplayUserName = 256;
+
     /// <summary>Removes control and invisible formatting characters and caps the length, so the text can't forge log lines or hide what it says.</summary>
     public static string Clean(string text, int maxLength)
     {

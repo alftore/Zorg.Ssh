@@ -125,10 +125,26 @@ public abstract class SshCredential
         return new KeyboardInteractiveCredential(respond);
     }
 
-    internal static string ExpandHome(string path) =>
-        path.StartsWith("~/", StringComparison.Ordinal) || path.StartsWith("~\\", StringComparison.Ordinal)
-            ? System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), path[2..])
-            : path;
+    internal static string ExpandHome(string path) => ExpandHome(path, Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
+
+    /// <summary>
+    /// Expands a leading <c>~/</c>. A6: with no home directory (a service user without a passwd entry or HOME) it throws, because
+    /// the path would turn relative to the working directory, and these paths name files that decide trust or hold secrets.
+    /// </summary>
+    internal static string ExpandHome(string path, string home)
+    {
+        if (!path.StartsWith("~/", StringComparison.Ordinal) && !path.StartsWith("~\\", StringComparison.Ordinal))
+        {
+            return path;
+        }
+
+        if (string.IsNullOrEmpty(home))
+        {
+            throw new NotSupportedException($"The path {path} starts with ~, but the home directory can't be determined. Set HOME, or give an absolute path.");
+        }
+
+        return System.IO.Path.Combine(home, path[2..]);
+    }
 
     /// <summary>
     /// Makes a credential for an identity file named in a config file. Such a file may turn out to be unusable, such as

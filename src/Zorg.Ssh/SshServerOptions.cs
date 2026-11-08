@@ -68,7 +68,7 @@ public enum SshAuthDecision
 /// </example>
 public sealed record SshPasswordRequest
 {
-    /// <summary>Gets the user name. It's unverified, and chosen by the client.</summary>
+    /// <summary>Gets the user name. It's unverified, and chosen by the client, so it may hold line breaks or other control characters: escape it before logging it. <see cref="ToString"/> removes them.</summary>
     public required string UserName { get; init; }
 
     /// <summary>Gets the password.</summary>
@@ -79,7 +79,7 @@ public sealed record SshPasswordRequest
 
     /// <summary>Returns a description with the password left out, so logging a request can't leak it.</summary>
     /// <returns>The description.</returns>
-    public override string ToString() => $"SshPasswordRequest {{ UserName = {UserName}, RemoteEndPoint = {RemoteEndPoint} }}";
+    public override string ToString() => $"SshPasswordRequest {{ UserName = {Protocol.PeerText.Clean(UserName, Protocol.PeerText.MaxDisplayUserName)}, RemoteEndPoint = {RemoteEndPoint} }}";
 }
 
 /// <summary>
@@ -95,7 +95,7 @@ public sealed record SshPasswordRequest
 /// </example>
 public sealed record SshPublicKeyRequest
 {
-    /// <summary>Gets the user name. It's unverified, and chosen by the client.</summary>
+    /// <summary>Gets the user name. It's unverified, and chosen by the client, so it may hold line breaks or other control characters: escape it before logging it. <see cref="ToString"/> removes them.</summary>
     public required string UserName { get; init; }
 
     /// <summary>Gets the key type, for example <c>ssh-ed25519</c>.</summary>
@@ -106,6 +106,11 @@ public sealed record SshPublicKeyRequest
 
     /// <summary>Gets the client's address and port, or null for a connection given to <see cref="SshServer.ServeStreamAsync"/>.</summary>
     public IPEndPoint? RemoteEndPoint { get; init; }
+
+    /// <summary>Returns a description that is safe to log: the user name is the client's, so control characters are removed from it.</summary>
+    /// <returns>The description.</returns>
+    public override string ToString() =>
+        $"SshPublicKeyRequest {{ UserName = {Protocol.PeerText.Clean(UserName, Protocol.PeerText.MaxDisplayUserName)}, KeyType = {KeyType}, Sha256Fingerprint = {Sha256Fingerprint}, RemoteEndPoint = {RemoteEndPoint} }}";
 }
 
 /// <summary>Who logged in.</summary>
@@ -140,6 +145,11 @@ public sealed record SshPrincipal
     /// </code>
     /// </example>
     public IReadOnlyList<string> KeyFingerprints { get; init; } = [];
+
+    /// <summary>Returns a description that is safe to log: the user name is the client's, so control characters are removed from it.</summary>
+    /// <returns>The description.</returns>
+    public override string ToString() =>
+        $"SshPrincipal {{ UserName = {Protocol.PeerText.Clean(UserName, Protocol.PeerText.MaxDisplayUserName)}, Methods = [{string.Join(", ", Methods)}], KeyFingerprints = [{string.Join(", ", KeyFingerprints)}] }}";
 }
 
 /// <summary>Why a session started.</summary>
@@ -335,6 +345,7 @@ public sealed record SshServerOptions
     /// <summary>
     /// Gets the methods that must all pass, for example <c>["publickey", "password"]</c> for two-factor login.
     /// Null, the default, means any one offered method is enough. The server enforces this, whatever handlers return.
+    /// Each entry must be <c>publickey</c> or <c>password</c>, once, with its handler set, and the list can't be empty.
     /// </summary>
     public IReadOnlyList<string>? RequiredAuthMethods { get; init; }
 
