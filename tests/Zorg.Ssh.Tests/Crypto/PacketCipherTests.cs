@@ -489,13 +489,30 @@ public class PacketCipherTests
             RoundTrip();
         }
 
-        long before = GC.GetAllocatedBytesForCurrentThread();
+        // Each round on its own. The counter is for this thread only, so no other test can add to it, but the runtime
+        // itself can: in a full parallel run, a round that coincides with a garbage collection started by another
+        // thread has been seen to allocate 500 to 6,000 bytes (measured with a per-round log: six to ten such
+        // rounds in 2,000, while collections were running). Averaging those into the total gave 92 bytes against a
+        // limit of 88. A real allocation is in every round, or in a steady share of them, so the highest
+        // 1% of rounds are left out and the rest are held to the same limit.
+        long[] perRound = new long[Rounds];
         for (int i = 0; i < Rounds; i++)
         {
+            long before = GC.GetAllocatedBytesForCurrentThread();
             RoundTrip();
+            perRound[i] = GC.GetAllocatedBytesForCurrentThread() - before;
         }
 
-        long perOperation = (GC.GetAllocatedBytesForCurrentThread() - before) / (Rounds * 2);
+        Array.Sort(perRound);
+        long kept = 0;
+        int keptRounds = Rounds - (Rounds / 100);
+        for (int i = 0; i < keptRounds; i++)
+        {
+            kept += perRound[i];
+        }
+
+        // A round is two operations, a seal and an open.
+        long perOperation = kept / (keptRounds * 2L);
 
         // A little slack: the runtime itself occasionally allocates on this thread. A real allocation is 24 bytes or more.
         Assert.InRange(perOperation, 0, allowedPerOperation + 8);
