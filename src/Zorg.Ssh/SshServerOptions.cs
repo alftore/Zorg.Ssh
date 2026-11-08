@@ -309,6 +309,13 @@ public sealed record SshServerOptions
     /// Gets the code that serves a session, which returns the exit code. It runs once per exec, shell or subsystem
     /// request. One that throws ends the session with exit code 1, and the failure is logged.
     /// </summary>
+    /// <remarks>
+    /// The token is cancelled when the server stops, when the client closes the session's channel, and when the
+    /// connection ends: the client disconnects or goes away, keepalive gives up on it, or the stream given to
+    /// <see cref="SshServer.ServeStreamAsync"/> is closed. <see cref="IdleTimeout"/> never cancels it, because a running
+    /// handler's channel is open, and that stops the idle clock. It says only that the session is over, not why. Its
+    /// callbacks run on the thread pool, never in the connection's receive loop.
+    /// </remarks>
     public required Func<SshServerSession, CancellationToken, Task<int>> SessionHandler { get; init; }
 
     /// <summary>

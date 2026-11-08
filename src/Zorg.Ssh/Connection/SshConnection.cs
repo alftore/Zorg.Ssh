@@ -51,7 +51,14 @@ internal sealed class SshConnection : IAsyncDisposable
         System.Threading.Channels.Channel.CreateBounded<IncomingChannelOpen>(MaxPendingOpens);
     private readonly CancellationTokenSource _stop = new();
     private readonly CancellationToken _stopToken;
-    private readonly TaskCompletionSource _ended = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly TaskCompletionSource<SshException?> _ended = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    // Never disposed: a cancelled source holds nothing, and the token must stay readable after dispose, with registrations
+    // still able to run. Disposing it could also race a callback that is still being registered.
+#pragma warning disable CA2213
+    private readonly CancellationTokenSource _closed = new();
+#pragma warning restore CA2213
+    private readonly CancellationToken _closedToken;
     private uint _nextId;
     private int _incomingSessions;
     private Task? _loop;
@@ -59,6 +66,8 @@ internal sealed class SshConnection : IAsyncDisposable
     private Task? _keepAliveLoop;
     private SshException? _failure;
     private bool _ending;
+    private bool _closedLocally;
+    private int _disposed;
 
     /// <summary>
     /// Marks a task's failure as seen. The end of a connection fails every waiter it holds, and a waiter whose caller has already left
@@ -74,6 +83,7 @@ internal sealed class SshConnection : IAsyncDisposable
 
         // Kept apart from the source, which is gone by the time a late accept might ask for it.
         _stopToken = _stop.Token;
+        _closedToken = _closed.Token;
         _transport.UnimplementedHandler = HandleUnimplemented;
     }
 
@@ -101,6 +111,19 @@ internal sealed class SshConnection : IAsyncDisposable
     /// failed. It never faults. <see cref="DisposeAsync"/> completes it even when the receive loop is stuck.
     /// </summary>
     public Task Ended => _ended.Task;
+
+    /// <summary>
+    /// Gets <see cref="Ended"/> with its result: null if this side closed a healthy connection, or else what ended it, the
+    /// first cause. It never faults. The exception is shared by every caller, so it's never thrown from here.
+    /// </summary>
+    public Task<SshException?> CloseReason => _ended.Task;
+
+    /// <summary>
+    /// Gets a token that is cancelled just before <see cref="Ended"/> completes, after everything the connection held has
+    /// failed. It's cancelled with <c>CancelAsync</c> outside every lock, so its callbacks run on the thread pool, never in
+    /// the receive loop. It stays readable after dispose.
+    /// </summary>
+    public CancellationToken Closed => _closedToken;
 
     /// <summary>Gets how long dispose waits for each loop. Tests shorten it.</summary>
     internal TimeSpan Grace { get; init; } = DefaultGrace;
@@ -482,6 +505,20 @@ internal sealed class SshConnection : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+        {
+            return;
+        }
+
+        lock (_gate)
+        {
+            // A failure that came first is what ended the connection, even if the loop hasn't seen it yet. Otherwise this close did.
+            if (_failure is null && !_transport.HasFailed)
+            {
+                _closedLocally = true;
+            }
+        }
+
         await _stop.CancelAsync().ConfigureAwait(false);
 
         // Closing first unblocks a receive loop stuck in a stream that ignores cancellation.
@@ -589,7 +626,8 @@ internal sealed class SshConnection : IAsyncDisposable
         }
         catch (OperationCanceledException ex) when (_stop.IsCancellationRequested)
         {
-            failure = new SshConnectionException("The connection was closed by this side. Connect again to continue.", ex);
+            // A transport that had already failed keeps its cause: the close only came after it.
+            failure = _transport.RecordedFailure ?? new SshConnectionException("The connection was closed by this side. Connect again to continue.", ex);
         }
         catch (SshException ex)
         {
@@ -615,11 +653,13 @@ internal sealed class SshConnection : IAsyncDisposable
         TaskCompletionSource<SshChannel>[] opening;
         PendingGlobalRequest[] requests;
         bool first;
+        SshException? reason;
         lock (_gate)
         {
             _failure ??= failure;
             first = !_ending;
             _ending = true;
+            reason = _closedLocally ? null : _failure;
             channels = [.. _channels.Values];
             opening = [.. _opening.Values];
             requests = [.. _globalRequests];
@@ -651,7 +691,11 @@ internal sealed class SshConnection : IAsyncDisposable
             return;
         }
 
-        _ended.TrySetResult();
+        // Outside the lock, and after everything above has failed. CancelAsync marks the token at once and runs its callbacks on the
+        // thread pool, so one that blocks or throws can't hold this loop or another connection, and a throw is only seen by the task
+        // it returns, which is observed here. The token goes first, so whoever sees Ended also sees it cancelled.
+        ObserveFailure(_closed.CancelAsync());
+        _ended.TrySetResult(reason);
 
         // Tells the peer if we can, and closes the socket, so a failure can't leave a half-open connection.
         await _transport.CloseAsync().ConfigureAwait(false);

@@ -41,6 +41,10 @@ public sealed class ConnectionEndTests
             // The loop is still in its read, so only dispose can have ended the connection.
             Assert.Equal(1, link.ReadsWaiting);
             Assert.True(connection.Ended.IsCompleted);
+            Assert.True(connection.Closed.IsCancellationRequested);
+
+            // This side closed a healthy connection.
+            Assert.Null(await connection.CloseReason);
             await Assert.ThrowsAnyAsync<SshConnectionException>(() => open.WaitAsync(Limit, Ct));
             await Assert.ThrowsAnyAsync<SshConnectionException>(() => reply.WaitAsync(Limit, Ct));
             await Assert.ThrowsAnyAsync<SshConnectionException>(() => connection.OpenChannelAsync("session", Ct));

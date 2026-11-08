@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -270,6 +271,72 @@ internal static class ClientExamples
         };
         // end-doc
         return options;
+    }
+
+    public static async Task Reconnect(SshClientOptions options, Action<SshClient?> publish, CancellationToken stopping)
+    {
+        // doc:reconnect
+        TimeSpan backoff = TimeSpan.FromSeconds(1);
+        while (true)
+        {
+            try
+            {
+                await using SshClient client = await SshClient.ConnectAsync(options, stopping);
+                backoff = TimeSpan.FromSeconds(1);
+                publish(client);
+
+                // Returns when the connection ends, whoever ended it. Throws only if stopping is cancelled.
+                SshException? reason = await client.WaitForCloseAsync(stopping);
+                publish(null);
+                if (reason is null)
+                {
+                    return; // This side closed it.
+                }
+
+                Console.Error.WriteLine($"The connection ended ({reason.GetType().Name}): {reason.Message} Reconnecting.");
+            }
+            catch (SshHostKeyException)
+            {
+                publish(null);
+                throw; // Never retry this one. It can mean an attack, so show it to a person.
+            }
+            catch (SshException ex)
+            {
+                Console.Error.WriteLine($"Couldn't connect: {ex.Message} Trying again in {backoff.TotalSeconds} s.");
+            }
+
+            await Task.Delay(backoff, stopping);
+            backoff = TimeSpan.FromTicks(Math.Min(backoff.Ticks * 2, TimeSpan.FromMinutes(2).Ticks));
+        }
+        // end-doc
+    }
+
+    public static void Evict(SshClient client, ConcurrentDictionary<string, SshClient> pool, string key)
+    {
+        // doc:connection-closed-evict
+        // Runs on the thread pool once the connection has ended, or at once if it already has.
+        client.ConnectionClosed.Register(() => pool.TryRemove(new KeyValuePair<string, SshClient>(key, client)));
+        // end-doc
+    }
+
+    public static async Task PushMetrics(SshClient client, Func<CancellationToken, Task> pushAsync, CancellationToken cancellationToken)
+    {
+        // doc:connection-closed-link
+        // Your own work that only matters while the connection is up: stop it when either token fires.
+        using CancellationTokenSource linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, client.ConnectionClosed);
+        try
+        {
+            while (true)
+            {
+                await Task.Delay(TimeSpan.FromSeconds(10), linked.Token);
+                await pushAsync(linked.Token);
+            }
+        }
+        catch (OperationCanceledException) when (client.ConnectionClosed.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+        {
+            Console.Error.WriteLine("The connection ended, so the metrics stopped.");
+        }
+        // end-doc
     }
 
     public static async Task JumpHost(SshClientOptions bastionOptions, string password, string innerFingerprint, CancellationToken cancellationToken)

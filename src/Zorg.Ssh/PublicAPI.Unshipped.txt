@@ -41,3 +41,5 @@ static Zorg.Ssh.Sftp.SftpTransferOptions.operator !=(Zorg.Ssh.Sftp.SftpTransferO
 static Zorg.Ssh.Sftp.SftpTransferOptions.operator ==(Zorg.Ssh.Sftp.SftpTransferOptions? left, Zorg.Ssh.Sftp.SftpTransferOptions? right) -> bool
 static Zorg.Ssh.Sftp.SftpTransferProgress.operator !=(Zorg.Ssh.Sftp.SftpTransferProgress? left, Zorg.Ssh.Sftp.SftpTransferProgress? right) -> bool
 static Zorg.Ssh.Sftp.SftpTransferProgress.operator ==(Zorg.Ssh.Sftp.SftpTransferProgress? left, Zorg.Ssh.Sftp.SftpTransferProgress? right) -> bool
+Zorg.Ssh.SshClient.ConnectionClosed.get -> System.Threading.CancellationToken
+Zorg.Ssh.SshClient.WaitForCloseAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Zorg.Ssh.SshException?>!

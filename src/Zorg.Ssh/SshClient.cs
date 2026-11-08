@@ -148,6 +148,37 @@ public sealed partial class SshClient : IAsyncDisposable
     /// </example>
     public SshHostKeyInfo HostKey { get; }
 
+    /// <summary>
+    /// Gets a token that is cancelled when the connection ends, for any reason: the server closed it or went away,
+    /// keepalive gave up, a protocol error, the end of a jump host's connection, or <see cref="DisposeAsync"/>. Use
+    /// <see cref="WaitForCloseAsync"/> to learn why.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// By the time it's cancelled, every command, stream, SFTP call, channel open and request waiting on the connection
+    /// has already failed, and new calls throw <see cref="SshConnectionException"/>. Forwards close a moment later. You
+    /// still dispose the client.
+    /// </para>
+    /// <para>
+    /// Callbacks run on the thread pool, never on the library's own threads, so one that blocks or throws holds nothing
+    /// up. A registration on a token that has already been cancelled runs at once, on the registering thread, as with
+    /// any <see cref="CancellationToken"/>. The token stays valid after dispose. <c>ConnectionClosed.IsCancellationRequested</c>
+    /// says whether the connection is known to have ended, and never goes back to false.
+    /// </para>
+    /// <para>
+    /// Don't link it into this library's own calls: they already fail with an <see cref="SshConnectionException"/> that
+    /// says why, and a linked token can turn that into a plain <see cref="OperationCanceledException"/>. Link it for your
+    /// own work that depends on the connection, and dispose the linked source, because each one registers on this token
+    /// for as long as the connection lives.
+    /// </para>
+    /// </remarks>
+    /// <example>
+    /// <code>
+    /// client.ConnectionClosed.Register(() => pool.TryRemove(new KeyValuePair&lt;string, SshClient&gt;(key, client)));
+    /// </code>
+    /// </example>
+    public CancellationToken ConnectionClosed => _connection.Closed;
+
     /// <summary>Connects, checks the server's host key, and logs in. With <see cref="SshClientOptions.JumpHost"/> set, the connection goes through that client.</summary>
     /// <param name="options">Where to connect, and how to log in.</param>
     /// <param name="cancellationToken">Cancels the connection attempt.</param>
@@ -355,6 +386,35 @@ public sealed partial class SshClient : IAsyncDisposable
         SshChannel channel = await OpenSubsystemAsync("sftp", cancellationToken).ConfigureAwait(false);
         return await SftpClient.OpenOverChannelAsync(channel, ServerVersion, options, cancellationToken).ConfigureAwait(false);
     }
+
+    /// <summary>
+    /// Waits for the connection to end, and returns why: null if this side closed a healthy connection with
+    /// <see cref="DisposeAsync"/>, or else what ended it. That's the first cause, so a connection that failed before
+    /// you disposed it still gives the failure.
+    /// </summary>
+    /// <param name="cancellationToken">Stops the wait. It doesn't affect the connection.</param>
+    /// <returns>
+    /// Null, or one of: <see cref="SshDisconnectedException"/> when the server sent a DISCONNECT, with its
+    /// <see cref="SshDisconnectedException.Reason"/>; <see cref="SshConnectionException"/> when the connection was lost,
+    /// keepalive gave up, or a write stalled; <see cref="SshProtocolException"/> when the server broke the protocol;
+    /// another <see cref="SshException"/> otherwise. The task never faults.
+    /// </returns>
+    /// <remarks>
+    /// It completes once <see cref="ConnectionClosed"/> has been cancelled: every call waiting on the connection has
+    /// failed, and new ones throw. The returned exception is one object, shared by every caller, and it's also the cause
+    /// inside the exceptions those calls threw. Log it, or wrap it, as in <c>throw new MyException("...", reason)</c>, but
+    /// don't throw it yourself. It holds only what the library already reports: its own text, and the server's
+    /// DISCONNECT text, which is untrusted.
+    /// </remarks>
+    /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> was cancelled first.</exception>
+    /// <example>
+    /// <code>
+    /// SshException? reason = await client.WaitForCloseAsync(cancellationToken);
+    /// Console.WriteLine(reason is null ? "Closed." : $"Lost: {reason.Message}");
+    /// </code>
+    /// </example>
+    public Task<SshException?> WaitForCloseAsync(CancellationToken cancellationToken = default) =>
+        _connection.CloseReason.WaitAsync(cancellationToken);
 
     /// <summary>Closes every forward, and then the connection. A client that used this one as a jump host loses its connection too.</summary>
     /// <returns>A task that completes when the connection is closed.</returns>

@@ -144,9 +144,11 @@ The network failed or the connection closed. Connect again to continue: a client
 - "The peer stopped reading": one socket write stayed unfinished for `KeepAliveInterval` times `KeepAliveCountMax`. The peer may still be sending. Check whether it's stuck, and raise both if it's only very slow.
 - "The channel is closed": this one process has ended, or you've used its stream after disposing it. The client may still work.
 
+To find out when a connection ends, and why, without making a call, use `SshClient.WaitForCloseAsync` or `SshClient.ConnectionClosed`. See [When the connection ends](client.md#when-the-connection-ends).
+
 ## SshDisconnectedException
 
-The server ended the connection on purpose. It derives from `SshConnectionException`. `Reason` is the `SshDisconnectReason` from RFC 4253 section 11.1 (a code outside the list keeps its number), and `Description` is the server's text. Common causes are too many authentication failures, an idle timeout, and a server shutting down.
+The server ended the connection on purpose. It derives from `SshConnectionException`. `Reason` is the `SshDisconnectReason` from RFC 4253 section 11.1 (a code outside the list keeps its number), and `Description` is the server's text. Common causes are too many authentication failures, an idle timeout, and a server shutting down. `SshClient.WaitForCloseAsync` returns this exception when a server ends a connection that was up. See [When the connection ends](client.md#when-the-connection-ends).
 
 ## SshNegotiationException
 

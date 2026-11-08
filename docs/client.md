@@ -280,6 +280,86 @@ Keepalive doesn't limit a command either: `sleep 3600` runs for an hour while th
 
 The probe waits behind data already queued. On a very slow link that's busy sending, it might not get through in time, so raise the interval there.
 
+## When the connection ends
+
+A client doesn't reconnect by itself. Two members tell you when its connection has ended, whatever ended it: the server closing it or going away, keepalive giving up, a protocol error, the end of a jump host's connection, or your own `DisposeAsync`.
+
+- `WaitForCloseAsync(cancellationToken)` waits, and returns why: null if you closed a healthy connection, or else the first cause. That's `SshDisconnectedException` when the server sent a DISCONNECT (its `Reason` says why), `SshConnectionException` when the connection was lost, keepalive gave up or a write stalled, `SshProtocolException` when the server broke the protocol, or another `SshException`. The task never faults. Only your own token ends it early, with `OperationCanceledException`.
+- `ConnectionClosed` is a `CancellationToken` that is cancelled at the same moment. `ConnectionClosed.IsCancellationRequested` says whether the connection is known to have ended. It never goes back to false, and it stays valid after dispose.
+
+By then, every call waiting on the connection has already failed, and new calls throw `SshConnectionException` at once. Forwards close a moment later. You still dispose the client.
+
+A reconnect loop with backoff:
+
+```csharp
+TimeSpan backoff = TimeSpan.FromSeconds(1);
+while (true)
+{
+    try
+    {
+        await using SshClient client = await SshClient.ConnectAsync(options, stopping);
+        backoff = TimeSpan.FromSeconds(1);
+        publish(client);
+
+        // Returns when the connection ends, whoever ended it. Throws only if stopping is cancelled.
+        SshException? reason = await client.WaitForCloseAsync(stopping);
+        publish(null);
+        if (reason is null)
+        {
+            return; // This side closed it.
+        }
+
+        Console.Error.WriteLine($"The connection ended ({reason.GetType().Name}): {reason.Message} Reconnecting.");
+    }
+    catch (SshHostKeyException)
+    {
+        publish(null);
+        throw; // Never retry this one. It can mean an attack, so show it to a person.
+    }
+    catch (SshException ex)
+    {
+        Console.Error.WriteLine($"Couldn't connect: {ex.Message} Trying again in {backoff.TotalSeconds} s.");
+    }
+
+    await Task.Delay(backoff, stopping);
+    backoff = TimeSpan.FromTicks(Math.Min(backoff.Ticks * 2, TimeSpan.FromMinutes(2).Ticks));
+}
+```
+
+Never retry `SshHostKeyException` automatically, here or anywhere: a changed host key can mean an attack.
+
+The reason is one exception object, shared by every caller of `WaitForCloseAsync`, and it's also the cause inside the exceptions the failed calls threw. Log it, or wrap it in an exception of your own, but don't throw it yourself. It holds nothing the library doesn't already report: its own messages, and the server's DISCONNECT text, which is untrusted.
+
+To drop a client from a pool when its connection ends, without a task that waits for it:
+
+```csharp
+// Runs on the thread pool once the connection has ended, or at once if it already has.
+client.ConnectionClosed.Register(() => pool.TryRemove(new KeyValuePair<string, SshClient>(key, client)));
+```
+
+Callbacks run on the thread pool, never on the library's own threads, so one that blocks or throws holds up nothing else. A registration on a token that has already been cancelled runs at once, on the thread that registers it, as with any `CancellationToken`.
+
+Don't link `ConnectionClosed` into this library's own calls. They already fail when the connection ends, with an `SshConnectionException` that says why, and a linked token can turn that into a plain `OperationCanceledException`, depending on which gets there first. Link it only for your own work that matters only while the connection is up, and dispose the linked source: each one registers on the token for as long as the connection lives.
+
+```csharp
+// Your own work that only matters while the connection is up: stop it when either token fires.
+using CancellationTokenSource linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, client.ConnectionClosed);
+try
+{
+    while (true)
+    {
+        await Task.Delay(TimeSpan.FromSeconds(10), linked.Token);
+        await pushAsync(linked.Token);
+    }
+}
+catch (OperationCanceledException) when (client.ConnectionClosed.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+{
+    Console.Error.WriteLine("The connection ended, so the metrics stopped.");
+}
+```
+
+There's no `IsConnected`. A connection that looks up can fail before your next call, so check `ConnectionClosed.IsCancellationRequested` for display only, and still catch `SshConnectionException`.
+
 ## Processes
 
 `StartProcessAsync` gives you streams, for long-running commands, large or binary output, and input.
