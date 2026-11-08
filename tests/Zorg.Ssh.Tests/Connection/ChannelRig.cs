@@ -141,6 +141,7 @@ internal sealed class ChannelRig : IAsyncDisposable
     private readonly SshTransport _peer;
     private readonly ConcurrentDictionary<uint, Channel<byte>> _byChannel = new();
     private readonly Channel<byte[]> _other = Channel.CreateUnbounded<byte[]>();
+    private readonly TaskCompletionSource<Exception?> _peerEnded = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly CancellationToken _token;
     private readonly Task _reading;
     private uint _nextBarrier = 100_000;
@@ -155,6 +156,9 @@ internal sealed class ChannelRig : IAsyncDisposable
     }
 
     public SshConnection Connection { get; }
+
+    /// <summary>Gets a task that completes with what ended the peer's reading: the DISCONNECT it received, for one.</summary>
+    public Task<Exception?> PeerEnded => _peerEnded.Task;
 
     public static async Task<ChannelRig> StartAsync(CancellationToken cancellationToken)
     {
@@ -355,6 +359,9 @@ internal sealed class ChannelRig : IAsyncDisposable
         catch (Exception ex) when (ex is SshException or OperationCanceledException)
         {
             // The connection has ended, and that's the end of this loop.
+            _peerEnded.TrySetResult(ex);
         }
+
+        _peerEnded.TrySetResult(null);
     }
 }

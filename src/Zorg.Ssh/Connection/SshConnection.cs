@@ -621,7 +621,14 @@ internal sealed class SshConnection : IAsyncDisposable
             while (true)
             {
                 ReadOnlyMemory<byte> message = await _transport.ReceiveAsync(_stop.Token).ConfigureAwait(false);
-                Dispatch(message.Span);
+                try
+                {
+                    Dispatch(message.Span);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    throw RecordDispatchFailure(ex as SshException ?? new SshException("The connection failed unexpectedly. This is a bug in Zorg.Ssh.", ex));
+                }
             }
         }
         catch (OperationCanceledException ex) when (_stop.IsCancellationRequested)
@@ -641,6 +648,22 @@ internal sealed class SshConnection : IAsyncDisposable
         }
 
         await EndAsync(failure).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Records a failure in a message the transport delivered, before anything else can see the connection end (C3). Dispose
+    /// reads <see cref="_failure"/> under the same lock, so a dispose that comes after this can't call the close its own, and
+    /// the transport tells the peer PROTOCOL_ERROR instead of the polite close that ending the connection would send.
+    /// </summary>
+    private SshException RecordDispatchFailure(SshException failure)
+    {
+        lock (_gate)
+        {
+            _failure ??= failure;
+        }
+
+        _transport.FailWithProtocolError(failure);
+        return failure;
     }
 
     /// <summary>
