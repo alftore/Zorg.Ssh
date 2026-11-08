@@ -700,13 +700,99 @@ public sealed class SftpServerProtocolTests : IDisposable
         Assert.SkipWhen(OperatingSystem.IsWindows(), "FIFOs are a Unix thing.");
         using System.Diagnostics.Process mkfifo = System.Diagnostics.Process.Start("mkfifo", _sandbox.InRoot("fifo"));
         await mkfifo.WaitForExitAsync(Ct);
-        await using SftpServerHarness client = await StartAsync(new SftpServerOptions { RootDirectory = _sandbox.Root, OpenTimeout = TimeSpan.FromMilliseconds(200) });
+
+        // Without the type check, as on a Unix whose types can't be read, or with a FIFO swapped in after the look.
+        await using SftpServerHarness client = await StartAsync(new SftpServerOptions { RootDirectory = _sandbox.Root, OpenTimeout = TimeSpan.FromMilliseconds(200), CheckTypeBeforeOpen = false });
 
         await client.SendAsync(new Packet().U8(SftpMessage.Open).U32(1).Text("fifo").U32(OpenRead).U32(0).ToFrame());
         Assert.Equal(1, await client.Serving.WaitAsync(TimeSpan.FromSeconds(10), Ct));
 
         // Unstick the thread still waiting in open.
         await using FileStream writer = new(_sandbox.InRoot("fifo"), FileMode.Open, FileAccess.Write);
+    }
+
+    [Fact]
+    public async Task S1_a_FIFO_is_refused_before_it_is_opened_and_the_session_carries_on()
+    {
+        // Finding S1: an OPEN or SETSTAT of a FIFO blocked in open(2) for OpenTimeout. Where the type can be read it's
+        // refused before the open, so nothing blocks and the session goes on.
+        Assert.SkipUnless(OperatingSystem.IsLinux() || OperatingSystem.IsMacOS(), "Only Linux and macOS have a call here that tells a FIFO's type.");
+        MakeFifo("fifo");
+        File.CreateSymbolicLink(_sandbox.InRoot("to-fifo"), "fifo");
+        await File.WriteAllTextAsync(_sandbox.InRoot("plain.txt"), "x", Ct);
+        await using SftpServerHarness client = await StartAsync(new SftpServerOptions { RootDirectory = _sandbox.Root, OpenTimeout = TimeSpan.FromSeconds(20) });
+
+        System.Diagnostics.Stopwatch elapsed = System.Diagnostics.Stopwatch.StartNew();
+        Assert.Equal(Failure, (await client.OpenAsync("fifo", OpenRead)).Status);
+        Assert.Equal(Failure, (await client.OpenAsync("to-fifo", OpenRead)).Status);
+        Assert.Equal(Failure, (await client.OpenAsync("fifo", OpenWrite)).Status);
+        Assert.Equal(Failure, (await client.RequestAsync(SftpMessage.SetStat, Path("fifo").U32(4).U32(0x1A4))).Status);
+        Assert.True(elapsed.Elapsed < TimeSpan.FromSeconds(10), $"took {elapsed.Elapsed}");
+
+        byte[] handle = await client.OpenHandleAsync("plain.txt", OpenRead);
+        Assert.Equal("x"u8.ToArray(), (await client.ReadAsync(handle, 0, 10)).Data);
+        Assert.False(client.Serving.IsCompleted);
+    }
+
+    [Fact]
+    public async Task S1_an_open_that_blocks_lets_go_of_the_namespace_gate()
+    {
+        // Finding S1: the open blocked while holding the process-wide gate, so every other session's path requests
+        // waited for OpenTimeout. The type check is off here, as for a FIFO swapped in after the look.
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "FIFOs are a Unix thing.");
+        MakeFifo("fifo");
+        await File.WriteAllTextAsync(_sandbox.InRoot("plain.txt"), "x", Ct);
+        SftpServerOptions options = new() { RootDirectory = _sandbox.Root, OpenTimeout = TimeSpan.FromSeconds(5), CheckTypeBeforeOpen = false };
+        await using SftpServerHarness attacker = await StartAsync(options);
+        await using SftpServerHarness victim = await StartAsync(options);
+
+        await attacker.SendAsync(new Packet().U8(SftpMessage.Open).U32(1).Text("fifo").U32(OpenRead).U32(0).ToFrame());
+        await Task.Delay(500, Ct);
+        System.Diagnostics.Stopwatch during = System.Diagnostics.Stopwatch.StartNew();
+        Assert.Equal(SftpMessage.Attrs, (await victim.RequestAsync(SftpMessage.Stat, Path("plain.txt"))).Type);
+        Assert.True(during.Elapsed < TimeSpan.FromSeconds(2), $"the victim's stat waited {during.Elapsed} for the attacker's open");
+        Assert.False(attacker.Serving.IsCompleted);
+
+        Assert.Equal(1, await attacker.Serving.WaitAsync(TimeSpan.FromSeconds(20), Ct));
+
+        // The session that timed out had let go of the gate, so it didn't release it again (or leave it held).
+        Assert.Equal(SftpMessage.Attrs, (await victim.RequestAsync(SftpMessage.Stat, Path("plain.txt"))).Type);
+
+        // Unstick the thread still waiting in open.
+        await using FileStream writer = new(_sandbox.InRoot("fifo"), FileMode.Open, FileAccess.Write);
+    }
+
+    [Fact]
+    public async Task S1_an_open_that_blocks_then_finishes_takes_the_gate_back_and_is_still_verified()
+    {
+        // Finding S1: the open lets go of the gate while it's blocked, and must take it back before it's checked, once.
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "FIFOs are a Unix thing.");
+        MakeFifo("fifo");
+        await File.WriteAllTextAsync(_sandbox.InRoot("plain.txt"), "x", Ct);
+        SftpServerOptions options = new() { RootDirectory = _sandbox.Root, OpenTimeout = TimeSpan.FromSeconds(20), CheckTypeBeforeOpen = false };
+        await using SftpServerHarness client = await StartAsync(options);
+        await using SftpServerHarness other = await StartAsync(options);
+
+        Task<SftpServerReply> open = client.OpenAsync("fifo", OpenRead);
+        await Task.Delay(500, Ct);
+        Assert.False(open.IsCompleted);
+        Assert.Equal(SftpMessage.Attrs, (await other.RequestAsync(SftpMessage.Stat, Path("plain.txt")).WaitAsync(TimeSpan.FromSeconds(2), Ct)).Type);
+
+        // A writer lets the open finish. What it opened can't seek, so Verify, under the gate again, refuses it.
+        await using FileStream writer = await Task.Run(() => new FileStream(_sandbox.InRoot("fifo"), FileMode.Open, FileAccess.Write), Ct);
+        Assert.Equal(Failure, (await open.WaitAsync(TimeSpan.FromSeconds(10), Ct)).Status);
+
+        // Released once: a second release would throw (the gate's most is 1), and none would leave both sessions stuck.
+        Assert.Equal(SftpMessage.Attrs, (await client.RequestAsync(SftpMessage.Stat, Path("plain.txt")).WaitAsync(TimeSpan.FromSeconds(10), Ct)).Type);
+        Assert.Equal(SftpMessage.Attrs, (await other.RequestAsync(SftpMessage.Stat, Path("plain.txt")).WaitAsync(TimeSpan.FromSeconds(10), Ct)).Type);
+        Assert.False(client.Serving.IsCompleted);
+    }
+
+    private void MakeFifo(string name)
+    {
+        using System.Diagnostics.Process mkfifo = System.Diagnostics.Process.Start("mkfifo", _sandbox.InRoot(name));
+        mkfifo.WaitForExit();
+        Assert.Equal(0, mkfifo.ExitCode);
     }
 
     [Fact]

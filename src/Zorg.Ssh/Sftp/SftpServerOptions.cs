@@ -87,6 +87,12 @@ public sealed class SftpServerOptions
     /// </summary>
     internal TimeSpan OpenTimeout { get; init; } = TimeSpan.FromSeconds(10);
 
+    /// <summary>
+    /// Gets a value saying whether OPEN and SETSTAT read a file's type and refuse a FIFO or device before opening it
+    /// (finding S1). Only tests turn it off, to reach the open that blocks, as a FIFO swapped in after the look would.
+    /// </summary>
+    internal bool CheckTypeBeforeOpen { get; init; } = true;
+
     /// <summary>Checks everything a session depends on, before a byte of it is read.</summary>
     internal void Validate()
     {

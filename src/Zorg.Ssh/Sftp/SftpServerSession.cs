@@ -41,9 +41,18 @@ internal sealed partial class SftpServerSession : IAsyncDisposable
     /// Serialises everything that goes from a path to a change or an open, across every session in this process,
     /// whatever its root, as roots can nest. .NET has no openat, so between checking a path and using it another
     /// session could rename a link into place. Two sessions of one client are the cheapest way to get such a race,
-    /// and this takes it away. File contents don't pass through here: only metadata work waits.
+    /// and this takes it away. File contents don't pass through here: only metadata work waits. An open that the
+    /// system blocks lets go of it after <see cref="GateHoldForOpen"/> (finding S1), so one client's FIFO can't stall
+    /// every other session in the process.
     /// </summary>
     internal static readonly SemaphoreSlim NamespaceGate = new(1, 1);
+
+    /// <summary>
+    /// How long an open waits while holding <see cref="NamespaceGate"/>. An open of a regular file takes far less. One
+    /// that takes longer is blocked in the system, on a FIFO or a device (finding S1), and waits out the rest of
+    /// <see cref="SftpServerOptions.OpenTimeout"/> without the gate.
+    /// </summary>
+    internal static readonly TimeSpan GateHoldForOpen = TimeSpan.FromMilliseconds(100);
 
 #pragma warning disable CA2213 // The streams belong to the caller.
     private readonly Stream _input;
@@ -58,6 +67,9 @@ internal sealed partial class SftpServerSession : IAsyncDisposable
     private byte[]? _request;
     private byte[]? _reply;
     private int _replyLength;
+
+    /// <summary>Whether this session holds <see cref="NamespaceGate"/>. An open that blocks lets go of it and takes it back.</summary>
+    private bool _holdsGate;
 
     public SftpServerSession(Stream input, Stream output, SftpServerOptions options)
     {
@@ -285,6 +297,7 @@ internal sealed partial class SftpServerSession : IAsyncDisposable
     private async ValueTask ServeLockedAsync(byte type, uint id, ReadOnlyMemory<byte> body, CancellationToken cancellationToken)
     {
         await NamespaceGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        _holdsGate = true;
         try
         {
             switch (type)
@@ -329,7 +342,12 @@ internal sealed partial class SftpServerSession : IAsyncDisposable
         }
         finally
         {
-            NamespaceGate.Release();
+            // An open that blocked let go of the gate, and if it failed before taking it back, there's nothing to release.
+            if (_holdsGate)
+            {
+                _holdsGate = false;
+                NamespaceGate.Release();
+            }
         }
     }
 
@@ -419,6 +437,8 @@ internal sealed partial class SftpServerSession : IAsyncDisposable
             throw Refuse(SftpStatusCode.NoSuchFile);
         }
 
+        RefuseSpecialFile(resolved);
+
         // O_CREAT without O_EXCL would follow a link planted after the check, so a new file is always CreateNew.
         // Truncating waits until the file has been verified, because it can't be undone.
         FileStreamOptions open = new()
@@ -468,9 +488,29 @@ internal sealed partial class SftpServerSession : IAsyncDisposable
     }
 
     /// <summary>
-    /// Opens a file. On Unix an open can block for good, on a FIFO with no writer, and .NET has neither O_NONBLOCK nor
-    /// a way to tell a FIFO from a file first. So it runs on the side, and a session that hits the limit ends:
-    /// the thread stays stuck until a writer turns up, and one per session is the most a client can tie up at a time.
+    /// Refuses to open what isn't a regular file, where the type can be read (Linux and macOS): .NET calls a FIFO or a
+    /// device a file, and opening a FIFO with no writer blocks in the system (finding S1). The walk already refused a
+    /// directory. Where the type can't be read, or the entry is swapped for a FIFO after this look, the open itself
+    /// is bounded by <see cref="OpenStreamAsync"/>, and <see cref="Verify"/> refuses what can't seek.
+    /// </summary>
+    private void RefuseSpecialFile(SftpServerResolved resolved)
+    {
+        if (resolved.Exists
+            && !OperatingSystem.IsWindows()
+            && _options.CheckTypeBeforeOpen
+            && LocalFile.GetFileType(resolved.RealPath, resolved.Info.UnixFileMode) is { } type
+            && type != SftpAttributes.TypeRegular)
+        {
+            throw Refuse(SftpStatusCode.Failure);
+        }
+    }
+
+    /// <summary>
+    /// Opens a file. On Unix an open can block for good, on a FIFO with no writer, and .NET has no O_NONBLOCK. So it
+    /// runs on the side, and a session that hits the limit ends: the thread stays stuck until a writer turns up, and
+    /// one per session is the most a client can tie up at a time. An open still running after
+    /// <see cref="GateHoldForOpen"/> lets go of <see cref="NamespaceGate"/>, so it holds up only its own session, and
+    /// takes the gate back before it returns, so the caller's checks of what was opened run under the gate.
     /// </summary>
     private async ValueTask<FileStream> OpenStreamAsync(string realPath, FileStreamOptions open, CancellationToken cancellationToken)
     {
@@ -482,7 +522,29 @@ internal sealed partial class SftpServerSession : IAsyncDisposable
         Task<FileStream> opening = Task.Run(() => new FileStream(realPath, open), CancellationToken.None);
         try
         {
-            return await opening.WaitAsync(_options.OpenTimeout, cancellationToken).ConfigureAwait(false);
+            TimeSpan held = _options.OpenTimeout < GateHoldForOpen ? _options.OpenTimeout : GateHoldForOpen;
+            if (!_holdsGate || held == _options.OpenTimeout)
+            {
+                return await opening.WaitAsync(_options.OpenTimeout, cancellationToken).ConfigureAwait(false);
+            }
+
+            try
+            {
+                return await opening.WaitAsync(held, cancellationToken).ConfigureAwait(false);
+            }
+            catch (TimeoutException)
+            {
+                // S1: the system is blocking this open. Every other session's path requests would wait behind it.
+            }
+
+            _holdsGate = false;
+            NamespaceGate.Release();
+            FileStream stream = await opening.WaitAsync(_options.OpenTimeout - held, cancellationToken).ConfigureAwait(false);
+
+            // If this is cancelled, the catch below disposes the stream, which the open has finished making.
+            await NamespaceGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            _holdsGate = true;
+            return stream;
         }
         catch (Exception ex) when (ex is TimeoutException or OperationCanceledException)
         {
@@ -644,6 +706,8 @@ internal sealed partial class SftpServerSession : IAsyncDisposable
             BuildStatus(id, SftpStatusCode.Ok);
             return;
         }
+
+        RefuseSpecialFile(resolved);
 
         // Through a handle, so the check below covers the file that's changed. Windows needs write access for times.
         FileStreamOptions open = new()
