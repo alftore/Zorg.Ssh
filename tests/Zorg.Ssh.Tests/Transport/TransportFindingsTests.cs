@@ -1,4 +1,5 @@
 using System;
+using System.Buffers.Binary;
 using System.Diagnostics;
 using System.IO;
 using System.Threading;
@@ -166,6 +167,78 @@ public sealed class TransportFindingsTests
             client.SendIgnoringKexForTests([MessageNumber.KexEcdhInit, 1, 2, 3]);
             client.SendIgnoringKexForTests([MessageNumber.KexEcdhInit, 1, 2, 3]);
             await Assert.ThrowsAnyAsync<SshProtocolException>(async () => await ReceiveUntilFailureAsync(server));
+        }
+    }
+
+    // OpenSSH CVE-2025-26466: ping@openssh.com (message 192) before auth or during a rekey must not be answered
+    // with a PONG, or queue replies for ever. Zorg.Ssh doesn't implement it, and the policy treats it as unknown.
+    [Theory]
+    [InlineData((int)TransportPhase.AwaitService)]
+    [InlineData((int)TransportPhase.Auth)]
+    [InlineData((int)TransportPhase.Connected)]
+    public async Task CVE_2025_26466_a_PING_is_answered_only_with_UNIMPLEMENTED_never_a_PONG(int phaseValue)
+    {
+        (SshTransport client, SshTransport server) = await ConnectAsync(ClientOptions(), ServerOptions(), Ct);
+        await using (client)
+        await using (server)
+        {
+            server.SetPhase((TransportPhase)phaseValue);
+            client.SetPhase(TransportPhase.Connected);
+            TaskCompletionSource<uint> rejected = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            client.UnimplementedObserver = r => rejected.TrySetResult(r);
+            using CancellationTokenSource stop = CancellationTokenSource.CreateLinkedTokenSource(Ct);
+            Task serverSide = DrainAsync(server, stop.Token);
+            Task clientSide = DrainAsync(client, stop.Token);
+
+            await client.SendAsync([192, 0, 0, 0, 0], Ct);
+            await rejected.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+
+            // A PONG (193) would end the client's connection, because nothing allows it.
+            await client.SendAsync([MessageNumber.Ignore, 0, 0, 0, 0], Ct);
+            await Task.Delay(100, Ct);
+            Assert.False(serverSide.IsCompleted);
+            Assert.False(clientSide.IsCompleted);
+            await stop.CancelAsync();
+            await Task.WhenAll(serverSide, clientSide);
+        }
+    }
+
+    [Theory]
+    [InlineData((int)TransportPhase.InitialKex)]
+    [InlineData((int)TransportPhase.Connected)]
+    public void CVE_2025_26466_a_PING_in_a_key_exchange_ends_the_connection(int phaseValue)
+    {
+        foreach (SshRole role in new[] { SshRole.Client, SshRole.Server })
+        {
+            MessageContext context = new(role, (TransportPhase)phaseValue, PeerKexRunning: true, StrictKex: true,
+                FirstPacketAfterNewKeys: false, SecondExtInfoAllowed: false);
+            Assert.Equal(MessageDecision.Disconnect, MessagePolicy.Evaluate(context, 192));
+            Assert.Equal(MessageDecision.Disconnect, MessagePolicy.Evaluate(context, 193));
+        }
+    }
+
+    // libssh2 CVE-2026-55199: an EXT_INFO parser looping on a count the packet can't hold.
+    [Theory]
+    [InlineData(0xFFFFFFFFu, 0)]
+    [InlineData(65u, 0)]
+    [InlineData(2u, 0)]
+    [InlineData(1u, 1)]
+    public async Task CVE_2026_55199_an_EXT_INFO_count_the_packet_cant_hold_ends_the_connection_quickly(uint count, int bodyBytes)
+    {
+        (SshTransport client, SshTransport server) = await ConnectAsync(ClientOptions(), ServerOptions(), Ct);
+        await using (client)
+        await using (server)
+        {
+            // The server's own EXT_INFO comes first. A client in the auth phase accepts one more.
+            client.SetPhase(TransportPhase.Auth);
+            byte[] hostile = new byte[5 + bodyBytes];
+            hostile[0] = MessageNumber.ExtInfo;
+            BinaryPrimitives.WriteUInt32BigEndian(hostile.AsSpan(1), count);
+            await server.SendAsync(hostile, Ct);
+
+            Stopwatch watch = Stopwatch.StartNew();
+            await Assert.ThrowsAsync<SshProtocolException>(async () => await ReceiveUntilFailureAsync(client));
+            Assert.True(watch.ElapsedMilliseconds < 5000);
         }
     }
 }
