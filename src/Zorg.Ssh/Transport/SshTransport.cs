@@ -78,6 +78,8 @@ internal sealed partial class SshTransport : IAsyncDisposable
     private ITimer? _deadline;
     private int _shutdownStarted;
     private int _receiving;
+    private CancellationTokenSource? _receiveLinked;
+    private CancellationToken _receiveLinkedFor;
 
     private SshTransport(Stream stream, TransportOptions options)
     {
@@ -321,6 +323,7 @@ internal sealed partial class SshTransport : IAsyncDisposable
                 ReleaseKexState();
             }
 
+            _receiveLinked?.Dispose();
             _closing.Dispose();
         }
     }
@@ -440,6 +443,23 @@ internal sealed partial class SshTransport : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// Gets a token that fires with <paramref name="cancellationToken"/> or when the transport closes. The linked source
+    /// is kept for as long as callers pass the same token, which the connection's receive loop does for every packet,
+    /// instead of one being made and disposed per packet. Only one receive runs at a time, so nothing else uses it.
+    /// </summary>
+    private CancellationToken LinkedReceiveToken(CancellationToken cancellationToken)
+    {
+        if (_receiveLinked is null || _receiveLinkedFor != cancellationToken)
+        {
+            _receiveLinked?.Dispose();
+            _receiveLinked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _closing.Token);
+            _receiveLinkedFor = cancellationToken;
+        }
+
+        return _receiveLinked.Token;
+    }
+
     /// <summary>Reads one packet and handles it. Returns a payload only for the layers above.</summary>
     private async ValueTask<ReadOnlyMemory<byte>?> ReceiveOneAsync(CancellationToken cancellationToken)
     {
@@ -447,11 +467,8 @@ internal sealed partial class SshTransport : IAsyncDisposable
         Interlocked.Increment(ref _receiving);
         try
         {
-            // A token that can't fire needs no linked source, which saves an allocation per packet.
-            using CancellationTokenSource? linked = cancellationToken.CanBeCanceled
-                ? CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _closing.Token)
-                : null;
-            CancellationToken token = linked?.Token ?? _closing.Token;
+            // A token that can't fire needs no linked source, and the connection passes the same token for every packet.
+            CancellationToken token = cancellationToken.CanBeCanceled ? LinkedReceiveToken(cancellationToken) : _closing.Token;
             uint sequence = _receiveSequence;
             _lastReceivedSequence = sequence;
             ReadOnlyMemory<byte> payload = await _reader.ReadPacketAsync(_receiveCipher, sequence, token).ConfigureAwait(false);
