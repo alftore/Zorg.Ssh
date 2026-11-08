@@ -170,7 +170,7 @@ await sftp.SetAttributesAsync(
     cancellationToken);
 ```
 
-A property is null if the server didn't send it, and `SetAttributesAsync` changes only the properties you set. Set `Uid` with `Gid`, and `ModifiedTime` with `AccessTime`, because the protocol sends them in pairs. Times have a resolution of one second.
+A property is null if the server didn't send it, and `SetAttributesAsync` changes only the properties you set. Set `Uid` with `Gid`, and `ModifiedTime` with `AccessTime`, because the protocol sends them in pairs. Times have a resolution of one second. Attribute flags that SFTP version 3 doesn't define are ignored, as OpenSSH ignores them. If a server also sends a field for one, the listing it's in can't be read, and the session ends with `SshProtocolException`.
 
 `GetAttributesAsync` follows symbolic links. `GetLinkAttributesAsync` reports on a link itself.
 

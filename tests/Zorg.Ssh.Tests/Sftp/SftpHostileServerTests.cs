@@ -26,6 +26,32 @@ public class SftpHostileServerTests
     private static Task AssertEndedAsync(SftpClient client) =>
         Assert.ThrowsAnyAsync<SshException>(() => client.GetFullPathAsync(".", Ct));
 
+    [Fact]
+    public void S8_undefined_attribute_flags_are_ignored_and_a_field_behind_one_can_only_end_the_session()
+    {
+        // Finding S8: the decision, as OpenSSH's decode_attrib makes it. A bit version 3 doesn't define (0x10 here, a
+        // version 4 habit) is ignored. With no field behind it, a lone ATTRS and a listing both parse.
+        byte[] bitOnly = new Packet().U32(0x14).U32(0x81A4).ToBytes();
+        Assert.True(Parse(SftpMessage.Attrs, bitOnly, SftpParser.ReadAttributes).IsRegularFile);
+        byte[] listing = new Packet().U32(2).Text("first").Text("long").Raw(bitOnly).Entry("second").ToBytes();
+        Assert.Equal(["first", "second"], Parse(SftpMessage.Name, listing, r => SftpParser.ReadNames(r, 100)).Select(e => e.Name));
+
+        // With a field behind it, a lone ATTRS has trailing bytes, which are ignored; a listing reads them as the
+        // next entry and fails with SshProtocolException, which ends the session. Never another exception type.
+        byte[] withField = new Packet().U32(0x14).U32(0x81A4).U64(0x1122334455667788).ToBytes();
+        Assert.True(Parse(SftpMessage.Attrs, withField, SftpParser.ReadAttributes).IsRegularFile);
+        byte[] broken = new Packet().U32(2).Text("first").Text("long").Raw(withField).Entry("second").ToBytes();
+        Assert.Throws<SshProtocolException>(() => Parse(SftpMessage.Name, broken, r => SftpParser.ReadNames(r, 100)));
+    }
+
+    private static T Parse<T>(byte type, byte[] body, Func<SftpResponse, T> read)
+    {
+        byte[] buffer = System.Buffers.ArrayPool<byte>.Shared.Rent(body.Length);
+        body.CopyTo(buffer, 0);
+        using SftpResponse response = new(type, buffer, body.Length);
+        return read(response);
+    }
+
     // libssh CVE-2026-59848: a response must match a request that's outstanding.
     [Fact(Timeout = Limit)]
     public async Task Libssh_CVE_2026_59848_a_response_with_an_unknown_id_ends_the_session()

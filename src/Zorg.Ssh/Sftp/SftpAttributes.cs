@@ -127,6 +127,14 @@ public sealed record SftpAttributes
     }
 
     /// <summary>Reads an attribute block. Extended pairs are skipped, and each costs at least 8 bytes of a bounded packet.</summary>
+    /// <remarks>
+    /// Flag bits version 3 doesn't define are ignored, as OpenSSH's <c>decode_attrib</c> ignores them on both sides
+    /// (finding S8). A peer of a later version can leak such a bit into a version 3 session with no field behind it,
+    /// and refusing it would break that peer for nothing. If a field does follow, version 3 can't say how long it is,
+    /// so it's read as whatever comes next: inside a NAME that's the next entry, which then fails the bounds checks
+    /// with <see cref="SshProtocolException"/> and ends the session; after a lone ATTRS or a request's attributes it's
+    /// trailing bytes, which are ignored, as OpenSSH ignores them. Either way the reader stays inside the packet.
+    /// </remarks>
     internal static SftpAttributes Read(ref SshReader reader)
     {
         uint flags = reader.ReadUInt32();

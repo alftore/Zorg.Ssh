@@ -948,6 +948,18 @@ public sealed class SftpServerProtocolTests : IDisposable
         Assert.DoesNotContain("client-secret-name", entry.Message, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task S8_the_server_ignores_attribute_flags_version_3_doesnt_define()
+    {
+        // Finding S8: as OpenSSH's sftp-server, a bit with no meaning in version 3 is ignored, not refused.
+        await using SftpServerHarness client = await StartAsync(Options);
+        SftpServerReply open = await client.RequestAsync(SftpMessage.Open, Path("new.txt").U32(OpenWrite | OpenCreate).U32(0x10));
+        Assert.Equal(SftpMessage.Handle, open.Type);
+        Assert.Equal(Ok, (await client.RequestAsync(SftpMessage.MkDir, Path("dir").U32(0x40))).Status);
+        Assert.True(File.Exists(_sandbox.InRoot("new.txt")));
+        Assert.True(Directory.Exists(_sandbox.InRoot("dir")));
+    }
+
     private void MakeFifo(string name)
     {
         using System.Diagnostics.Process mkfifo = System.Diagnostics.Process.Start("mkfifo", _sandbox.InRoot(name));
