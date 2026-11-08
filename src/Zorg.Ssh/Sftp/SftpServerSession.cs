@@ -144,8 +144,16 @@ internal sealed partial class SftpServerSession : IAsyncDisposable
     [LoggerMessage(Level = LogLevel.Debug, Message = "SFTP request type {RequestType} refused with status {Status}")]
     private static partial void LogRefused(ILogger logger, byte requestType, SftpStatusCode status);
 
-    [LoggerMessage(Level = LogLevel.Error, Message = "SFTP request type {RequestType} failed unexpectedly")]
-    private static partial void LogUnexpected(ILogger logger, byte requestType, Exception exception);
+    [LoggerMessage(Level = LogLevel.Error, Message = "SFTP request type {RequestType} failed unexpectedly with {ExceptionType}{StackTrace}")]
+    private static partial void LogUnexpected(ILogger logger, byte requestType, string exceptionType, string? stackTrace);
+
+    /// <summary>
+    /// Logs a failure no typed catch expected, by its type and stack trace only (finding S7). The exception itself
+    /// isn't attached: a .NET file-system exception's message names the real path, whose tail is what the client
+    /// sent, and <see cref="SftpServerOptions.LoggerFactory"/> promises that paths from the client aren't logged.
+    /// </summary>
+    internal static void LogUnexpectedFailure(ILogger logger, byte requestType, Exception exception) =>
+        LogUnexpected(logger, requestType, exception.GetType().FullName ?? exception.GetType().Name, Environment.NewLine + exception.StackTrace);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "SFTP open refused: /proc/self/fd can't be read, so what was opened can't be checked. Mount /proc for the server process.")]
     private static partial void LogIdentityUnavailable(ILogger logger);
@@ -314,7 +322,7 @@ internal sealed partial class SftpServerSession : IAsyncDisposable
         catch (Exception ex) when (ex is not (OperationCanceledException or TimeoutException))
 #pragma warning restore CA1031
         {
-            LogUnexpected(_logger, type, ex);
+            LogUnexpectedFailure(_logger, type, ex);
             BuildStatus(id, SftpStatusCode.Failure);
         }
     }

@@ -921,6 +921,33 @@ public sealed class SftpServerProtocolTests : IDisposable
         Assert.Equal("f", await File.ReadAllTextAsync(_sandbox.InRoot("file"), Ct));
     }
 
+    [Fact]
+    public void S7_an_unexpected_failure_is_logged_without_its_message()
+    {
+        // Finding S7: the catch-all attached the raw exception, whose message can carry the real path and so the
+        // client's components, although LoggerFactory says paths the client sent aren't logged.
+        SftpRecordingLoggerFactory log = new();
+        Microsoft.Extensions.Logging.ILogger logger = log.CreateLogger("test");
+        InvalidOperationException thrown;
+        try
+        {
+            throw new InvalidOperationException($"Couldn't do it to '{_sandbox.InRoot("client-secret-name.txt")}'.");
+        }
+        catch (InvalidOperationException ex)
+        {
+            thrown = ex;
+        }
+
+        SftpServerSession.LogUnexpectedFailure(logger, SftpMessage.Open, thrown);
+
+        var entry = Assert.Single(log.Entries);
+        Assert.Equal(Microsoft.Extensions.Logging.LogLevel.Error, entry.Level);
+        Assert.Null(entry.Exception);
+        Assert.Contains("System.InvalidOperationException", entry.Message, StringComparison.Ordinal);
+        Assert.Contains(nameof(S7_an_unexpected_failure_is_logged_without_its_message), entry.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("client-secret-name", entry.Message, StringComparison.Ordinal);
+    }
+
     private void MakeFifo(string name)
     {
         using System.Diagnostics.Process mkfifo = System.Diagnostics.Process.Start("mkfifo", _sandbox.InRoot(name));

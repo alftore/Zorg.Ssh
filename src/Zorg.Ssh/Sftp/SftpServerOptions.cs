@@ -73,7 +73,10 @@ public sealed class SftpServerOptions
     /// </example>
     public int MaxListingBatch { get; init; } = 100;
 
-    /// <summary>Gets the logger factory. Paths the client sent aren't logged.</summary>
+    /// <summary>
+    /// Gets the logger factory. Paths the client sent aren't logged: a failure is logged with its status, or for an
+    /// unexpected one its exception type and stack trace, never an exception message, which can name a path.
+    /// </summary>
     /// <example>
     /// <code>
     /// SftpServerOptions options = new() { RootDirectory = root, LoggerFactory = loggerFactory };
