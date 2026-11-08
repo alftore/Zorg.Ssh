@@ -437,7 +437,8 @@ internal sealed partial class SshTransport : IAsyncDisposable
             byte[] peerIdentification = await _reader
                 .ReadIdentificationAsync(allowPreamble: _options.Role == SshRole.Client, linked.Token)
                 .ConfigureAwait(false);
-            PeerIdentification = Encoding.ASCII.GetString(peerIdentification);
+            // The comments field can hold any byte above 0x7F; what we show is cleaned.
+            PeerIdentification = PeerText.Clean(Encoding.ASCII.GetString(peerIdentification), PacketReader.MaxIdentificationLine);
             TransportLog.PeerIdentified(_options.Logger, PeerIdentification);
             InitialiseKex(ourIdentification, peerIdentification);
         }

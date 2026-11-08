@@ -159,11 +159,20 @@ internal sealed class PacketReader : IDisposable
             throw new SshProtocolException("The peer's identification line is too long.");
         }
 
+        // RFC 4253 4.2: protoversion and softwareversion are printable US-ASCII. The comments after the first
+        // space are not constrained, so bytes of 0x80 and up are fine there (OpenSSH accepts them). Controls
+        // and DEL are refused everywhere. The line goes into the exchange hash exactly as received.
+        bool inComments = false;
         foreach (byte b in line)
         {
-            if (b is < 0x20 or >= 0x7F)
+            if (b is < 0x20 or 0x7F || (b >= 0x80 && !inComments))
             {
                 throw new SshProtocolException("The peer's identification line holds invalid characters.");
+            }
+
+            if (b == (byte)' ')
+            {
+                inComments = true;
             }
         }
 

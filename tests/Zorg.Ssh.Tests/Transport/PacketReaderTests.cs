@@ -68,6 +68,48 @@ public class PacketReaderTests
         await Assert.ThrowsAsync<SshProtocolException>(async () => await reader.ReadIdentificationAsync(allowPreamble: true, Ct));
     }
 
+    // T4: RFC 4253 4.2 limits protoversion and softwareversion to printable US-ASCII. The comments after the first space are free.
+    [Theory]
+    [InlineData("SSH-2.0-Vendor_1.0 © 2026 Abändern\r\n")]
+    [InlineData("SSH-2.0-Vendor_1.0 ÿ\r\n")]
+    public async Task T4_non_ASCII_bytes_in_the_comments_field_are_accepted_and_kept_exactly(string wire)
+    {
+        byte[] bytes = Encoding.Latin1.GetBytes(wire);
+        using PacketReader reader = Reader(bytes);
+        byte[] line = await reader.ReadIdentificationAsync(allowPreamble: false, Ct);
+        Assert.Equal(bytes[..^2], line);
+    }
+
+    [Fact]
+    public async Task T4_UTF8_in_the_comments_field_is_accepted()
+    {
+        byte[] bytes = Encoding.UTF8.GetBytes("SSH-2.0-Vendor_1.0 © 厂商\r\n");
+        using PacketReader reader = Reader(bytes);
+        byte[] line = await reader.ReadIdentificationAsync(allowPreamble: false, Ct);
+        Assert.Equal(bytes[..^2], line);
+    }
+
+    [Theory]
+    [InlineData("SSH-2.0-Vendär 1.0\r\n")]
+    [InlineData("SSH-2.0-Vendor_1.0© comment\r\n")]
+    [InlineData("SSH-2.0-Vendor_1.0 comment\u007F\r\n")]
+    [InlineData("SSH-2.0-Vendor_1.0 com\u0001ment\r\n")]
+    [InlineData("SSH-2.0-Vendor_1.0 com\0ment\r\n")]
+    [InlineData("SSH-2.0-Vendor_1.0 © com\rment\r\n")]
+    public async Task T4_non_ASCII_outside_the_comments_and_controls_anywhere_are_rejected(string wire)
+    {
+        using PacketReader reader = Reader(Encoding.Latin1.GetBytes(wire));
+        await Assert.ThrowsAsync<SshProtocolException>(async () => await reader.ReadIdentificationAsync(allowPreamble: false, Ct));
+    }
+
+    [Fact]
+    public async Task T4_the_length_limit_still_holds_for_comments_with_high_bytes()
+    {
+        byte[] bytes = Encoding.Latin1.GetBytes("SSH-2.0-x " + new string('ä', 260) + "\r\n");
+        using PacketReader reader = Reader(bytes);
+        await Assert.ThrowsAsync<SshProtocolException>(async () => await reader.ReadIdentificationAsync(allowPreamble: false, Ct));
+    }
+
     // SSH.NET 2026 advisory: an endless banner must not grow memory without limit.
     [Fact]
     public async Task An_endless_line_without_a_line_feed_is_capped()
