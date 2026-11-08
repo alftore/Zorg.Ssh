@@ -382,7 +382,7 @@ await process.WaitForExitAsync(cancellationToken);
 Console.WriteLine($"Exit code {process.ExitCode}");
 ```
 
-Read `StandardOutput` and `StandardError` together. They share a flow-control window, so if you read only one, a server writing to the other stalls when the window fills.
+Read `StandardOutput` and `StandardError` together. They share a flow-control window, so if you read only one, a server writing to the other stalls when the window fills. If you don't want one of them, dispose it: what it held and anything that arrives for it later is thrown away and credited, so the other keeps flowing.
 
 Disposing `StandardInput` doesn't wait. EOF goes out behind everything already written, including a write still running, and it reaches the server when the connection has room. A write that starts after the dispose fails.
 

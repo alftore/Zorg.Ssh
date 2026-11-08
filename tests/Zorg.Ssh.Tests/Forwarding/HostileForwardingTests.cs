@@ -631,7 +631,7 @@ public sealed class HostileForwardingTests
             }),
             Ct);
 
-        // The connection layer ends it, so the wire reason is "by application", with the text "closed". Nothing
+        // The connection layer ends it as a protocol error (C3: it used to say "by application", with the text "closed"). Nothing
         // for the open comes first: it is neither confirmed nor refused, and no data reaches the handler's channel.
         List<byte> seen = [];
         SshDisconnectedException disconnect = await Assert.ThrowsAsync<SshDisconnectedException>(async () =>
@@ -642,8 +642,8 @@ public sealed class HostileForwardingTests
                 seen.Add(reply.Span[0]);
             }
         });
-        Assert.Equal(SshDisconnectReason.ByApplication, disconnect.Reason);
-        Assert.Equal("closed", disconnect.Description);
+        Assert.Equal(SshDisconnectReason.ProtocolError, disconnect.Reason);
+        Assert.Equal("protocol error", disconnect.Description);
         Assert.DoesNotContain(MessageNumber.ChannelOpenConfirmation, seen);
         Assert.DoesNotContain(MessageNumber.ChannelOpenFailure, seen);
         Assert.DoesNotContain(MessageNumber.ChannelData, seen);

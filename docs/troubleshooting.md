@@ -168,6 +168,7 @@ The peer broke the SSH protocol, so the connection can't continue.
 - "Check that the port runs SSH", or a bad identification line: you've probably reached something other than an SSH server.
 - "Failed authentication" on a packet: the data was corrupted or tampered with. Reconnect, and check the network path if it repeats.
 - "An invalid Diffie-Hellman public value": the peer's `diffie-hellman-*` value was out of range (it must be between 1 and p - 1, exclusive) or wider than the group. A real implementation never sends one, so check what you're connected to.
+- "More channel requests than the server could handle in time", on a server: a client sent over 1 MiB of session requests before the server read them. A real client sends a few hundred at most, so check what is connecting.
 - Other messages: if the peer is a real server, this may be a bug in either side. Report it with the server's version string, and a log from `LoggerFactory` if you can. See [SECURITY.md](../SECURITY.md) if it looks exploitable.
 
 ## SshException

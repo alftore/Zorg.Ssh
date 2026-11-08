@@ -270,6 +270,12 @@ internal sealed partial class SshTransport : IAsyncDisposable
     /// </summary>
     public void Abort(SshConnectionException failure) => Fail(failure, null);
 
+    /// <summary>
+    /// Ends the connection over a protocol error found above the transport, in a message it delivered. The peer is told
+    /// PROTOCOL_ERROR, as for one found here, rather than the polite close that <see cref="CloseAsync"/> sends.
+    /// </summary>
+    public void FailWithProtocolError(SshException failure) => Fail(failure, DisconnectReason.ProtocolError);
+
     /// <summary>Replies UNIMPLEMENTED to the packet just returned by <see cref="ReceiveAsync"/>.</summary>
     public void SendUnimplementedForLastPacket() => SendUnimplemented(_lastReceivedSequence);
 

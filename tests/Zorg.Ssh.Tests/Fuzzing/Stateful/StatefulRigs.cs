@@ -707,9 +707,10 @@ internal sealed class ServerRig : IDisposable
                 broken.Add($"channel {channel.LocalId} has a receive window of {window}, outside 0..{SshChannel.DefaultWindow}");
             }
 
-            if (channel.QueuedRequestCount > 16)
+            long queued = channel.QueuedRequestBytes;
+            if (queued is < 0 or > SshChannel.MaxQueuedRequestBytes)
             {
-                broken.Add($"channel {channel.LocalId} queues {channel.QueuedRequestCount} requests, over the limit of 16");
+                broken.Add($"channel {channel.LocalId} queues {channel.QueuedRequestCount} requests costing {queued} bytes, outside 0..{SshChannel.MaxQueuedRequestBytes}");
             }
         }
 

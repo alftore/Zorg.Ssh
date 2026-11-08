@@ -58,6 +58,57 @@ public sealed class ConnectionEndTests
         }
     }
 
+    // C3: a protocol error in a connection-layer message ended the connection through the polite close, so the peer was told
+    // DISCONNECT_BY_APPLICATION, and the error was recorded only once the connection ended, which a dispose could slip ahead
+    // of and report a healthy close. It's now recorded first, and the peer is told PROTOCOL_ERROR.
+    [Fact]
+    public async Task A_message_for_a_channel_that_isnt_open_disconnects_with_protocol_error()
+    {
+        await using ChannelRig rig = await ChannelRig.StartAsync(Ct);
+        SshChannel channel = await rig.OpenAsync(1);
+
+        await rig.SendDataAsync(channel.LocalId + 500, new byte[1]);
+
+        await AssertProtocolErrorAsync(rig);
+    }
+
+    // C3, with the example from the finding: data past the window.
+    [Fact]
+    public async Task Data_past_the_window_disconnects_with_protocol_error()
+    {
+        await using ChannelRig rig = await ChannelRig.StartAsync(Ct);
+        SshChannel channel = await rig.OpenAsync(1);
+        int packets = (int)(SshChannel.DefaultWindow / SshChannel.MaxPacket) + 1;
+
+        try
+        {
+            for (int i = 0; i < packets; i++)
+            {
+                await rig.SendDataAsync(channel.LocalId, new byte[SshChannel.MaxPacket]);
+            }
+        }
+        catch (SshException)
+        {
+            // The connection ended under the last sends.
+        }
+
+        await AssertProtocolErrorAsync(rig);
+    }
+
+    private static async Task AssertProtocolErrorAsync(ChannelRig rig)
+    {
+        SshException? reason = await rig.Connection.CloseReason.WaitAsync(Limit, Ct);
+        Assert.IsType<SshProtocolException>(reason);
+
+        // Dispose after the failure doesn't turn it into a close of this side's own.
+        await rig.Connection.DisposeAsync();
+        Assert.IsType<SshProtocolException>(await rig.Connection.CloseReason);
+
+        Exception? peer = await rig.PeerEnded.WaitAsync(Limit, Ct);
+        SshDisconnectedException disconnected = Assert.IsType<SshDisconnectedException>(peer);
+        Assert.Equal(SshDisconnectReason.ProtocolError, disconnected.Reason);
+    }
+
     private static async Task UntilAsync(Func<bool> condition)
     {
         using CancellationTokenSource limit = CancellationTokenSource.CreateLinkedTokenSource(Ct);

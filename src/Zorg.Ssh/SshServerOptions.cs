@@ -438,6 +438,9 @@ public sealed record SshServerOptions
     /// <summary>Gets a hook that sees each connection once it is authenticated and running. For tests that count what a connection holds; it changes nothing.</summary>
     internal Action<Connection.SshConnection>? ConnectionStarted { get; init; }
 
+    /// <summary>Gets what accepts a connection in place of the listener. For tests that make accepting fail; the listener still binds.</summary>
+    internal Func<CancellationToken, ValueTask<System.Net.Sockets.Socket>>? AcceptOverride { get; init; }
+
     /// <summary>Gets the failed login attempts allowed per connection. The default is 6.</summary>
     public int MaxAuthAttempts { get; init; } = 6;
 

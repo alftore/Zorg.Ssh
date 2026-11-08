@@ -6,6 +6,7 @@ using System.Threading;
 using System.Threading.Channels;
 using System.Threading.Tasks;
 using Xunit;
+using Zorg.Ssh.Auth;
 using Zorg.Ssh.Connection;
 using Zorg.Ssh.Protocol;
 using Zorg.Ssh.Tests.Transport;
@@ -140,6 +141,7 @@ internal sealed class ChannelRig : IAsyncDisposable
     private readonly SshTransport _peer;
     private readonly ConcurrentDictionary<uint, Channel<byte>> _byChannel = new();
     private readonly Channel<byte[]> _other = Channel.CreateUnbounded<byte[]>();
+    private readonly TaskCompletionSource<Exception?> _peerEnded = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly CancellationToken _token;
     private readonly Task _reading;
     private uint _nextBarrier = 100_000;
@@ -154,6 +156,9 @@ internal sealed class ChannelRig : IAsyncDisposable
     }
 
     public SshConnection Connection { get; }
+
+    /// <summary>Gets a task that completes with what ended the peer's reading: the DISCONNECT it received, for one.</summary>
+    public Task<Exception?> PeerEnded => _peerEnded.Task;
 
     public static async Task<ChannelRig> StartAsync(CancellationToken cancellationToken)
     {
@@ -182,9 +187,9 @@ internal sealed class ChannelRig : IAsyncDisposable
     }
 
     /// <summary>Opens a channel the peer knows as <paramref name="remoteId"/>.</summary>
-    public async Task<SshChannel> OpenAsync(uint remoteId, uint window = 1 << 24)
+    public async Task<SshChannel> OpenAsync(uint remoteId, uint window = 1 << 24, string type = "session")
     {
-        Task<SshChannel> open = Connection.OpenChannelAsync("session", _token);
+        Task<SshChannel> open = Connection.OpenChannelAsync(type, _token);
         byte[] request = await _other.Reader.ReadAsync(_token).AsTask().WaitAsync(Limit, _token);
         SshReader reader = new(request);
         reader.ReadByte();
@@ -238,6 +243,35 @@ internal sealed class ChannelRig : IAsyncDisposable
             {
                 w.Byte(number);
                 w.UInt32(localId);
+            }),
+            _token).AsTask();
+
+    /// <summary>Sends channel data, or extended data of type 1, to a channel.</summary>
+    public Task SendDataAsync(uint localId, byte[] data, bool extended = false) =>
+        _peer.SendAsync(
+            Message(w =>
+            {
+                w.Byte(extended ? MessageNumber.ChannelExtendedData : MessageNumber.ChannelData);
+                w.UInt32(localId);
+                if (extended)
+                {
+                    w.UInt32(1);
+                }
+
+                w.Bytes(data);
+            }),
+            _token).AsTask();
+
+    /// <summary>Sends a channel request, with whatever <paramref name="extra"/> writes after the want-reply flag.</summary>
+    public Task SendRequestAsync(uint localId, string type, bool wantReply, Action<SshRequestWriter>? extra = null) =>
+        _peer.SendAsync(
+            Message(w =>
+            {
+                w.Byte(MessageNumber.ChannelRequest);
+                w.UInt32(localId);
+                w.String(type);
+                w.Bool(wantReply);
+                extra?.Invoke(w);
             }),
             _token).AsTask();
 
@@ -325,6 +359,9 @@ internal sealed class ChannelRig : IAsyncDisposable
         catch (Exception ex) when (ex is SshException or OperationCanceledException)
         {
             // The connection has ended, and that's the end of this loop.
+            _peerEnded.TrySetResult(ex);
         }
+
+        _peerEnded.TrySetResult(null);
     }
 }

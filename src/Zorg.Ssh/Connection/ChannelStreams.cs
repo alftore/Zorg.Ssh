@@ -8,8 +8,11 @@ using System.Threading.Tasks;
 
 namespace Zorg.Ssh.Connection;
 
-/// <summary>Reads what a channel received. Reading is what grows the window, so a slow reader slows the peer.</summary>
-internal sealed class ChannelReadStream(SshChannel channel, PipeReader reader) : Stream
+/// <summary>
+/// Reads what a channel received. Reading is what grows the window, so a slow reader slows the peer. Disposing it credits
+/// what it held unread, and the channel credits whatever arrives for it after that.
+/// </summary>
+internal sealed class ChannelReadStream(SshChannel channel, PipeReader reader, bool extended) : Stream
 {
     private readonly Lock _gate = new();
     private bool _disposed;
@@ -53,7 +56,7 @@ internal sealed class ChannelReadStream(SshChannel channel, PipeReader reader) :
             reader.AdvanceTo(available.GetPosition(count));
             if (count != 0)
             {
-                channel.OnConsumed(count);
+                channel.OnRead(count, extended);
             }
 
             return count;
@@ -70,6 +73,7 @@ internal sealed class ChannelReadStream(SshChannel channel, PipeReader reader) :
             if (complete)
             {
                 await reader.CompleteAsync().ConfigureAwait(false);
+                channel.OnReaderCompleted(extended);
             }
         }
     }
@@ -113,6 +117,7 @@ internal sealed class ChannelReadStream(SshChannel channel, PipeReader reader) :
             if (complete)
             {
                 reader.Complete();
+                channel.OnReaderCompleted(extended);
             }
         }
 

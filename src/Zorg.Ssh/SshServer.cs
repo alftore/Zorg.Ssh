@@ -44,6 +44,8 @@ public sealed partial class SshServer : IAsyncDisposable
     private const int MaxEnvironmentName = 256;
     private const int MaxEnvironmentValue = 8 * 1024;
     private const int MaxForwardHost = 255;
+    private const int FirstAcceptRetryMilliseconds = 10;
+    private const int LastAcceptRetryMilliseconds = 1000;
 
     private readonly SshServerOptions _options;
     private readonly ILogger _logger;
@@ -235,6 +237,9 @@ public sealed partial class SshServer : IAsyncDisposable
         _listener?.Dispose();
     }
 
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Accepting connections keeps failing, so the server retries after a growing delay of up to a second")]
+    private static partial void LogAcceptFailing(ILogger logger, Exception exception);
+
     [LoggerMessage(Level = LogLevel.Warning, Message = "Refused a connection: limit reached")]
     private static partial void LogLimitReached(ILogger logger);
 
@@ -307,14 +312,26 @@ public sealed partial class SshServer : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// How long the accept loop waits after this many accepts in a row have failed: 10 ms, doubling up to a second. One
+    /// failure is usually a connection that died in the queue, and costs a moment. One that lasts, such as running out of
+    /// file descriptors, fails every accept at once, and retrying straight away would spin a core and starve the thread
+    /// pool the connections run on (C4).
+    /// </summary>
+    internal static TimeSpan AcceptRetryDelay(int failures) => TimeSpan.FromMilliseconds(
+        Math.Min(LastAcceptRetryMilliseconds, FirstAcceptRetryMilliseconds << Math.Clamp(failures - 1, 0, 7)));
+
     private async Task AcceptLoopAsync()
     {
+        int failures = 0;
         while (true)
         {
             Socket socket;
             try
             {
-                socket = await _listener!.AcceptSocketAsync(_stop.Token).ConfigureAwait(false);
+                socket = _options.AcceptOverride is { } accept
+                    ? await accept(_stop.Token).ConfigureAwait(false)
+                    : await _listener!.AcceptSocketAsync(_stop.Token).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is OperationCanceledException or ObjectDisposedException or SocketException or InvalidOperationException)
             {
@@ -323,8 +340,26 @@ public sealed partial class SshServer : IAsyncDisposable
                     return;
                 }
 
+                failures++;
+                if (failures == 2)
+                {
+                    // Once per run of failures, and not for the single one that a connection dying in the queue causes.
+                    LogAcceptFailing(_logger, ex);
+                }
+
+                try
+                {
+                    await Task.Delay(AcceptRetryDelay(failures), _stop.Token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    return;
+                }
+
                 continue;
             }
+
+            failures = 0;
 
             if (!TryConfigure(socket) || SourceEndPoint(socket) is not { } remote)
             {

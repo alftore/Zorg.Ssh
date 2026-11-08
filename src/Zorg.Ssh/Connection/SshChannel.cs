@@ -1,6 +1,7 @@
 using System;
 using System.Buffers;
 using System.Buffers.Binary;
+using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.IO.Pipelines;
 using System.Threading;
@@ -36,7 +37,15 @@ internal sealed class SshChannel : IAsyncDisposable
     /// <summary>The largest data packet we accept and send.</summary>
     public const uint MaxPacket = 32 * 1024;
 
-    private const int MaxQueuedRequests = 16;
+    /// <summary>
+    /// The most that peer requests waiting for the application may cost. A request costs its data plus a fixed overhead, so
+    /// this bounds the count too. A client sends pty-req, an env request per variable and shell without waiting for any reply,
+    /// and OpenSSH's <c>SendEnv *</c> can make that well over a hundred, so a limit by count small enough to matter cut off real
+    /// clients (C2). Requests are small, and this is half the window a channel grants for data.
+    /// </summary>
+    internal const int MaxQueuedRequestBytes = 1024 * 1024;
+
+    private const int RequestOverhead = 128;
     private const int MaxExitSignalLength = 64;
 
     private readonly SshConnection _connection;
@@ -50,12 +59,22 @@ internal sealed class SshChannel : IAsyncDisposable
     private readonly SemaphoreSlim _sendLock = new(1, 1);
 #pragma warning restore CA2213
     private readonly TaskCompletionSource _closed = new(TaskCreationOptions.RunContinuationsAsynchronously);
-    private readonly Channel<IncomingChannelRequest> _requests = System.Threading.Channels.Channel.CreateBounded<IncomingChannelRequest>(MaxQueuedRequests);
+    // Unbounded in type only: what it holds is limited by _queuedRequestBytes.
+    private readonly Channel<IncomingChannelRequest> _requests =
+        System.Threading.Channels.Channel.CreateUnbounded<IncomingChannelRequest>();
 
     private long _sendWindow;
     private uint _remoteMaxPacket;
     private long _receiveWindow = DefaultWindow;
     private uint _consumed;
+    private long _queuedRequestBytes;
+
+    // Bytes written to each output pipe and not yet read, and whether that pipe's reader has gone. When a reader goes, what it
+    // left is credited at once, and later data is credited as it arrives, so a dropped stream can't shrink the shared window (C1).
+    private long _outputBuffered;
+    private long _errorBuffered;
+    private bool _outputDropped;
+    private bool _errorDropped;
     private bool _creditQueued;
     private TaskCompletionSource? _windowWaiter;
     private TaskCompletionSource<bool>? _requestReply;
@@ -82,10 +101,11 @@ internal sealed class SshChannel : IAsyncDisposable
     {
         _connection = connection;
         LocalId = localId;
-        Output = new ChannelReadStream(this, _output.Reader);
-        ErrorOutput = new ChannelReadStream(this, _errorOutput.Reader);
+        Output = new ChannelReadStream(this, _output.Reader, extended: false);
+        ErrorOutput = new ChannelReadStream(this, _errorOutput.Reader, extended: true);
         Input = new ChannelWriteStream(this);
         ErrorInput = new ChannelWriteStream(this, extendedType: 1);
+        Requests = new RequestReader(this, _requests.Reader);
     }
 
     public uint LocalId { get; }
@@ -125,8 +145,20 @@ internal sealed class SshChannel : IAsyncDisposable
         }
     }
 
-    /// <summary>Gets how many peer requests wait for the application. For tests: it is limited to the size of the queue.</summary>
+    /// <summary>Gets how many peer requests wait for the application. For tests.</summary>
     internal int QueuedRequestCount => _requests.Reader.Count;
+
+    /// <summary>Gets what the peer requests waiting for the application cost. For tests: it stays within <see cref="MaxQueuedRequestBytes"/>.</summary>
+    internal long QueuedRequestBytes
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _queuedRequestBytes;
+            }
+        }
+    }
 
     /// <summary>Gets whether an EOF is still to be queued.</summary>
     public bool EofOwed
@@ -144,10 +176,13 @@ internal sealed class SshChannel : IAsyncDisposable
     public Exception? ConnectionFailure { get; private set; }
 
     /// <summary>Gets requests the peer sent, for a server. Clients handle theirs inside the channel.</summary>
-    public ChannelReader<IncomingChannelRequest> Requests => _requests.Reader;
+    public ChannelReader<IncomingChannelRequest> Requests { get; }
 
     /// <summary>Gets or sets whether requests go to <see cref="Requests"/>. Clients leave this off.</summary>
     public bool QueueIncomingRequests { get; set; }
+
+    /// <summary>Gets or sets whether this side opened the channel as a session, which is what the peer's exit-status is about.</summary>
+    public bool IsOwnSession { get; set; }
 
     /// <summary>Records what the peer told us when the channel opened.</summary>
     public void SetRemote(uint remoteId, uint window, uint maxPacket)
@@ -424,6 +459,7 @@ internal sealed class SshChannel : IAsyncDisposable
 
     public void OnData(ReadOnlySpan<byte> data, bool extended)
     {
+        bool dropped;
         lock (_gate)
         {
             if (_eofReceived || _closeReceived)
@@ -443,16 +479,84 @@ internal sealed class SshChannel : IAsyncDisposable
             {
                 return;
             }
+
+            dropped = extended ? _errorDropped : _outputDropped;
+            if (!dropped)
+            {
+                // Counted before the write, so a reader that goes between here and the write credits this too.
+                if (extended)
+                {
+                    _errorBuffered += data.Length;
+                }
+                else
+                {
+                    _outputBuffered += data.Length;
+                }
+            }
         }
 
-        // No pause threshold is set, so this flush completes at once. The window is what bounds the pipe.
-        PipeWriter writer = (extended ? _errorOutput : _output).Writer;
-        writer.Write(data);
-        ValueTask<FlushResult> flush = writer.FlushAsync(CancellationToken.None);
-        if (flush.IsCompletedSuccessfully && flush.Result.IsCompleted)
+        if (dropped)
         {
             // Nobody will read this stream any more, so the data is consumed as it arrives.
             OnConsumed(data.Length);
+            return;
+        }
+
+        // No pause threshold is set, so this flush completes at once. The window is what bounds the pipe. If the reader went after
+        // the count above, the pipe drops this data, and the reader's going has already credited it.
+        PipeWriter writer = (extended ? _errorOutput : _output).Writer;
+        writer.Write(data);
+        ValueTask<FlushResult> flush = writer.FlushAsync(CancellationToken.None);
+        if (!flush.IsCompleted)
+        {
+            _ = flush.AsTask();
+        }
+    }
+
+    /// <summary>Credits data the application read from one of the output streams.</summary>
+    public void OnRead(int bytes, bool extended)
+    {
+        lock (_gate)
+        {
+            if (extended)
+            {
+                _errorBuffered -= bytes;
+            }
+            else
+            {
+                _outputBuffered -= bytes;
+            }
+        }
+
+        OnConsumed(bytes);
+    }
+
+    /// <summary>
+    /// Records that an output stream's reader has completed its pipe, and credits what it left unread. Its stream calls this once,
+    /// after its last read has credited what it took, so nothing is credited twice (C1).
+    /// </summary>
+    public void OnReaderCompleted(bool extended)
+    {
+        long unread;
+        lock (_gate)
+        {
+            if (extended)
+            {
+                unread = _errorBuffered;
+                _errorBuffered = 0;
+                _errorDropped = true;
+            }
+            else
+            {
+                unread = _outputBuffered;
+                _outputBuffered = 0;
+                _outputDropped = true;
+            }
+        }
+
+        if (unread != 0)
+        {
+            OnConsumed((int)unread);
         }
     }
 
@@ -516,7 +620,10 @@ internal sealed class SshChannel : IAsyncDisposable
     /// <summary>Handles an incoming request. Returns true if the caller must send CHANNEL_FAILURE.</summary>
     public bool OnRequest(string type, bool wantReply, ReadOnlySpan<byte> data)
     {
-        if (type == "exit-status")
+        // RFC 4254 section 6.10: only a server sends these, about a session the client opened. Anywhere else they go the way of any
+        // other request this side doesn't handle, so a client can't set what a server's channel reports (C5).
+        bool exitAllowed = IsOwnSession && !QueueIncomingRequests;
+        if (type == "exit-status" && exitAllowed)
         {
             SshReader reader = new(data);
             uint status = reader.ReadUInt32();
@@ -524,7 +631,7 @@ internal sealed class SshChannel : IAsyncDisposable
             return false;
         }
 
-        if (type == "exit-signal")
+        if (type == "exit-signal" && exitAllowed)
         {
             SshReader reader = new(data);
             ExitSignal = PeerText.Clean(reader.ReadUtf8String(), MaxExitSignalLength);
@@ -533,9 +640,26 @@ internal sealed class SshChannel : IAsyncDisposable
 
         if (QueueIncomingRequests)
         {
+            long cost = Cost(type, data.Length);
+            lock (_gate)
+            {
+                if (_queuedRequestBytes + cost > MaxQueuedRequestBytes)
+                {
+                    throw new SshProtocolException("The peer sent more channel requests than the server could handle in time: over 1 MiB of them were waiting.");
+                }
+
+                _queuedRequestBytes += cost;
+            }
+
             if (!_requests.Writer.TryWrite(new IncomingChannelRequest(type, wantReply, data.ToArray())))
             {
-                throw new SshProtocolException("The peer sent too many channel requests at once.");
+                // Only a completed queue refuses, and that comes from the peer's CLOSE or the end of the connection.
+                lock (_gate)
+                {
+                    _queuedRequestBytes -= cost;
+                }
+
+                throw new SshProtocolException("The peer sent a channel request after closing the channel.");
             }
 
             return false;
@@ -569,7 +693,7 @@ internal sealed class SshChannel : IAsyncDisposable
     }
 
     /// <summary>Credits data the application has read, and grows the window once half of it is used.</summary>
-    public void OnConsumed(int bytes)
+    private void OnConsumed(int bytes)
     {
         bool queue = false;
         lock (_gate)
@@ -631,6 +755,16 @@ internal sealed class SshChannel : IAsyncDisposable
         await ErrorOutput.DisposeAsync().ConfigureAwait(false);
         await Input.DisposeAsync().ConfigureAwait(false);
         await ErrorInput.DisposeAsync().ConfigureAwait(false);
+    }
+
+    private static long Cost(string type, int dataLength) => RequestOverhead + ((long)type.Length * sizeof(char)) + dataLength;
+
+    private void OnRequestTaken(IncomingChannelRequest request)
+    {
+        lock (_gate)
+        {
+            _queuedRequestBytes -= Cost(request.Type, request.Data.Length);
+        }
     }
 
     private static Pipe NewPipe() => new(new PipeOptions(pauseWriterThreshold: 0, useSynchronizationContext: false));
@@ -850,5 +984,32 @@ internal sealed class SshChannel : IAsyncDisposable
         }
 
         await SendOrderedAsync(payload, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>The application's side of the request queue. Taking a request gives back what it cost.</summary>
+    private sealed class RequestReader(SshChannel owner, ChannelReader<IncomingChannelRequest> inner) : ChannelReader<IncomingChannelRequest>
+    {
+        public override Task Completion => inner.Completion;
+
+        public override bool CanCount => inner.CanCount;
+
+        public override int Count => inner.Count;
+
+        public override bool CanPeek => inner.CanPeek;
+
+        public override bool TryPeek([MaybeNullWhen(false)] out IncomingChannelRequest item) => inner.TryPeek(out item);
+
+        public override bool TryRead([MaybeNullWhen(false)] out IncomingChannelRequest item)
+        {
+            if (!inner.TryRead(out item))
+            {
+                return false;
+            }
+
+            owner.OnRequestTaken(item);
+            return true;
+        }
+
+        public override ValueTask<bool> WaitToReadAsync(CancellationToken cancellationToken = default) => inner.WaitToReadAsync(cancellationToken);
     }
 }
