@@ -111,8 +111,7 @@ internal sealed class ClientAuthenticator(SshTransport transport, string userNam
     {
         SshRequestWriter request = new();
         build(request);
-        await transport.SendAsync(request.ToArray(), cancellationToken).ConfigureAwait(false);
-        request.Clear();
+        await request.BuildSendAndClearAsync((wire, ct) => transport.SendAsync(wire, ct), cancellationToken).ConfigureAwait(false);
     }
 
     private async Task RequestServiceAsync(CancellationToken cancellationToken)

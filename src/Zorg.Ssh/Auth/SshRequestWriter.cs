@@ -1,6 +1,9 @@
+using System;
 using System.Collections.Generic;
 using System.Security.Cryptography;
 using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace Zorg.Ssh.Auth;
 
@@ -24,7 +27,14 @@ internal sealed class SshRequestWriter
         _parts.Add(bytes);
     }
 
-    public void String(string value) => Bytes(Encoding.UTF8.GetBytes(value));
+    // A1: encode straight into the stored part, so no second copy of a password is left on the heap unzeroed.
+    public void String(string value)
+    {
+        byte[] part = new byte[Encoding.UTF8.GetByteCount(value)];
+        Encoding.UTF8.GetBytes(value, part);
+        UInt32((uint)part.Length);
+        _parts.Add(part);
+    }
 
     public void Bytes(byte[] value)
     {
@@ -49,6 +59,22 @@ internal sealed class SshRequestWriter
         }
 
         return result;
+    }
+
+    /// <summary>Builds the message, hands it to <paramref name="send"/>, and zeroes every copy afterwards, also when sending fails.</summary>
+    /// <remarks>A1: the array passed to <paramref name="send"/> must not be kept, because it is zeroed when the call returns.</remarks>
+    public async ValueTask BuildSendAndClearAsync(Func<byte[], CancellationToken, ValueTask> send, CancellationToken cancellationToken)
+    {
+        byte[] wire = ToArray();
+        try
+        {
+            await send(wire, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(wire);
+            Clear();
+        }
     }
 
     public void Clear()
