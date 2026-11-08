@@ -700,13 +700,271 @@ public sealed class SftpServerProtocolTests : IDisposable
         Assert.SkipWhen(OperatingSystem.IsWindows(), "FIFOs are a Unix thing.");
         using System.Diagnostics.Process mkfifo = System.Diagnostics.Process.Start("mkfifo", _sandbox.InRoot("fifo"));
         await mkfifo.WaitForExitAsync(Ct);
-        await using SftpServerHarness client = await StartAsync(new SftpServerOptions { RootDirectory = _sandbox.Root, OpenTimeout = TimeSpan.FromMilliseconds(200) });
+
+        // Without the type check, as on a Unix whose types can't be read, or with a FIFO swapped in after the look.
+        await using SftpServerHarness client = await StartAsync(new SftpServerOptions { RootDirectory = _sandbox.Root, OpenTimeout = TimeSpan.FromMilliseconds(200), CheckTypeBeforeOpen = false });
 
         await client.SendAsync(new Packet().U8(SftpMessage.Open).U32(1).Text("fifo").U32(OpenRead).U32(0).ToFrame());
         Assert.Equal(1, await client.Serving.WaitAsync(TimeSpan.FromSeconds(10), Ct));
 
         // Unstick the thread still waiting in open.
         await using FileStream writer = new(_sandbox.InRoot("fifo"), FileMode.Open, FileAccess.Write);
+    }
+
+    [Fact]
+    public async Task S1_a_FIFO_is_refused_before_it_is_opened_and_the_session_carries_on()
+    {
+        // Finding S1: an OPEN or SETSTAT of a FIFO blocked in open(2) for OpenTimeout. Where the type can be read it's
+        // refused before the open, so nothing blocks and the session goes on.
+        Assert.SkipUnless(OperatingSystem.IsLinux() || OperatingSystem.IsMacOS(), "Only Linux and macOS have a call here that tells a FIFO's type.");
+        MakeFifo("fifo");
+        File.CreateSymbolicLink(_sandbox.InRoot("to-fifo"), "fifo");
+        await File.WriteAllTextAsync(_sandbox.InRoot("plain.txt"), "x", Ct);
+        await using SftpServerHarness client = await StartAsync(new SftpServerOptions { RootDirectory = _sandbox.Root, OpenTimeout = TimeSpan.FromSeconds(20) });
+
+        System.Diagnostics.Stopwatch elapsed = System.Diagnostics.Stopwatch.StartNew();
+        Assert.Equal(Failure, (await client.OpenAsync("fifo", OpenRead)).Status);
+        Assert.Equal(Failure, (await client.OpenAsync("to-fifo", OpenRead)).Status);
+        Assert.Equal(Failure, (await client.OpenAsync("fifo", OpenWrite)).Status);
+        Assert.Equal(Failure, (await client.RequestAsync(SftpMessage.SetStat, Path("fifo").U32(4).U32(0x1A4))).Status);
+        Assert.True(elapsed.Elapsed < TimeSpan.FromSeconds(10), $"took {elapsed.Elapsed}");
+
+        byte[] handle = await client.OpenHandleAsync("plain.txt", OpenRead);
+        Assert.Equal("x"u8.ToArray(), (await client.ReadAsync(handle, 0, 10)).Data);
+        Assert.False(client.Serving.IsCompleted);
+    }
+
+    [Fact]
+    public async Task S1_an_open_that_blocks_lets_go_of_the_namespace_gate()
+    {
+        // Finding S1: the open blocked while holding the process-wide gate, so every other session's path requests
+        // waited for OpenTimeout. The type check is off here, as for a FIFO swapped in after the look.
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "FIFOs are a Unix thing.");
+        MakeFifo("fifo");
+        await File.WriteAllTextAsync(_sandbox.InRoot("plain.txt"), "x", Ct);
+        SftpServerOptions options = new() { RootDirectory = _sandbox.Root, OpenTimeout = TimeSpan.FromSeconds(5), CheckTypeBeforeOpen = false };
+        await using SftpServerHarness attacker = await StartAsync(options);
+        await using SftpServerHarness victim = await StartAsync(options);
+
+        await attacker.SendAsync(new Packet().U8(SftpMessage.Open).U32(1).Text("fifo").U32(OpenRead).U32(0).ToFrame());
+        await Task.Delay(500, Ct);
+        System.Diagnostics.Stopwatch during = System.Diagnostics.Stopwatch.StartNew();
+        Assert.Equal(SftpMessage.Attrs, (await victim.RequestAsync(SftpMessage.Stat, Path("plain.txt"))).Type);
+        Assert.True(during.Elapsed < TimeSpan.FromSeconds(2), $"the victim's stat waited {during.Elapsed} for the attacker's open");
+        Assert.False(attacker.Serving.IsCompleted);
+
+        Assert.Equal(1, await attacker.Serving.WaitAsync(TimeSpan.FromSeconds(20), Ct));
+
+        // The session that timed out had let go of the gate, so it didn't release it again (or leave it held).
+        Assert.Equal(SftpMessage.Attrs, (await victim.RequestAsync(SftpMessage.Stat, Path("plain.txt"))).Type);
+
+        // Unstick the thread still waiting in open.
+        await using FileStream writer = new(_sandbox.InRoot("fifo"), FileMode.Open, FileAccess.Write);
+    }
+
+    [Fact]
+    public async Task S1_an_open_that_blocks_then_finishes_takes_the_gate_back_and_is_still_verified()
+    {
+        // Finding S1: the open lets go of the gate while it's blocked, and must take it back before it's checked, once.
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "FIFOs are a Unix thing.");
+        MakeFifo("fifo");
+        await File.WriteAllTextAsync(_sandbox.InRoot("plain.txt"), "x", Ct);
+        SftpServerOptions options = new() { RootDirectory = _sandbox.Root, OpenTimeout = TimeSpan.FromSeconds(20), CheckTypeBeforeOpen = false };
+        await using SftpServerHarness client = await StartAsync(options);
+        await using SftpServerHarness other = await StartAsync(options);
+
+        Task<SftpServerReply> open = client.OpenAsync("fifo", OpenRead);
+        await Task.Delay(500, Ct);
+        Assert.False(open.IsCompleted);
+        Assert.Equal(SftpMessage.Attrs, (await other.RequestAsync(SftpMessage.Stat, Path("plain.txt")).WaitAsync(TimeSpan.FromSeconds(2), Ct)).Type);
+
+        // A writer lets the open finish. What it opened can't seek, so Verify, under the gate again, refuses it.
+        await using FileStream writer = await Task.Run(() => new FileStream(_sandbox.InRoot("fifo"), FileMode.Open, FileAccess.Write), Ct);
+        Assert.Equal(Failure, (await open.WaitAsync(TimeSpan.FromSeconds(10), Ct)).Status);
+
+        // Released once: a second release would throw (the gate's most is 1), and none would leave both sessions stuck.
+        Assert.Equal(SftpMessage.Attrs, (await client.RequestAsync(SftpMessage.Stat, Path("plain.txt")).WaitAsync(TimeSpan.FromSeconds(10), Ct)).Type);
+        Assert.Equal(SftpMessage.Attrs, (await other.RequestAsync(SftpMessage.Stat, Path("plain.txt")).WaitAsync(TimeSpan.FromSeconds(10), Ct)).Type);
+        Assert.False(client.Serving.IsCompleted);
+    }
+
+    [Fact]
+    public async Task S4_an_open_is_refused_and_logged_when_the_descriptor_check_cant_read_proc()
+    {
+        // Finding S4: a null link target for /proc/self/fd/N skipped the identity check without a word. It now fails
+        // closed: the open is refused, nothing is truncated or created, and a warning says why.
+        Assert.SkipUnless(OperatingSystem.IsLinux(), "Only Linux checks the descriptor through /proc.");
+        await File.WriteAllTextAsync(_sandbox.InRoot("plain.txt"), "keep", Ct);
+        SftpRecordingLoggerFactory log = new();
+        await using SftpServerHarness client = await StartAsync(new SftpServerOptions
+        {
+            RootDirectory = _sandbox.Root,
+            LoggerFactory = log,
+            DescriptorLinks = "/proc-is-masked-here/self/fd",
+        });
+
+        Assert.Equal(Failure, (await client.OpenAsync("plain.txt", OpenRead)).Status);
+        Assert.Equal(Failure, (await client.OpenAsync("plain.txt", OpenWrite | OpenTruncate)).Status);
+        Assert.Equal(Failure, (await client.RequestAsync(SftpMessage.SetStat, Path("plain.txt").U32(4).U32(0x180))).Status);
+        Assert.Equal("keep", await File.ReadAllTextAsync(_sandbox.InRoot("plain.txt"), Ct));
+        Assert.Contains(log.Entries, e => e.Level == Microsoft.Extensions.Logging.LogLevel.Warning && e.Message.Contains("/proc/self/fd", StringComparison.Ordinal));
+        Assert.DoesNotContain(log.Entries, e => e.Message.Contains("plain.txt", StringComparison.Ordinal));
+
+        // With /proc readable, the same open goes through.
+        await using SftpServerHarness normal = await StartAsync(new SftpServerOptions { RootDirectory = _sandbox.Root });
+        Assert.Equal(SftpMessage.Handle, (await normal.OpenAsync("plain.txt", OpenRead)).Type);
+    }
+
+    [Fact]
+    public async Task S5_appends_from_two_sessions_never_overwrite_each_other()
+    {
+        // Finding S5: each APPEND write found the end and then wrote there, in two calls, so two sessions could both
+        // write at the same end and one record was lost. Without the fix this loses records on most runs.
+        await File.WriteAllBytesAsync(_sandbox.InRoot("log"), [], Ct);
+        await using SftpServerHarness first = await StartAsync(Options);
+        await using SftpServerHarness second = await StartAsync(Options);
+        byte[] firstHandle = await first.OpenHandleAsync("log", OpenWrite | OpenAppend);
+        byte[] secondHandle = await second.OpenHandleAsync("log", OpenWrite | OpenAppend);
+        const int Records = 300;
+
+        static async Task AppendAsync(SftpServerHarness client, byte[] handle, char who)
+        {
+            for (int i = 0; i < Records; i++)
+            {
+                byte[] record = Encoding.ASCII.GetBytes($"{who}{i:D6}\n");
+                Assert.Equal(Ok, (await client.WriteAsync(handle, 0, record)).Status);
+            }
+        }
+
+        await Task.WhenAll(Task.Run(() => AppendAsync(first, firstHandle, 'a'), Ct), Task.Run(() => AppendAsync(second, secondHandle, 'b'), Ct));
+        await first.CloseAsync(firstHandle);
+        await second.CloseAsync(secondHandle);
+
+        string[] lines = (await File.ReadAllTextAsync(_sandbox.InRoot("log"), Ct)).Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        Assert.Equal(2 * Records, lines.Length);
+        Assert.Equal(2 * Records, lines.Distinct().Count());
+    }
+
+    [Fact]
+    public async Task S5_an_append_handle_has_O_APPEND_on_Linux()
+    {
+        // Finding S5: on Linux the kernel places each append, which also holds against writers outside this process.
+        Assert.SkipUnless(OperatingSystem.IsLinux(), "Only Linux sets O_APPEND here.");
+        string path = _sandbox.InRoot("log");
+        await File.WriteAllTextAsync(path, "AAAA", Ct);
+        await using SftpServerHarness client = await StartAsync(Options);
+        byte[] handle = await client.OpenHandleAsync("log", OpenWrite | OpenAppend);
+
+        string fd = new DirectoryInfo("/proc/self/fd").EnumerateFileSystemInfos().First(f => f.LinkTarget == path).Name;
+        string flags = (await File.ReadAllLinesAsync($"/proc/self/fdinfo/{fd}", Ct)).First(l => l.StartsWith("flags:", StringComparison.Ordinal))["flags:".Length..].Trim();
+        Assert.NotEqual(0, Convert.ToInt32(flags, 8) & 0x400);
+
+        // A write the test makes outside the server lands before the server's next append, which still goes at the end.
+        await File.AppendAllTextAsync(path, "XX", Ct);
+        Assert.Equal(Ok, (await client.WriteAsync(handle, 0, "B"u8.ToArray())).Status);
+        Assert.Equal("AAAAXXB", await File.ReadAllTextAsync(path, Ct));
+    }
+
+    [Fact]
+    public async Task S6_statvfs_of_a_missing_path_is_no_such_file()
+    {
+        // Finding S6: statvfs answered with the root volume's numbers for a path that doesn't exist.
+        Directory.CreateDirectory(_sandbox.InRoot("there"));
+        await using SftpServerHarness client = await StartAsync(Options);
+
+        Assert.Equal(NoSuchFile, (await client.ExtendedAsync("statvfs@openssh.com", Path("does-not-exist/nor-this"))).Status);
+        Assert.Equal(NoSuchFile, (await client.ExtendedAsync("statvfs@openssh.com", Path("missing"))).Status);
+        Assert.Equal(SftpMessage.ExtendedReply, (await client.ExtendedAsync("statvfs@openssh.com", Path("there"))).Type);
+        Assert.Equal(SftpMessage.ExtendedReply, (await client.ExtendedAsync("statvfs@openssh.com", Path("/"))).Type);
+    }
+
+    [Fact]
+    public async Task S6_posix_rename_of_a_directory_replaces_an_empty_directory_as_rename_does()
+    {
+        // Finding S6: posix-rename has rename(2)'s meaning in OpenSSH, which replaces an empty directory. Directory.Move
+        // refused any existing target.
+        Directory.CreateDirectory(_sandbox.InRoot("src"));
+        Directory.CreateDirectory(_sandbox.InRoot("dst"));
+        await File.WriteAllTextAsync(_sandbox.InRoot("src/x"), "x", Ct);
+        await using SftpServerHarness client = await StartAsync(Options);
+
+        Assert.Equal(Ok, (await client.ExtendedAsync("posix-rename@openssh.com", Path("src").Text("dst"))).Status);
+        Assert.False(Directory.Exists(_sandbox.InRoot("src")));
+        Assert.Equal("x", await File.ReadAllTextAsync(_sandbox.InRoot("dst/x"), Ct));
+
+        // Plain RENAME still refuses an existing target, as OpenSSH's does.
+        Directory.CreateDirectory(_sandbox.InRoot("other"));
+        Directory.CreateDirectory(_sandbox.InRoot("empty"));
+        Assert.Equal(Failure, (await client.RequestAsync(SftpMessage.Rename, Path("other").Text("empty"))).Status);
+        Assert.True(Directory.Exists(_sandbox.InRoot("other")));
+    }
+
+    [Fact]
+    public async Task S6_posix_rename_of_a_directory_leaves_what_rename_would_refuse()
+    {
+        // Finding S6: only an empty directory is replaced. Nothing is lost on the way to a refusal.
+        Directory.CreateDirectory(_sandbox.InRoot("a/sub"));
+        await File.WriteAllTextAsync(_sandbox.InRoot("a/x"), "x", Ct);
+        Directory.CreateDirectory(_sandbox.InRoot("full"));
+        await File.WriteAllTextAsync(_sandbox.InRoot("full/y"), "y", Ct);
+        await File.WriteAllTextAsync(_sandbox.InRoot("file"), "f", Ct);
+        await using SftpServerHarness client = await StartAsync(Options);
+
+        Assert.Equal(Failure, (await client.ExtendedAsync("posix-rename@openssh.com", Path("a").Text("full"))).Status);
+        Assert.Equal(Failure, (await client.ExtendedAsync("posix-rename@openssh.com", Path("a").Text("file"))).Status);
+        Assert.Equal(Failure, (await client.ExtendedAsync("posix-rename@openssh.com", Path("a").Text("a/sub"))).Status);
+        await client.ExtendedAsync("posix-rename@openssh.com", Path("a").Text("a"));
+
+        Assert.Equal("x", await File.ReadAllTextAsync(_sandbox.InRoot("a/x"), Ct));
+        Assert.True(Directory.Exists(_sandbox.InRoot("a/sub")));
+        Assert.Equal("y", await File.ReadAllTextAsync(_sandbox.InRoot("full/y"), Ct));
+        Assert.Equal("f", await File.ReadAllTextAsync(_sandbox.InRoot("file"), Ct));
+    }
+
+    [Fact]
+    public void S7_an_unexpected_failure_is_logged_without_its_message()
+    {
+        // Finding S7: the catch-all attached the raw exception, whose message can carry the real path and so the
+        // client's components, although LoggerFactory says paths the client sent aren't logged.
+        SftpRecordingLoggerFactory log = new();
+        Microsoft.Extensions.Logging.ILogger logger = log.CreateLogger("test");
+        InvalidOperationException thrown;
+        try
+        {
+            throw new InvalidOperationException($"Couldn't do it to '{_sandbox.InRoot("client-secret-name.txt")}'.");
+        }
+        catch (InvalidOperationException ex)
+        {
+            thrown = ex;
+        }
+
+        SftpServerSession.LogUnexpectedFailure(logger, SftpMessage.Open, thrown);
+
+        var entry = Assert.Single(log.Entries);
+        Assert.Equal(Microsoft.Extensions.Logging.LogLevel.Error, entry.Level);
+        Assert.Null(entry.Exception);
+        Assert.Contains("System.InvalidOperationException", entry.Message, StringComparison.Ordinal);
+        Assert.Contains(nameof(S7_an_unexpected_failure_is_logged_without_its_message), entry.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("client-secret-name", entry.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task S8_the_server_ignores_attribute_flags_version_3_doesnt_define()
+    {
+        // Finding S8: as OpenSSH's sftp-server, a bit with no meaning in version 3 is ignored, not refused.
+        await using SftpServerHarness client = await StartAsync(Options);
+        SftpServerReply open = await client.RequestAsync(SftpMessage.Open, Path("new.txt").U32(OpenWrite | OpenCreate).U32(0x10));
+        Assert.Equal(SftpMessage.Handle, open.Type);
+        Assert.Equal(Ok, (await client.RequestAsync(SftpMessage.MkDir, Path("dir").U32(0x40))).Status);
+        Assert.True(File.Exists(_sandbox.InRoot("new.txt")));
+        Assert.True(Directory.Exists(_sandbox.InRoot("dir")));
+    }
+
+    private void MakeFifo(string name)
+    {
+        using System.Diagnostics.Process mkfifo = System.Diagnostics.Process.Start("mkfifo", _sandbox.InRoot(name));
+        mkfifo.WaitForExit();
+        Assert.Equal(0, mkfifo.ExitCode);
     }
 
     [Fact]

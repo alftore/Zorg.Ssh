@@ -8,8 +8,11 @@ using Microsoft.Win32.SafeHandles;
 
 namespace Zorg.Ssh.Sftp;
 
-/// <summary>An open file. The stream is only there to own the handle: reads and writes are positional.</summary>
-internal sealed class SftpServerFile(FileStream stream, bool canRead, bool canWrite, bool append) : IDisposable
+/// <summary>
+/// An open file. The stream is only there to own the handle: reads and writes are positional.
+/// <paramref name="appendInKernel"/> says the descriptor has <c>O_APPEND</c>, so the kernel places each write.
+/// </summary>
+internal sealed class SftpServerFile(FileStream stream, bool canRead, bool canWrite, bool append, bool appendInKernel = false) : IDisposable
 {
     public FileStream Stream { get; } = stream;
 
@@ -20,6 +23,8 @@ internal sealed class SftpServerFile(FileStream stream, bool canRead, bool canWr
     public bool CanWrite { get; } = canWrite;
 
     public bool Append { get; } = append;
+
+    public bool AppendInKernel { get; } = appendInKernel;
 
     public void Dispose() => Stream.Dispose();
 }

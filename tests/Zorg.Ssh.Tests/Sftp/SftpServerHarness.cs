@@ -344,3 +344,46 @@ internal sealed class SftpServerHarness : IAsyncDisposable
         return (header[4], body);
     }
 }
+
+/// <summary>Keeps every log entry of a server session, with the exception attached, so a test can see what reached the log.</summary>
+internal sealed class SftpRecordingLoggerFactory : Microsoft.Extensions.Logging.ILoggerFactory
+{
+    private readonly List<(Microsoft.Extensions.Logging.LogLevel Level, string Message, Exception? Exception)> _entries = [];
+
+    public IReadOnlyList<(Microsoft.Extensions.Logging.LogLevel Level, string Message, Exception? Exception)> Entries
+    {
+        get
+        {
+            lock (_entries)
+            {
+                return [.. _entries];
+            }
+        }
+    }
+
+    public void AddProvider(Microsoft.Extensions.Logging.ILoggerProvider provider)
+    {
+    }
+
+    public Microsoft.Extensions.Logging.ILogger CreateLogger(string categoryName) => new Recorder(this);
+
+    public void Dispose()
+    {
+    }
+
+    private sealed class Recorder(SftpRecordingLoggerFactory owner) : Microsoft.Extensions.Logging.ILogger
+    {
+        public IDisposable? BeginScope<TState>(TState state)
+            where TState : notnull => null;
+
+        public bool IsEnabled(Microsoft.Extensions.Logging.LogLevel logLevel) => true;
+
+        public void Log<TState>(Microsoft.Extensions.Logging.LogLevel logLevel, Microsoft.Extensions.Logging.EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            lock (owner._entries)
+            {
+                owner._entries.Add((logLevel, formatter(state, exception), exception));
+            }
+        }
+    }
+}

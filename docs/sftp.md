@@ -170,7 +170,7 @@ await sftp.SetAttributesAsync(
     cancellationToken);
 ```
 
-A property is null if the server didn't send it, and `SetAttributesAsync` changes only the properties you set. Set `Uid` with `Gid`, and `ModifiedTime` with `AccessTime`, because the protocol sends them in pairs. Times have a resolution of one second.
+A property is null if the server didn't send it, and `SetAttributesAsync` changes only the properties you set. Set `Uid` with `Gid`, and `ModifiedTime` with `AccessTime`, because the protocol sends them in pairs. Times have a resolution of one second. Attribute flags that SFTP version 3 doesn't define are ignored, as OpenSSH ignores them. If a server also sends a field for one, the listing it's in can't be read, and the session ends with `SshProtocolException`.
 
 `GetAttributesAsync` follows symbolic links. `GetLinkAttributesAsync` reports on a link itself.
 
@@ -231,10 +231,10 @@ if (sftp.ServerExtensions.ContainsKey("copy-data"))
 |---|---|
 | `GetFileSystemInfoAsync` | `statvfs@openssh.com` |
 | `CreateHardLinkAsync` | `hardlink@openssh.com` |
-| `CopyFileAsync` | `copy-data`. The bytes stay on the server. |
+| `CopyFileAsync` | `copy-data`. The bytes stay on the server. Without `overwrite`, the destination must be new. A server that ignores that and opens an existing file gets a size check first: a file that isn't empty is left alone and the call throws. |
 | `SftpFile.SyncAsync` | `fsync@openssh.com` |
 
-Without the extension, these fail with `SftpException` and `SftpStatusCode.OperationUnsupported`. Zorg.Ssh also respects `limits@openssh.com` when a server sends it.
+Without the extension, these fail with `SftpException` and `SftpStatusCode.OperationUnsupported`. Zorg.Ssh also respects `limits@openssh.com` when a server sends it, down to 512 bytes a request: a lower limit is taken as 512, so a server can't make a transfer go a byte at a time.
 
 ## Errors
 

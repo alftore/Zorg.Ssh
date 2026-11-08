@@ -346,6 +346,28 @@ public class SftpClientTests
     }
 
     [Fact(Timeout = Limit)]
+    public async Task S3_limits_below_the_floor_dont_bring_requests_down_to_a_byte()
+    {
+        // Finding S3: max-read and max-write of 1 made every READ ask for one byte and every WRITE carry one.
+        FakeFiles files = new() { Files = { ["f"] = new byte[10_000] } };
+        await using FakeSftpServer fake = await FakeSftpServer.StartAsync(
+            (server, request) => request.Type == SftpMessage.Extended && request.FirstString() == "limits@openssh.com"
+                ? server.SendAsync(new Packet().U8(SftpMessage.ExtendedReply).U32(request.Id).U64(1025).U64(1).U64(1).U64(0).ToFrame())
+                : files.HandleAsync(server, request),
+            extensions: ["limits@openssh.com"]);
+
+        Assert.Equal(10_000, (await fake.Client.ReadAllBytesAsync("f", Ct)).Length);
+        await fake.Client.WriteAllBytesAsync("g", new byte[10_000], Ct);
+        Assert.Equal(10_000, files.Files["g"].Length);
+        FakeRequest[] reads = [.. fake.Requests.Where(r => r.Type == SftpMessage.Read)];
+        FakeRequest[] writes = [.. fake.Requests.Where(r => r.Type == SftpMessage.Write)];
+        Assert.True(reads.Length <= 200, $"{reads.Length} reads");
+        Assert.Equal(512u, reads.Max(r => r.ReadArguments().Length));
+        Assert.Equal(512, writes.Max(w => w.WriteArguments().Data.Length));
+        Assert.Equal(20, writes.Length);
+    }
+
+    [Fact(Timeout = Limit)]
     public async Task Missing_extensions_are_refused_without_a_round_trip()
     {
         await using FakeSftpServer fake = await FakeSftpServer.StartAsync((server, request) => server.SendStatusAsync(request.Id));
@@ -376,6 +398,26 @@ public class SftpClientTests
         SftpFileSystemInfo info = await fake.Client.GetFileSystemInfoAsync("/", Ct);
         Assert.Equal(new SftpFileSystemInfo { BlockSize = 4096, FragmentSize = 512, Blocks = 1000, FreeBlocks = 500, AvailableBlocks = 400, Files = 90, FreeFiles = 80, AvailableFiles = 70, FileSystemId = 12, IsReadOnly = true, MaxNameLength = 255 }, info);
         Assert.Equal(400UL * 512, info.AvailableBytes);
+    }
+
+    [Fact(Timeout = Limit)]
+    public async Task S2_copy_without_overwrite_leaves_an_existing_file_alone_on_a_server_that_ignores_exclusive()
+    {
+        // Finding S2: FakeFiles ignores SSH_FXF_EXCL, as some servers do, so the open of an existing "b" succeeds.
+        byte[] old = new byte[50];
+        new Random(50).NextBytes(old);
+        FakeFiles files = new() { Files = { ["a"] = new byte[10], ["b"] = old } };
+        await using FakeSftpServer fake = await FakeSftpServer.StartAsync(files.HandleAsync, extensions: ["copy-data"]);
+
+        SftpException ex = await Assert.ThrowsAsync<SftpException>(() => fake.Client.CopyFileAsync("a", "b", overwrite: false, Ct));
+        Assert.Equal(SftpStatusCode.Failure, ex.StatusCode);
+        Assert.Equal(old, files.Files["b"]);
+        Assert.DoesNotContain(fake.Requests, r => r.Type == SftpMessage.Extended);
+        Assert.Equal(0, files.OpenHandles);
+
+        // A new destination is still copied.
+        await fake.Client.CopyFileAsync("a", "c", overwrite: false, Ct);
+        Assert.Single(fake.Requests, r => r.Type == SftpMessage.Extended);
     }
 
     [Fact(Timeout = Limit)]

@@ -3,6 +3,8 @@ using System.Buffers;
 using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
+using System.Runtime.InteropServices;
 using System.Security;
 using System.Text;
 using System.Threading;
@@ -31,6 +33,8 @@ internal sealed partial class SftpServerSession : IAsyncDisposable
     private const ulong StatvfsReadOnly = 1;
     private const ulong StatvfsBlockSize = 4096;
     private const ulong StatvfsMaxName = 255;
+    private const int EPerm = 1;
+    private const int EAcces = 13;
 
     private const string PosixRename = "posix-rename@openssh.com";
     private const string Fsync = "fsync@openssh.com";
@@ -41,9 +45,25 @@ internal sealed partial class SftpServerSession : IAsyncDisposable
     /// Serialises everything that goes from a path to a change or an open, across every session in this process,
     /// whatever its root, as roots can nest. .NET has no openat, so between checking a path and using it another
     /// session could rename a link into place. Two sessions of one client are the cheapest way to get such a race,
-    /// and this takes it away. File contents don't pass through here: only metadata work waits.
+    /// and this takes it away. File contents don't pass through here: only metadata work waits. An open that the
+    /// system blocks lets go of it after <see cref="GateHoldForOpen"/> (finding S1), so one client's FIFO can't stall
+    /// every other session in the process.
     /// </summary>
     internal static readonly SemaphoreSlim NamespaceGate = new(1, 1);
+
+    /// <summary>
+    /// How long an open waits while holding <see cref="NamespaceGate"/>. An open of a regular file takes far less. One
+    /// that takes longer is blocked in the system, on a FIFO or a device (finding S1), and waits out the rest of
+    /// <see cref="SftpServerOptions.OpenTimeout"/> without the gate.
+    /// </summary>
+    internal static readonly TimeSpan GateHoldForOpen = TimeSpan.FromMilliseconds(100);
+
+    /// <summary>
+    /// Serialises appends where the kernel can't place them (finding S5): finding the end and writing there is two
+    /// calls, and two sessions appending to one file would both write at the same end. Only this process's sessions
+    /// wait here. On Linux the descriptor has <c>O_APPEND</c> instead, which holds against other processes too.
+    /// </summary>
+    private static readonly SemaphoreSlim AppendGate = new(1, 1);
 
 #pragma warning disable CA2213 // The streams belong to the caller.
     private readonly Stream _input;
@@ -58,6 +78,9 @@ internal sealed partial class SftpServerSession : IAsyncDisposable
     private byte[]? _request;
     private byte[]? _reply;
     private int _replyLength;
+
+    /// <summary>Whether this session holds <see cref="NamespaceGate"/>. An open that blocks lets go of it and takes it back.</summary>
+    private bool _holdsGate;
 
     public SftpServerSession(Stream input, Stream output, SftpServerOptions options)
     {
@@ -121,8 +144,19 @@ internal sealed partial class SftpServerSession : IAsyncDisposable
     [LoggerMessage(Level = LogLevel.Debug, Message = "SFTP request type {RequestType} refused with status {Status}")]
     private static partial void LogRefused(ILogger logger, byte requestType, SftpStatusCode status);
 
-    [LoggerMessage(Level = LogLevel.Error, Message = "SFTP request type {RequestType} failed unexpectedly")]
-    private static partial void LogUnexpected(ILogger logger, byte requestType, Exception exception);
+    [LoggerMessage(Level = LogLevel.Error, Message = "SFTP request type {RequestType} failed unexpectedly with {ExceptionType}{StackTrace}")]
+    private static partial void LogUnexpected(ILogger logger, byte requestType, string exceptionType, string? stackTrace);
+
+    /// <summary>
+    /// Logs a failure no typed catch expected, by its type and stack trace only (finding S7). The exception itself
+    /// isn't attached: a .NET file-system exception's message names the real path, whose tail is what the client
+    /// sent, and <see cref="SftpServerOptions.LoggerFactory"/> promises that paths from the client aren't logged.
+    /// </summary>
+    internal static void LogUnexpectedFailure(ILogger logger, byte requestType, Exception exception) =>
+        LogUnexpected(logger, requestType, exception.GetType().FullName ?? exception.GetType().Name, Environment.NewLine + exception.StackTrace);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "SFTP open refused: /proc/self/fd can't be read, so what was opened can't be checked. Mount /proc for the server process.")]
+    private static partial void LogIdentityUnavailable(ILogger logger);
 
     private static void Return(ref byte[]? buffer)
     {
@@ -172,7 +206,11 @@ internal sealed partial class SftpServerSession : IAsyncDisposable
 
     private static void Move(SftpServerResolved source, SftpServerResolved target, bool overwrite)
     {
-        if (source.IsDirectory)
+        if (source.IsDirectory && overwrite && target.Exists)
+        {
+            ReplaceWithDirectory(source, target);
+        }
+        else if (source.IsDirectory)
         {
             Directory.Move(source.RealPath, target.RealPath);
         }
@@ -181,6 +219,51 @@ internal sealed partial class SftpServerSession : IAsyncDisposable
             File.Move(source.RealPath, target.RealPath, overwrite);
         }
     }
+
+    /// <summary>
+    /// Moves a directory onto an existing entry, as <c>posix-rename</c> does with <c>rename(2)</c> in OpenSSH (finding
+    /// S6): an empty directory is replaced, and anything else is a failure. <see cref="Directory.Move"/> refuses any
+    /// existing target. On Unix this is <c>rename(2)</c> itself, the call <see cref="Directory.Move"/> makes after its
+    /// check, so the kernel decides, atomically, and refuses a move into the directory's own subtree. Windows has no
+    /// such call for directories, so an empty directory there is removed first and made again if the move then fails.
+    /// </summary>
+    private static void ReplaceWithDirectory(SftpServerResolved source, SftpServerResolved target)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            if (Rename(source.RealPath, target.RealPath) != 0)
+            {
+                int error = Marshal.GetLastPInvokeError();
+                throw error is EAcces or EPerm ? new UnauthorizedAccessException() : new IOException(null, error);
+            }
+
+            return;
+        }
+
+        bool same = string.Equals(source.RealPath, target.RealPath, StringComparison.OrdinalIgnoreCase);
+        bool inside = target.RealPath.StartsWith(source.RealPath + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
+        if (same || inside || !target.IsDirectory || target.IsLink || Directory.EnumerateFileSystemEntries(target.RealPath).Any())
+        {
+            // Directory.Move refuses all of these, as rename(2) would: the same directory is left as it is.
+            Directory.Move(source.RealPath, target.RealPath);
+            return;
+        }
+
+        Directory.Delete(target.RealPath, recursive: false);
+        try
+        {
+            Directory.Move(source.RealPath, target.RealPath);
+        }
+        catch
+        {
+            _ = Directory.CreateDirectory(target.RealPath);
+            throw;
+        }
+    }
+
+    [DefaultDllImportSearchPaths(DllImportSearchPath.SafeDirectories)]
+    [LibraryImport("libc", EntryPoint = "rename", StringMarshalling = StringMarshalling.Utf8, SetLastError = true)]
+    private static partial int Rename(string oldPath, string newPath);
 
     private async ValueTask<int> ReadPacketAsync(CancellationToken cancellationToken)
     {
@@ -239,7 +322,7 @@ internal sealed partial class SftpServerSession : IAsyncDisposable
         catch (Exception ex) when (ex is not (OperationCanceledException or TimeoutException))
 #pragma warning restore CA1031
         {
-            LogUnexpected(_logger, type, ex);
+            LogUnexpectedFailure(_logger, type, ex);
             BuildStatus(id, SftpStatusCode.Failure);
         }
     }
@@ -285,6 +368,7 @@ internal sealed partial class SftpServerSession : IAsyncDisposable
     private async ValueTask ServeLockedAsync(byte type, uint id, ReadOnlyMemory<byte> body, CancellationToken cancellationToken)
     {
         await NamespaceGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        _holdsGate = true;
         try
         {
             switch (type)
@@ -329,7 +413,12 @@ internal sealed partial class SftpServerSession : IAsyncDisposable
         }
         finally
         {
-            NamespaceGate.Release();
+            // An open that blocked let go of the gate, and if it failed before taking it back, there's nothing to release.
+            if (_holdsGate)
+            {
+                _holdsGate = false;
+                NamespaceGate.Release();
+            }
         }
     }
 
@@ -419,6 +508,8 @@ internal sealed partial class SftpServerSession : IAsyncDisposable
             throw Refuse(SftpStatusCode.NoSuchFile);
         }
 
+        RefuseSpecialFile(resolved);
+
         // O_CREAT without O_EXCL would follow a link planted after the check, so a new file is always CreateNew.
         // Truncating waits until the file has been verified, because it can't be undone.
         FileStreamOptions open = new()
@@ -444,12 +535,16 @@ internal sealed partial class SftpServerSession : IAsyncDisposable
             }
 
             bool append = flags.HasFlag(SftpOpenFlags.Append);
+
+            // S5: set on the descriptor already checked, so it changes how writes land, not what was opened.
+            bool appendInKernel = append && SftpServerLinux.TrySetAppend(stream.SafeFileHandle);
 #pragma warning disable CA2000 // The handle table owns it from here.
             BuildHandle(id, _handles.Add(new SftpServerFile(
                 stream,
                 canRead: !mutating || flags.HasFlag(SftpOpenFlags.Read),
                 canWrite: flags.HasFlag(SftpOpenFlags.Write) || append,
-                append)));
+                append,
+                appendInKernel)));
 #pragma warning restore CA2000
         }
         catch
@@ -468,9 +563,29 @@ internal sealed partial class SftpServerSession : IAsyncDisposable
     }
 
     /// <summary>
-    /// Opens a file. On Unix an open can block for good, on a FIFO with no writer, and .NET has neither O_NONBLOCK nor
-    /// a way to tell a FIFO from a file first. So it runs on the side, and a session that hits the limit ends:
-    /// the thread stays stuck until a writer turns up, and one per session is the most a client can tie up at a time.
+    /// Refuses to open what isn't a regular file, where the type can be read (Linux and macOS): .NET calls a FIFO or a
+    /// device a file, and opening a FIFO with no writer blocks in the system (finding S1). The walk already refused a
+    /// directory. Where the type can't be read, or the entry is swapped for a FIFO after this look, the open itself
+    /// is bounded by <see cref="OpenStreamAsync"/>, and <see cref="Verify"/> refuses what can't seek.
+    /// </summary>
+    private void RefuseSpecialFile(SftpServerResolved resolved)
+    {
+        if (resolved.Exists
+            && !OperatingSystem.IsWindows()
+            && _options.CheckTypeBeforeOpen
+            && LocalFile.GetFileType(resolved.RealPath, resolved.Info.UnixFileMode) is { } type
+            && type != SftpAttributes.TypeRegular)
+        {
+            throw Refuse(SftpStatusCode.Failure);
+        }
+    }
+
+    /// <summary>
+    /// Opens a file. On Unix an open can block for good, on a FIFO with no writer, and .NET has no O_NONBLOCK. So it
+    /// runs on the side, and a session that hits the limit ends: the thread stays stuck until a writer turns up, and
+    /// one per session is the most a client can tie up at a time. An open still running after
+    /// <see cref="GateHoldForOpen"/> lets go of <see cref="NamespaceGate"/>, so it holds up only its own session, and
+    /// takes the gate back before it returns, so the caller's checks of what was opened run under the gate.
     /// </summary>
     private async ValueTask<FileStream> OpenStreamAsync(string realPath, FileStreamOptions open, CancellationToken cancellationToken)
     {
@@ -482,7 +597,29 @@ internal sealed partial class SftpServerSession : IAsyncDisposable
         Task<FileStream> opening = Task.Run(() => new FileStream(realPath, open), CancellationToken.None);
         try
         {
-            return await opening.WaitAsync(_options.OpenTimeout, cancellationToken).ConfigureAwait(false);
+            TimeSpan held = _options.OpenTimeout < GateHoldForOpen ? _options.OpenTimeout : GateHoldForOpen;
+            if (!_holdsGate || held == _options.OpenTimeout)
+            {
+                return await opening.WaitAsync(_options.OpenTimeout, cancellationToken).ConfigureAwait(false);
+            }
+
+            try
+            {
+                return await opening.WaitAsync(held, cancellationToken).ConfigureAwait(false);
+            }
+            catch (TimeoutException)
+            {
+                // S1: the system is blocking this open. Every other session's path requests would wait behind it.
+            }
+
+            _holdsGate = false;
+            NamespaceGate.Release();
+            FileStream stream = await opening.WaitAsync(_options.OpenTimeout - held, cancellationToken).ConfigureAwait(false);
+
+            // If this is cancelled, the catch below disposes the stream, which the open has finished making.
+            await NamespaceGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            _holdsGate = true;
+            return stream;
         }
         catch (Exception ex) when (ex is TimeoutException or OperationCanceledException)
         {
@@ -508,7 +645,9 @@ internal sealed partial class SftpServerSession : IAsyncDisposable
     /// <summary>
     /// Checks what was really opened. The walk ran before the open, so something outside this process could have
     /// swapped a directory for a link in between. Walking again sees any swap that's still there. On Linux, the
-    /// kernel can say which file the descriptor is, which also sees one that was swapped back.
+    /// kernel can say which file the descriptor is, which also sees one that was swapped back. If it can't say,
+    /// because <c>/proc</c> is masked or not mounted, the open is refused and a warning logged (finding S4): the check
+    /// fails closed rather than quietly dropping to the by-name walk.
     /// </summary>
     private void Verify(FileStream stream, string path, SftpServerResolved resolved, SftpServerFinalLink finalLink)
     {
@@ -523,11 +662,19 @@ internal sealed partial class SftpServerSession : IAsyncDisposable
             throw Refuse(SftpStatusCode.PermissionDenied);
         }
 
-        if (OperatingSystem.IsLinux()
-            && new FileInfo($"/proc/self/fd/{stream.SafeFileHandle.DangerousGetHandle()}").LinkTarget is { } opened
-            && opened != resolved.RealPath)
+        if (OperatingSystem.IsLinux())
         {
-            throw Refuse(SftpStatusCode.PermissionDenied);
+            string? opened = new FileInfo($"{_options.DescriptorLinks}/{stream.SafeFileHandle.DangerousGetHandle()}").LinkTarget;
+            if (opened is null)
+            {
+                LogIdentityUnavailable(_logger);
+                throw Refuse(SftpStatusCode.Failure);
+            }
+
+            if (opened != resolved.RealPath)
+            {
+                throw Refuse(SftpStatusCode.PermissionDenied);
+            }
         }
     }
 
@@ -585,8 +732,26 @@ internal sealed partial class SftpServerSession : IAsyncDisposable
             throw Refuse(SftpStatusCode.Failure);
         }
 
-        long position = file.Append ? RandomAccess.GetLength(file.Handle) : (long)offset;
-        await RandomAccess.WriteAsync(file.Handle, body.Slice(dataStart, dataLength), position, cancellationToken).ConfigureAwait(false);
+        ReadOnlyMemory<byte> data = body.Slice(dataStart, dataLength);
+        if (file.Append && !file.AppendInKernel)
+        {
+            // S5: the end is found and written to under one gate, so another session's append can't land between.
+            await AppendGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                await RandomAccess.WriteAsync(file.Handle, data, RandomAccess.GetLength(file.Handle), cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                AppendGate.Release();
+            }
+        }
+        else
+        {
+            // With O_APPEND the kernel writes at the end and ignores the offset, as OpenSSH's server does.
+            await RandomAccess.WriteAsync(file.Handle, data, file.Append ? 0 : (long)offset, cancellationToken).ConfigureAwait(false);
+        }
+
         BuildStatus(id, SftpStatusCode.Ok);
     }
 
@@ -644,6 +809,8 @@ internal sealed partial class SftpServerSession : IAsyncDisposable
             BuildStatus(id, SftpStatusCode.Ok);
             return;
         }
+
+        RefuseSpecialFile(resolved);
 
         // Through a handle, so the check below covers the file that's changed. Windows needs write access for times.
         FileStreamOptions open = new()
@@ -1032,7 +1199,13 @@ internal sealed partial class SftpServerSession : IAsyncDisposable
     private void FileSystemInfo(uint id, ReadOnlySpan<byte> body)
     {
         SshReader reader = new(body);
-        _paths.Resolve(reader.ReadUtf8String(), SftpServerFinalLink.Follow);
+
+        // S6: a path that isn't there gets NoSuchFile, as OpenSSH's statvfs(2) answers, not the root's numbers.
+        if (!_paths.Resolve(reader.ReadUtf8String(), SftpServerFinalLink.Follow).Exists)
+        {
+            throw Refuse(SftpStatusCode.NoSuchFile);
+        }
+
         DriveInfo drive = new(_paths.Root);
         SshWriter writer = new(128, ReplyHeaderLength);
         try

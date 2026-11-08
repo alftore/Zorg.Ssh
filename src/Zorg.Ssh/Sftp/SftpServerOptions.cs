@@ -73,7 +73,10 @@ public sealed class SftpServerOptions
     /// </example>
     public int MaxListingBatch { get; init; } = 100;
 
-    /// <summary>Gets the logger factory. Paths the client sent aren't logged.</summary>
+    /// <summary>
+    /// Gets the logger factory. Paths the client sent aren't logged: a failure is logged with its status, or for an
+    /// unexpected one its exception type and stack trace, never an exception message, which can name a path.
+    /// </summary>
     /// <example>
     /// <code>
     /// SftpServerOptions options = new() { RootDirectory = root, LoggerFactory = loggerFactory };
@@ -86,6 +89,18 @@ public sealed class SftpServerOptions
     /// nobody is writing to. A session that hits this ends. Tests shorten it.
     /// </summary>
     internal TimeSpan OpenTimeout { get; init; } = TimeSpan.FromSeconds(10);
+
+    /// <summary>
+    /// Gets a value saying whether OPEN and SETSTAT read a file's type and refuse a FIFO or device before opening it
+    /// (finding S1). Only tests turn it off, to reach the open that blocks, as a FIFO swapped in after the look would.
+    /// </summary>
+    internal bool CheckTypeBeforeOpen { get; init; } = true;
+
+    /// <summary>
+    /// Gets the directory whose links name each open descriptor's file, which the Linux check of an open reads
+    /// (finding S4). Only tests change it, to stand for a host whose <c>/proc</c> is masked.
+    /// </summary>
+    internal string DescriptorLinks { get; init; } = "/proc/self/fd";
 
     /// <summary>Checks everything a session depends on, before a byte of it is read.</summary>
     internal void Validate()

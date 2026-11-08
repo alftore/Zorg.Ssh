@@ -5,6 +5,7 @@ using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Unicode;
+using Microsoft.Win32.SafeHandles;
 
 namespace Zorg.Ssh.Sftp;
 
@@ -52,6 +53,12 @@ internal static partial class SftpServerLinux
     private const int AtSymlinkNoFollow = 0x100;
     private const int AtEmptyPath = 0x1000;
     private const int OCloexec = 0x80000;
+
+    // F_GETFL and F_SETFL are the same on every architecture. O_APPEND is 02000 in asm-generic and on Arm and Arm64,
+    // which covers every architecture OpenDirectoryFlags knows.
+    private const int FGetFl = 3;
+    private const int FSetFl = 4;
+    private const int OAppend = 0x400;
 
     // STATX_TYPE | STATX_MODE | STATX_ATIME | STATX_MTIME | STATX_SIZE.
     private const uint StatxMask = 0x1 | 0x2 | 0x20 | 0x40 | 0x200;
@@ -187,6 +194,41 @@ internal static partial class SftpServerLinux
     }
 
     internal static int Close(int fd) => CloseFd(fd);
+
+    /// <summary>
+    /// Sets <c>O_APPEND</c> on an open file, so the kernel puts each write at the end, atomically, whatever the offset
+    /// (on Linux, <c>pwrite</c> on such a descriptor appends). This is how OpenSSH's <c>sftp-server</c> serves
+    /// <c>SSH_FXF_APPEND</c>, and it holds against every other writer, in this process or not (finding S5). False
+    /// where it can't be done here: another system or architecture, or no <c>fcntl</c>. The flag is read back to be sure.
+    /// </summary>
+    public static bool TrySetAppend(SafeFileHandle handle)
+    {
+        if (!OperatingSystem.IsLinux() || OpenDirectoryFlags == 0)
+        {
+            return false;
+        }
+
+        try
+        {
+            int flags = Fcntl(handle, FGetFl, 0);
+            if (flags < 0)
+            {
+                return false;
+            }
+
+            if ((flags & OAppend) == 0 && Fcntl(handle, FSetFl, flags | OAppend) != 0)
+            {
+                return false;
+            }
+
+            int now = Fcntl(handle, FGetFl, 0);
+            return now >= 0 && (now & OAppend) != 0;
+        }
+        catch (Exception ex) when (ex is EntryPointNotFoundException or DllNotFoundException)
+        {
+            return false;
+        }
+    }
 
     private static void ReadForScan(ScanFrame frame, byte[] buffer, byte[] status, byte[] target, ref int budget, Func<string, int, bool> climbsOut)
     {
@@ -443,6 +485,10 @@ internal static partial class SftpServerLinux
     [DefaultDllImportSearchPaths(DllImportSearchPath.SafeDirectories)]
     [LibraryImport("libc", EntryPoint = "close", SetLastError = true)]
     private static partial int CloseFd(int fd);
+
+    [DefaultDllImportSearchPaths(DllImportSearchPath.SafeDirectories)]
+    [LibraryImport("libc", EntryPoint = "fcntl", SetLastError = true)]
+    private static partial int Fcntl(SafeFileHandle fd, int command, int argument);
 
     [DefaultDllImportSearchPaths(DllImportSearchPath.SafeDirectories)]
     [LibraryImport("libc", EntryPoint = "getdents64", SetLastError = true)]
