@@ -295,6 +295,10 @@ public sealed class SshPeerContainer : IAsyncDisposable
                 "run", "-d", "--name", name, "--stop-timeout", "0",
                 "--label", $"{OwnerLabel}={Environment.ProcessId}",
                 "-p", "127.0.0.1::22",
+
+                // Docker lets a container's normal users bind any port (it sets this to 0), and Podman leaves the
+                // kernel's 1024. The tests that a privileged port is refused need the kernel's rule, on both.
+                "--sysctl", "net.ipv4.ip_unprivileged_port_start=1024",
                 image,
                 .. command ?? [],
             ];
