@@ -167,11 +167,19 @@ public abstract class HostKeyPolicy
     private static KnownHostsPolicy CreateKnownHosts(string path, bool addUnknown, IReadOnlyList<string>? globalPaths, TimeProvider? timeProvider)
     {
         ArgumentException.ThrowIfNullOrEmpty(path);
-        return new KnownHostsPolicy(
-            [SshCredential.ExpandHome(path)],
-            addUnknown,
-            timeProvider ?? TimeProvider.System,
-            globalPaths is null ? null : [.. globalPaths.Select(SshCredential.ExpandHome)]);
+        try
+        {
+            return new KnownHostsPolicy(
+                [SshCredential.ExpandHome(path)],
+                addUnknown,
+                timeProvider ?? TimeProvider.System,
+                globalPaths is null ? null : [.. globalPaths.Select(SshCredential.ExpandHome)]);
+        }
+        catch (NotSupportedException ex)
+        {
+            // A6: never fall back to a path relative to the working directory for a file that decides who is trusted.
+            throw new SshHostKeyException(ex.Message, ex);
+        }
     }
 
     internal static string ComputeFingerprint(ReadOnlySpan<byte> blob) =>

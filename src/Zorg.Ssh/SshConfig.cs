@@ -156,6 +156,11 @@ public sealed partial class SshConfig
         _logger = logger ?? NullLogger.Instance;
     }
 
+    /// <summary>A6: the home directory, or an exception, because an empty one would turn every <c>~/</c> path into one relative to the working directory.</summary>
+    private string Home => string.IsNullOrEmpty(_home)
+        ? throw new SshConfigException("The home directory can't be determined, so ~, %d and the default ~/.ssh files can't be used. Set HOME, or use absolute paths.")
+        : _home;
+
     private static string UserHome => Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
 
     /// <summary>Reads a config file and the files it includes.</summary>
@@ -227,7 +232,7 @@ public sealed partial class SshConfig
         string user = first.TryGetValue("USER", out Directive? userDirective)
             ? ExpandTokens(userDirective.Arguments[0], userDirective.Source, c => c switch
             {
-                'd' => _home,
+                'd' => Home,
                 'h' => hostName,
                 'p' => port.ToString(CultureInfo.InvariantCulture),
                 'u' => localUser,
@@ -237,7 +242,7 @@ public sealed partial class SshConfig
 
         string? Token(char c) => c switch
         {
-            'd' => _home,
+            'd' => Home,
             'h' => hostName,
             'p' => port.ToString(CultureInfo.InvariantCulture),
             'r' => user,
@@ -266,13 +271,13 @@ public sealed partial class SshConfig
 
         if (identityFiles.Count == 0 && !noDefaults)
         {
-            identityFiles.AddRange(DefaultIdentityNames.Select(name => Path.Combine(_home, ".ssh", name)));
+            identityFiles.AddRange(DefaultIdentityNames.Select(name => Path.Combine(Home, ".ssh", name)));
         }
 
         string[] knownHosts;
         if (!first.TryGetValue("USERKNOWNHOSTSFILE", out Directive? knownHostsDirective))
         {
-            knownHosts = [Path.Combine(_home, ".ssh", "known_hosts"), Path.Combine(_home, ".ssh", "known_hosts2")];
+            knownHosts = [Path.Combine(Home, ".ssh", "known_hosts"), Path.Combine(Home, ".ssh", "known_hosts2")];
         }
         else if (knownHostsDirective.Arguments is ["none"])
         {
@@ -726,13 +731,13 @@ public sealed partial class SshConfig
     {
         string expanded = ExpandTilde(ExpandTokens(pattern, source, c => c switch
         {
-            'd' => _home,
+            'd' => Home,
             'u' => Environment.UserName,
             _ => null,
         }));
         if (!Path.IsPathRooted(expanded))
         {
-            expanded = Path.Combine(_home, ".ssh", expanded);
+            expanded = Path.Combine(Home, ".ssh", expanded);
         }
 
         if (expanded.AsSpan().IndexOfAny('*', '?') < 0)
@@ -780,7 +785,7 @@ public sealed partial class SshConfig
 
     private string ExpandTilde(string path) =>
         path.StartsWith("~/", StringComparison.Ordinal) || path.StartsWith("~\\", StringComparison.Ordinal)
-            ? Path.Combine(_home, path[2..])
+            ? Path.Combine(Home, path[2..])
             : path;
 
     /// <summary>One setting, and the <c>Host</c> lines that must all match for it to apply: its own, and those around its <c>Include</c>.</summary>

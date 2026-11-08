@@ -149,7 +149,7 @@ Public keys are offered before they're signed with, so a key the server doesn't 
 
 A key file is read when its turn comes. If it can't be loaded, for example because the passphrase is wrong, `ConnectAsync` fails with `SshKeyFileException` at that point, and later credentials aren't tried.
 
-`~/` at the start of a path means the user's home directory.
+`~/` at the start of a path means the user's home directory. If the home directory can't be determined (no `HOME` and no passwd entry, as with some container users), it throws (`SshHostKeyException`, `SshKeyFileException` or `SshConfigException`) instead of reading a path under the working directory. Set `HOME` or use absolute paths.
 
 A keyboard-interactive handler must return exactly one answer per prompt. `SshPrompt.Text` comes from the server, so treat it as untrusted, and `SshPrompt.Echo` says whether the answer may be shown as it's typed.
 
