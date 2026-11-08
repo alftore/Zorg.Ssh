@@ -93,6 +93,12 @@ public sealed class SftpServerOptions
     /// </summary>
     internal bool CheckTypeBeforeOpen { get; init; } = true;
 
+    /// <summary>
+    /// Gets the directory whose links name each open descriptor's file, which the Linux check of an open reads
+    /// (finding S4). Only tests change it, to stand for a host whose <c>/proc</c> is masked.
+    /// </summary>
+    internal string DescriptorLinks { get; init; } = "/proc/self/fd";
+
     /// <summary>Checks everything a session depends on, before a byte of it is read.</summary>
     internal void Validate()
     {

@@ -788,6 +788,33 @@ public sealed class SftpServerProtocolTests : IDisposable
         Assert.False(client.Serving.IsCompleted);
     }
 
+    [Fact]
+    public async Task S4_an_open_is_refused_and_logged_when_the_descriptor_check_cant_read_proc()
+    {
+        // Finding S4: a null link target for /proc/self/fd/N skipped the identity check without a word. It now fails
+        // closed: the open is refused, nothing is truncated or created, and a warning says why.
+        Assert.SkipUnless(OperatingSystem.IsLinux(), "Only Linux checks the descriptor through /proc.");
+        await File.WriteAllTextAsync(_sandbox.InRoot("plain.txt"), "keep", Ct);
+        SftpRecordingLoggerFactory log = new();
+        await using SftpServerHarness client = await StartAsync(new SftpServerOptions
+        {
+            RootDirectory = _sandbox.Root,
+            LoggerFactory = log,
+            DescriptorLinks = "/proc-is-masked-here/self/fd",
+        });
+
+        Assert.Equal(Failure, (await client.OpenAsync("plain.txt", OpenRead)).Status);
+        Assert.Equal(Failure, (await client.OpenAsync("plain.txt", OpenWrite | OpenTruncate)).Status);
+        Assert.Equal(Failure, (await client.RequestAsync(SftpMessage.SetStat, Path("plain.txt").U32(4).U32(0x180))).Status);
+        Assert.Equal("keep", await File.ReadAllTextAsync(_sandbox.InRoot("plain.txt"), Ct));
+        Assert.Contains(log.Entries, e => e.Level == Microsoft.Extensions.Logging.LogLevel.Warning && e.Message.Contains("/proc/self/fd", StringComparison.Ordinal));
+        Assert.DoesNotContain(log.Entries, e => e.Message.Contains("plain.txt", StringComparison.Ordinal));
+
+        // With /proc readable, the same open goes through.
+        await using SftpServerHarness normal = await StartAsync(new SftpServerOptions { RootDirectory = _sandbox.Root });
+        Assert.Equal(SftpMessage.Handle, (await normal.OpenAsync("plain.txt", OpenRead)).Type);
+    }
+
     private void MakeFifo(string name)
     {
         using System.Diagnostics.Process mkfifo = System.Diagnostics.Process.Start("mkfifo", _sandbox.InRoot(name));

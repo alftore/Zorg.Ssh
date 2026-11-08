@@ -136,6 +136,9 @@ internal sealed partial class SftpServerSession : IAsyncDisposable
     [LoggerMessage(Level = LogLevel.Error, Message = "SFTP request type {RequestType} failed unexpectedly")]
     private static partial void LogUnexpected(ILogger logger, byte requestType, Exception exception);
 
+    [LoggerMessage(Level = LogLevel.Warning, Message = "SFTP open refused: /proc/self/fd can't be read, so what was opened can't be checked. Mount /proc for the server process.")]
+    private static partial void LogIdentityUnavailable(ILogger logger);
+
     private static void Return(ref byte[]? buffer)
     {
         byte[]? taken = buffer;
@@ -570,7 +573,9 @@ internal sealed partial class SftpServerSession : IAsyncDisposable
     /// <summary>
     /// Checks what was really opened. The walk ran before the open, so something outside this process could have
     /// swapped a directory for a link in between. Walking again sees any swap that's still there. On Linux, the
-    /// kernel can say which file the descriptor is, which also sees one that was swapped back.
+    /// kernel can say which file the descriptor is, which also sees one that was swapped back. If it can't say,
+    /// because <c>/proc</c> is masked or not mounted, the open is refused and a warning logged (finding S4): the check
+    /// fails closed rather than quietly dropping to the by-name walk.
     /// </summary>
     private void Verify(FileStream stream, string path, SftpServerResolved resolved, SftpServerFinalLink finalLink)
     {
@@ -585,11 +590,19 @@ internal sealed partial class SftpServerSession : IAsyncDisposable
             throw Refuse(SftpStatusCode.PermissionDenied);
         }
 
-        if (OperatingSystem.IsLinux()
-            && new FileInfo($"/proc/self/fd/{stream.SafeFileHandle.DangerousGetHandle()}").LinkTarget is { } opened
-            && opened != resolved.RealPath)
+        if (OperatingSystem.IsLinux())
         {
-            throw Refuse(SftpStatusCode.PermissionDenied);
+            string? opened = new FileInfo($"{_options.DescriptorLinks}/{stream.SafeFileHandle.DangerousGetHandle()}").LinkTarget;
+            if (opened is null)
+            {
+                LogIdentityUnavailable(_logger);
+                throw Refuse(SftpStatusCode.Failure);
+            }
+
+            if (opened != resolved.RealPath)
+            {
+                throw Refuse(SftpStatusCode.PermissionDenied);
+            }
         }
     }
 
