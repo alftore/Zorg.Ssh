@@ -413,7 +413,9 @@ public class SftpClientTests
         Assert.Equal(SftpStatusCode.Failure, ex.StatusCode);
         Assert.Equal(old, files.Files["b"]);
         Assert.DoesNotContain(fake.Requests, r => r.Type == SftpMessage.Extended);
-        Assert.Equal(0, files.OpenHandles);
+
+        // After a failure the handles are closed in the background, so the server can see the closes a moment later.
+        await WaitForAsync(() => files.OpenHandles == 0);
 
         // A new destination is still copied.
         await fake.Client.CopyFileAsync("a", "c", overwrite: false, Ct);
@@ -590,6 +592,16 @@ public class SftpClientTests
             await fake.Client.DisposeAsync();
             await fake.Client.DisposeAsync();
             await Assert.ThrowsAsync<SshConnectionException>(() => fake.Client.DeleteFileAsync("x", Ct));
+        }
+    }
+
+    private static async Task WaitForAsync(Func<bool> condition)
+    {
+        using CancellationTokenSource limit = CancellationTokenSource.CreateLinkedTokenSource(Ct);
+        limit.CancelAfter(TimeSpan.FromSeconds(20));
+        while (!condition())
+        {
+            await Task.Delay(5, limit.Token);
         }
     }
 
