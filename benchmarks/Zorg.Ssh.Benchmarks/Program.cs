@@ -13,4 +13,10 @@ if (args is ["--phases"])
     return;
 }
 
+if (args is ["--sftp-server", ..])
+{
+    await SftpServerSmallFiles.RunAsync(args);
+    return;
+}
+
 BenchmarkSwitcher.FromAssembly(typeof(CipherBenchmarks).Assembly).Run(args);
