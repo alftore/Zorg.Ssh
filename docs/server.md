@@ -90,7 +90,7 @@ private static bool IsPasswordRight(string userName, string password)
 }
 ```
 
-`SshPasswordRequest.ToString` leaves the password out, so logging a request can't leak it. Don't log `request.Password` yourself. `RemoteEndPoint` on both requests is the client's address and port, for your own rate limits or audit log. It's null for a connection given to `ServeStreamAsync`. A slow check runs on the client's connection, so `LoginGraceTime` and `MaxUnauthenticatedConnections` bound how many can run at once.
+`SshPasswordRequest.ToString` leaves the password out, so logging a request can't leak it. The user name is the client's own text and may hold line breaks: `ToString` on both requests and on `SshPrincipal` removes control and invisible characters from it and caps it at 256 characters, but `UserName` itself is exact, so escape it yourself if you log it. Don't log `request.Password` yourself. `RemoteEndPoint` on both requests is the client's address and port, for your own rate limits or audit log. It's null for a connection given to `ServeStreamAsync`. A slow check runs on the client's connection, so `LoginGraceTime` and `MaxUnauthenticatedConnections` bound how many can run at once.
 
 ### Public keys
 
