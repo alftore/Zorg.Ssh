@@ -32,13 +32,18 @@ internal enum SftpServerFinalLink
 /// <param name="Attributes">What the last component is, or null if it doesn't exist.</param>
 /// <param name="IsLink">Whether the last component is a link, which only <see cref="SftpServerFinalLink.Keep"/> can give.</param>
 /// <param name="ParentMissing">Whether the directory holding the last component doesn't exist either.</param>
+/// <param name="Info">
+/// The look at <paramref name="RealPath"/> that gave <paramref name="Attributes"/>, made by this resolve. Its
+/// cached size and times describe the same moment. It belongs to the one request that resolved the path.
+/// </param>
 internal readonly record struct SftpServerResolved(
     string RealPath,
     string VirtualPath,
     IReadOnlyList<string> Parts,
     FileAttributes? Attributes,
     bool IsLink,
-    bool ParentMissing)
+    bool ParentMissing,
+    FileInfo Info)
 {
     public bool Exists => Attributes is not null;
 
@@ -398,8 +403,13 @@ internal sealed class SftpServerPaths
     {
         int hops = 0;
         int missing = 0;
+
+        // What this walk last read, while it is still the place that parts names. Finish uses it instead of reading
+        // the same entry again. It never outlives this call.
+        FileInfo? seen = null;
         while (pending.TryPop(out string? component))
         {
+            seen = null;
             if (component == "..")
             {
                 if (parts.Count == 0)
@@ -424,6 +434,7 @@ internal sealed class SftpServerPaths
             if ((int)attributes == -1)
             {
                 missing = 1;
+                seen = info;
                 continue;
             }
 
@@ -436,11 +447,13 @@ internal sealed class SftpServerPaths
                     throw Escape();
                 }
 
+                seen = info;
                 continue;
             }
 
             if (pending.Count == 0 && finalLink == SftpServerFinalLink.Keep)
             {
+                seen = info;
                 break;
             }
 
@@ -453,13 +466,18 @@ internal sealed class SftpServerPaths
             PushLink(target, parts, pending);
         }
 
-        return Finish(parts, missing);
+        return Finish(parts, missing, seen);
     }
 
-    private SftpServerResolved Finish(List<string> parts, int missing)
+    /// <summary>
+    /// Describes where the walk ended. <paramref name="seen"/> is the walk's own look at that place, made in this call,
+    /// or null when the walk didn't look at it (the root, a place reached by <c>..</c>, or one below a missing
+    /// directory), which is then looked at here.
+    /// </summary>
+    private SftpServerResolved Finish(List<string> parts, int missing, FileInfo? seen)
     {
         string real = Join(parts);
-        FileInfo info = new(real);
+        FileInfo info = seen ?? new FileInfo(real);
         FileAttributes attributes = info.Attributes;
         bool exists = (int)attributes != -1;
         return new SftpServerResolved(
@@ -468,7 +486,8 @@ internal sealed class SftpServerPaths
             parts,
             exists ? attributes : null,
             exists && ReadLinkTarget(info, attributes) is not null,
-            missing > 1);
+            missing > 1,
+            info);
     }
 
     /// <summary>

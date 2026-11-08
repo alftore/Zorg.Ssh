@@ -166,7 +166,8 @@ internal sealed partial class SftpServerSession : IAsyncDisposable
             throw Refuse(SftpStatusCode.NoSuchFile);
         }
 
-        return SftpServerAttributes.FromInfo(new FileInfo(resolved.RealPath));
+        // The resolve's own look at the entry, made a moment ago in this request, so it isn't read a second time.
+        return SftpServerAttributes.FromInfo(resolved.Info);
     }
 
     private static void Move(SftpServerResolved source, SftpServerResolved target, bool overwrite)
