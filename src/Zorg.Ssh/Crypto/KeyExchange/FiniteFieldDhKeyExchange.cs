@@ -93,7 +93,7 @@ internal sealed class DiffieHellmanGroup
 /// <para>
 /// Cost, for guarantee 3: one handshake is two exponentiations, about 9 ms each for group 14 and 17 to 29 ms for group 16 on the development
 /// x64 machine. On a server that is CPU a client can make it spend before logging in, so a server offers these only
-/// when its key exchange list names them.
+/// when its key exchange list names them, and bounds how many run at once before login (<see cref="Zorg.Ssh.Transport.TransportOptions.PreAuthCostlyKexGate"/>).
 /// </para>
 /// </remarks>
 internal sealed class FiniteFieldDhKeyExchange : KeyExchangeMethod
@@ -129,6 +129,9 @@ internal sealed class FiniteFieldDhKeyExchange : KeyExchangeMethod
 
     /// <inheritdoc/>
     public override HashAlgorithmName HashAlgorithm { get; }
+
+    /// <inheritdoc/>
+    public override bool IsCostly => true;
 
     /// <summary>Gets OpenSSH's exponent size, in bits, for a prime of <paramref name="primeBits"/> and a session needing <paramref name="keyNeedBytes"/>.</summary>
     public static int ExponentBits(int primeBits, int keyNeedBytes) =>

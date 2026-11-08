@@ -13,6 +13,12 @@ internal abstract class KeyExchangeMethod : IDisposable
     /// <summary>Gets the hash used for the exchange hash and for key derivation.</summary>
     public abstract HashAlgorithmName HashAlgorithm { get; }
 
+    /// <summary>
+    /// Gets whether answering a client costs enough CPU to bound before login: finite-field Diffie-Hellman does
+    /// (tens of milliseconds), elliptic-curve and ML-KEM exchanges don't (microseconds).
+    /// </summary>
+    public virtual bool IsCostly => false;
+
     /// <summary>Client side: generates the ephemeral key, and returns the bytes of the <c>Q_C</c> string.</summary>
     public abstract byte[] CreateClientPublicValue();
 

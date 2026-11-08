@@ -261,7 +261,7 @@ internal sealed partial class SshTransport
         switch (_kexStep)
         {
             case KexStep.AwaitExchange when message == MessageNumber.KexEcdhInit && _options.Role == SshRole.Server:
-                ServerExchange(payload);
+                await ServerExchangeAsync(payload, cancellationToken).ConfigureAwait(false);
                 break;
             case KexStep.AwaitExchange when message == MessageNumber.KexEcdhReply && _options.Role == SshRole.Client:
                 await ClientExchangeAsync(payload, cancellationToken).ConfigureAwait(false);
@@ -274,7 +274,7 @@ internal sealed partial class SshTransport
         }
     }
 
-    private void ServerExchange(ReadOnlyMemory<byte> payload)
+    private async ValueTask ServerExchangeAsync(ReadOnlyMemory<byte> payload, CancellationToken cancellationToken)
     {
         byte[] clientPublic;
         {
@@ -287,7 +287,32 @@ internal sealed partial class SshTransport
         NegotiatedAlgorithms negotiated = _negotiated!;
         SshPrivateKey hostKey = _options.HostKeys.First(k => CanSign(k, negotiated.HostKey));
         byte[] hostKeyBlob = hostKey.PublicKey.Blob.ToArray();
-        byte[] serverPublic = _kexMethod!.ServerRespond(clientPublic, out byte[] sharedSecret);
+        byte[] serverPublic;
+        byte[] sharedSecret;
+
+        // Guarantee 3: before login, the server's total CPU on finite-field Diffie-Hellman is bounded, not just per
+        // address. The wait ends with the handshake deadline, which closes the transport, or with cancellation.
+        KeyExchangeMethod method = _kexMethod!;
+        SemaphoreSlim? gate = method.IsCostly && _phase != TransportPhase.Connected ? _options.PreAuthCostlyKexGate : null;
+        if (gate is not null)
+        {
+            await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        try
+        {
+            if (gate is not null)
+            {
+                _options.CostlyKexComputing?.Invoke();
+            }
+
+            serverPublic = method.ServerRespond(clientPublic, out sharedSecret);
+        }
+        finally
+        {
+            gate?.Release();
+        }
+
         try
         {
             byte[] exchangeHash = ComputeExchangeHash(hostKeyBlob, clientPublic, serverPublic, sharedSecret);

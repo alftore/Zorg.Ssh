@@ -36,6 +36,17 @@ internal sealed class TransportOptions
     /// </summary>
     public KeyExchangeExtension? KeyExchangeExtension { get; init; }
 
+    /// <summary>
+    /// Gets the gate a server takes around each costly key exchange computation (finite-field Diffie-Hellman) while
+    /// the peer isn't logged in. It is shared by every connection of one server, so the CPU spent before login is
+    /// bounded in total, not only per address. Null means no bound. A wait for it ends with the connection's
+    /// handshake deadline or cancellation. Rekeys after login don't take it.
+    /// </summary>
+    public SemaphoreSlim? PreAuthCostlyKexGate { get; init; }
+
+    /// <summary>Gets a hook that runs inside the gate, just before the computation. For tests that hold the computation.</summary>
+    public Action? CostlyKexComputing { get; init; }
+
     /// <summary>Gets the keys a server proves its identity with. Required for a server.</summary>
     public IReadOnlyList<SshPrivateKey> HostKeys { get; init; } = [];
 

@@ -425,6 +425,16 @@ public sealed record SshServerOptions
     /// <summary>Gets the clock, for tests.</summary>
     internal TimeProvider TimeProvider { get; init; } = TimeProvider.System;
 
+    /// <summary>
+    /// Gets how many finite-field Diffie-Hellman computations may run at once on this server before login. Null, the
+    /// default, is the larger of 1 and half the processors. Not public: it protects the CPU, and a server has no use for
+    /// a bigger number than that.
+    /// </summary>
+    internal int? PreAuthCostlyKexConcurrency { get; init; }
+
+    /// <summary>Gets a hook that runs while a pre-login Diffie-Hellman computation holds its slot. For tests that hold it.</summary>
+    internal Action? CostlyKexComputing { get; init; }
+
     /// <summary>Gets a hook that sees each connection once it is authenticated and running. For tests that count what a connection holds; it changes nothing.</summary>
     internal Action<Connection.SshConnection>? ConnectionStarted { get; init; }
 

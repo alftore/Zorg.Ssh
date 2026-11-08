@@ -54,6 +54,10 @@ public sealed partial class SshServer : IAsyncDisposable
 #pragma warning restore CA2213
     private readonly ConcurrentDictionary<Task, bool> _connections = new();
     private readonly TransportOptions _transportOptions;
+    // Never disposed, like _stop: a connection that is still waiting on it must not meet a disposed semaphore.
+#pragma warning disable CA2213
+    private readonly SemaphoreSlim _costlyKexGate;
+#pragma warning restore CA2213
     private int _connectionCount;
     private readonly PerAddressLimiter _perAddress;
     private readonly TimeProvider _idleTime;
@@ -68,6 +72,8 @@ public sealed partial class SshServer : IAsyncDisposable
         _perAddress = new PerAddressLimiter(options.MaxUnauthenticatedPerAddress);
         _listener = listener;
         _logger = options.LoggerFactory?.CreateLogger<SshServer>() ?? NullLogger<SshServer>.Instance;
+        int costly = Math.Max(1, options.PreAuthCostlyKexConcurrency ?? Environment.ProcessorCount / 2);
+        _costlyKexGate = new SemaphoreSlim(costly, costly);
         _transportOptions = new TransportOptions
         {
             Role = SshRole.Server,
@@ -83,6 +89,8 @@ public sealed partial class SshServer : IAsyncDisposable
             Ciphers = options.Algorithms.Ciphers,
             Macs = options.Algorithms.Macs,
             Logger = _logger,
+            PreAuthCostlyKexGate = _costlyKexGate,
+            CostlyKexComputing = options.CostlyKexComputing,
         };
     }
 
