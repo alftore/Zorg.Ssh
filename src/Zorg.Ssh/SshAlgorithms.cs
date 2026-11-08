@@ -93,7 +93,10 @@ public sealed record SshAlgorithms
         }
     }
 
-    /// <summary>Gets the host key algorithms.</summary>
+    /// <summary>
+    /// Gets the host key algorithms. On a server this also limits the signature algorithms a user key may use, and the list
+    /// advertised in <c>server-sig-algs</c>, so a list without any RSA name refuses RSA user keys.
+    /// </summary>
     public IReadOnlyList<string> HostKeys
     {
         get => _hostKeys;
@@ -125,9 +128,12 @@ public sealed record SshAlgorithms
     /// <summary>Gets whether <c>ssh-rsa</c> (SHA-1) signatures may be used, for host keys and for user authentication.</summary>
     internal bool AllowsRsaSha1 => HostKeys.Contains(LegacyAlgorithms.RsaSha1);
 
-    /// <summary>Gets what a server lists in <c>server-sig-algs</c>: the defaults, and <c>ssh-rsa</c> when it's allowed.</summary>
+    /// <summary>
+    /// Gets what a server lists in <c>server-sig-algs</c> and accepts from a user key (A4): the defaults that <see cref="HostKeys"/> names,
+    /// and <c>ssh-rsa</c> when it's allowed.
+    /// </summary>
     internal IReadOnlyList<string> ServerSignatureAlgorithms =>
-        AllowsRsaSha1 ? [.. HostKeyAlgorithms.Default, LegacyAlgorithms.RsaSha1] : HostKeyAlgorithms.Default;
+        [.. HostKeyAlgorithms.Default.Where(HostKeys.Contains), .. AllowsRsaSha1 ? (string[])[LegacyAlgorithms.RsaSha1] : []];
 
     /// <summary>Gets the key exchange list a server offers: finite-field Diffie-Hellman only if it was named explicitly.</summary>
     internal IReadOnlyList<string> ServerKeyExchange =>
