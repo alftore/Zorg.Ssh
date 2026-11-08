@@ -97,7 +97,9 @@ internal sealed class SftpServerSandbox : IDisposable
 
     public SftpServerSandbox()
     {
-        Base = Directory.CreateTempSubdirectory("zorg-sftp-server").FullName;
+        // The real path: on macOS the temporary directory is under /var, a link to /private/var. The server resolves
+        // its root, so a link the tests plant must name the root the same way, or it's refused for leaving it.
+        Base = RealPath(Directory.CreateTempSubdirectory("zorg-sftp-server").FullName);
         Root = Path.Combine(Base, "root");
         Outside = Path.Combine(Base, "outside");
         Directory.CreateDirectory(Root);
@@ -126,6 +128,25 @@ internal sealed class SftpServerSandbox : IDisposable
         }
 
         return snapshot;
+    }
+
+    /// <summary>Gives a path with every link in it resolved, as <c>realpath</c> does. Windows paths are left as they are.</summary>
+    public static string RealPath(string path)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return path;
+        }
+
+        string current = "/";
+        foreach (string part in path.Split('/', StringSplitOptions.RemoveEmptyEntries))
+        {
+            string next = Path.Join(current, part);
+            FileSystemInfo? target = new FileInfo(next).ResolveLinkTarget(returnFinalTarget: true);
+            current = target is null ? next : RealPath(target.FullName);
+        }
+
+        return current;
     }
 
     /// <summary>Removes everything. Links go first, by hand: a recursive delete refuses a junction.</summary>

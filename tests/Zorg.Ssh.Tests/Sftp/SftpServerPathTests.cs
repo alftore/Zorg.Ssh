@@ -725,7 +725,8 @@ public sealed class SftpServerPathTests : IDisposable
             return;
         }
 
-        string root = new DirectoryInfo(_sandbox.Root).ResolveLinkTarget(returnFinalTarget: true)?.FullName ?? _sandbox.Root;
+        // Both sides as realpath gives them: a link above the root, like macOS's /var, mustn't make an inside path look outside.
+        string root = SftpServerSandbox.RealPath(_sandbox.Root);
         foreach (string path in EntriesWithoutFollowingLinks(_sandbox.Root))
         {
             // A link that leads nowhere can't be followed, so it can't lead out. (busybox realpath guesses for those.)
