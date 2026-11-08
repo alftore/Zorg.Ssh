@@ -309,7 +309,18 @@ public sealed class ConnectionClosedTests : IDisposable
                     release.Wait(Limit);
                 });
 
+                // Held first, so the server can't confirm the open before the cut: without it a quick server answered first
+                // now and then, and the open succeeded.
+                link.Hold();
                 Task<SshChannel> open = client.Connection.OpenChannelAsync("session", CancellationToken.None);
+                using (CancellationTokenSource limit = new(Limit))
+                {
+                    while (client.Connection.OpeningCount == 0)
+                    {
+                        await Task.Delay(1, limit.Token);
+                    }
+                }
+
                 link.Sever();
 
                 // While a callback is stuck, the connection has still ended, and other connections still work.
