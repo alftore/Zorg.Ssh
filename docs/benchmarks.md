@@ -12,6 +12,7 @@ Zorg.Ssh measured against SSH.NET 2026.0.0 and Tmds.Ssh 0.26.0, talking to a rea
 - **ChaCha20: SSH.NET is ahead.** Its download took 5% less than Zorg.Ssh's and its upload 12% less, in both cases inside the noise for upload. Tmds.Ssh's download is 2.7 times slower. Its upload is level.
 - **Two things changed after that run, both measured against `main` with the trees taking turns.** The AES download "regression" is noise: 422 ms for both trees over eight runs each, so the 476 ms above was a slow moment, and the AES download rows for the other two libraries should be read with that in mind ([the check](#the-aes-download-check)). And ChaCha20 now runs on the library's own vector code, which makes ChaCha20 download 1.23 to 1.29 times as fast (about 504 ms, against about 637 ms) and upload 1.68 times as fast (489 ms, against 823 ms). SSH.NET and Tmds.Ssh weren't measured again, so the ChaCha20 rows in the table below are from before the change ([the numbers](#chacha20-in-vector-code)).
 - **Memory: Zorg.Ssh now allocates 10 KB per command**, against 12.7 KB for SSH.NET and 3.1 KB for Tmds.Ssh. In transfers it allocates 9 to 33 times what Tmds.Ssh does. Against SSH.NET it allocates less on download (0.3 to 0.7 times) and more on upload (1.5 to 1.7 times).
+- **8 November: the SFTP server and transfer allocations.** The server now handles 2.6 times as many stats a second on NTFS, 16 times as many directory listings, and 1.5 to 1.9 times as many small-file creates, reads and removes. A 128 MiB transfer allocates 2 to 7 times less on the client (AES download 6.8 MB to 1.0 MB), which leaves it at 3 to 7 times Tmds.Ssh and below SSH.NET in every row. Transfer times didn't change beyond the noise. See [SFTP server and transfer allocations](#8-november-sftp-server-and-transfer-allocations).
 
 ## Setup
 
@@ -211,6 +212,73 @@ The AES-GCM rows in the same runs didn't change: download 422 ms and upload 390 
 
 Noise: another agent's test runs shared the machine for part of this. Most iterations were clean, but single runs had outliers (an AES case at 535 ms, one at 649 ms). The pairs above alternate the trees to spread that. The micro-benchmarks ran with no test process running.
 
+## 8 November: SFTP server and transfer allocations
+
+Measured on the machine described above, the same day, on branch `perf`. The base is `40c1aad`; the final tree is `7abef61`. Every comparison ran the two builds taking turns, each run in a new process, and every run started only when total CPU was under 12% over three one-second samples (most were under 5%). The benchmarks never ran beside a test run.
+
+### The SFTP server with many small files
+
+Zorg.Ssh's own server, driven by its own client, in one process, on loopback. The root is a new directory in the temp directory on NTFS. Each request waits for its answer before the next goes. Per round: 2,000 files of 1 KiB in `/bench/a/b/c/rN` (six components below the root), created and written, stated, opened and read, listed ten times as a whole directory, and removed.
+
+```text
+dotnet build benchmarks/Zorg.Ssh.Benchmarks -c Release
+dotnet run -c Release --no-build --project benchmarks/Zorg.Ssh.Benchmarks -- --sftp-server
+```
+
+Options: `--files N` (2,000), `--rounds N` (5, after one warmup round), `--size N` (1,024 bytes), `--lists N` (10). It needs no container. It prints each round and a table of medians. `Allocated` counts both ends, as they share the process.
+
+Three pairs, 5 rounds each. Each cell is the median of the three run medians, with the lowest and highest run median in brackets:
+
+| Operation | `40c1aad`, a second | `7abef61`, a second | Change | Allocated per operation |
+|---|---:|---:|---:|---:|
+| Create, write and close | 722 (719 to 723) | 1,111 (1,072 to 1,118) | 1.54 times | 19.6 KB to 11.6 KB |
+| Stat | 1,491 (1,461 to 1,496) | 3,813 (3,707 to 4,093) | 2.56 times | 7.8 KB to 4.8 KB |
+| Open, read and close | 421 (419 to 436) | 650 (643 to 650) | 1.54 times | 35.7 KB to 18.5 KB |
+| List 2,000 entries | 13.0 (12.8 to 13.3) | 210 (204 to 214) | 16 times | 1,975 KB to 1,779 KB |
+| Remove | 1,371 (1,365 to 1,399) | 2,616 (2,561 to 2,620) | 1.91 times | 7.6 KB to 4.5 KB |
+
+Every run of the new tree beat every run of the old one in every row. The base runs also varied between sessions: `read` gave 626 files a second in the first baseline run of the day, against 419 to 436 in these three, so compare only runs that took turns.
+
+Where the time went. On this machine an attribute read (`GetFileAttributesEx`) costs about 25 µs, whether through .NET or called directly, and reading a link target (which opens the file) about 30 µs. The server read both for every path component, then both again for the last one, and STAT read the entry a third time. A request that does no file work (REALPATH of `.`) takes about 0.1 ms, so a stat of a path six deep spent most of its 0.68 ms in the walk. The changes:
+
+1. **A link's target is read only for an entry marked as a link** (`cad8d8a`). .NET sets `FileAttributes.ReparsePoint` on every link, on Unix from the same `lstat` as the attributes, and `LinkTarget` is null without it. The walk sees the same thing as before. This was the big step: stat 2.0 times, listings 15 times, as each listed entry also read its target.
+2. **The walk's own look at the last component is used again** (`4d9e2b8`), by the resolve and by the attributes STAT returns, within the one request. Nothing outlives the request. OPEN still walks the whole path a second time after opening, which is the check against a swap.
+3. **The client grows its read window only after a full answer** (`f3f294f`). A small file's first answer is short, and the client used to send two more reads past the end as well as asking for the rest.
+
+What is left is about one attribute read per component, twice for OPEN, which is the file system's own cost on this machine. The demo that started this saw 110 files a second against 205 for OpenSSH's server in a different workload; OpenSSH wasn't measured here, so this says nothing about where the two stand now.
+
+### Transfer allocations
+
+The SFTP client against the OpenSSH container, as in [the main table](#sftp-128-mib-file), Zorg.Ssh cases only, four pairs taking turns. Means of the run means, with the lowest and highest run:
+
+| Case | `40c1aad` time | `7abef61` time | `40c1aad` allocated | `7abef61` allocated |
+|---|---:|---:|---:|---:|
+| Download, AES-256-GCM | 427 ms (409 to 454) | 428 ms (414 to 441) | 6.71 to 6.82 MB | 1.02 to 1.05 MB |
+| Download, ChaCha20 | 502 ms (496 to 505) | 494 ms (490 to 505) | 7.23 to 7.37 MB | 1.69 to 1.71 MB |
+| Upload, AES-256-GCM | 434 ms (347 to 535) | 402 ms (355 to 457) | 4.60 to 4.66 MB | 1.46 to 1.48 MB |
+| Upload, ChaCha20 | 529 ms (477 to 589) | 495 ms (484 to 506) | 5.62 to 5.78 MB | 2.45 to 2.73 MB |
+
+**Allocation fell 2.1 to 6.6 times. Time didn't change beyond the noise**: the ranges overlap in every row, and the upload rows have standard deviations of up to 30% inside single runs. Against the 7 November figures for the other two libraries, Zorg.Ssh now allocates 3.4 to 7.4 times what Tmds.Ssh does (it was 9 to 33 times), and less than SSH.NET in all four rows (0.1 to 0.55 times).
+
+Where the allocations came from was found by sampling allocations with `dotnet-trace` on a client in its own process, against a Zorg.Ssh server in another. Per 32 KiB request there were state machine boxes for the packet read, the transport's receive, the channel stream's read and the wait for an answer, a linked cancellation source per packet, a closure per DATA answer, and a decoded and cleaned status text per OK. The changes:
+
+4. **Status code without the text for OK and EOF; no closure per DATA answer; an answer already there is returned without a state machine** (`bd98461`).
+5. **One linked token source for the receive loop** (`80ffeee`), instead of one per packet. Socket reads under it stop allocating a cancellation registration each time.
+6. **Pooled state machines** (`7abef61`) for the six async methods that run per packet or per answer.
+
+On that loopback driver (128 MiB, both ends Zorg.Ssh) the client went from about 4.1 MB to 0.9 MB on download and 5.3 MB to 1.05 MB on upload, with times inside the spread. Each step was measured on its own, and the commit messages give the numbers.
+
+What the rest of a transfer costs: on the client, copying and clearing buffers is about 2% of the sampled thread time, and the socket and the cipher a few percent each. Most of the time is waiting. The download over the container is held by the path (see [the path itself](#the-path-itself)), so nothing on the client could show there.
+
+### Found and left
+
+- **The second walk in OPEN.** It is the check that the opened file is the one that was checked. Replacing it (with the handle's final path on Windows, say) is a design decision about root containment, not a speed-up.
+- **Exceptions for status answers in the server.** EOF and "no such file" go through a thrown exception, about 4 to 10 µs, against 250 µs or more per request.
+- **Copies on the send path.** A channel's data is copied into a message buffer and again into the packet buffer. One copy could go with a transport call that takes a header and a body, but it is under 1% of the client's time.
+- **The send loop's wake-up** allocates a channel read operation each time it waits, now one of the larger remaining allocations per packet.
+- **Read chunk size.** Requests are 32 KiB with 64 in flight. OpenSSH accepts larger reads, but the path, not the request count, limits the download here.
+- **Not measured:** Linux and other file systems, many sessions at once (requests that use a path take one process-wide gate), and a real network.
+
 ## Limits
 
 - **One machine, one run setup.** No other hardware, operating system or server was tried. A Linux client would avoid the Windows to WSL hop altogether.
@@ -220,8 +288,8 @@ Noise: another agent's test runs shared the machine for part of this. Most itera
 - **Noise.** Upload standard deviations reach 20% of the mean. Eight iterations don't settle small differences.
 - **One run.** The first measurement had two. This one has one, so run-to-run spread isn't shown, only the spread inside the run.
 - **Defaults only.** Each library might do better tuned. Their chunk sizes and pipelining differ, and that's part of what's measured.
-- **Single connection, single transfer.** Concurrent channels, many connections, small files and directory listing weren't measured.
+- **Single connection, single transfer.** Concurrent channels and many connections weren't measured. Small files and directory listing were measured on 8 November against Zorg.Ssh's own server only, not OpenSSH.
 - **Client-side memory only.** `Allocated` is managed memory on the client. It doesn't include native memory or peak use.
 - **A file over 128 MiB** wasn't tested, so rekey cost in long transfers is only lightly covered.
-- **The server isn't benchmarked.** `SshServer` plays no part in these results.
+- **The server is benchmarked only against itself.** `SshServer` plays no part in the comparison tables. `--sftp-server` measures its SFTP server on one machine and one file system, and compares builds, not servers.
 - **It's a pre-release.** Performance work is planned for later, and these numbers will age.
