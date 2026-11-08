@@ -211,7 +211,7 @@ internal static class SftpServerAttributes
     public static SftpAttributes FromInfo(FileSystemInfo info)
     {
         FileAttributes attributes = info.Attributes;
-        bool link = info.LinkTarget is not null;
+        bool link = SftpServerPaths.ReadLinkTarget(info, attributes) is not null;
         bool directory = !link && attributes.HasFlag(FileAttributes.Directory);
         // .NET gives a link its target's permission bits (or -1 when there's no target), which would describe a file
         // that can be outside the root. A link's own bits mean nothing on Unix and are 0777 on Linux, as OpenSSH sends.

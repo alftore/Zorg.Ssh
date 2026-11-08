@@ -427,7 +427,7 @@ internal sealed class SftpServerPaths
                 continue;
             }
 
-            string? target = info.LinkTarget;
+            string? target = ReadLinkTarget(info, attributes);
             if (target is null)
             {
                 if (OperatingSystem.IsWindows() && attributes.HasFlag(FileAttributes.ReparsePoint))
@@ -467,9 +467,19 @@ internal sealed class SftpServerPaths
             "/" + string.Join('/', parts),
             parts,
             exists ? attributes : null,
-            exists && info.LinkTarget is not null,
+            exists && ReadLinkTarget(info, attributes) is not null,
             missing > 1);
     }
+
+    /// <summary>
+    /// Reads where a link leads, or null if <paramref name="info"/> isn't one. .NET marks a link with
+    /// <see cref="FileAttributes.ReparsePoint"/> on every platform (on Unix from the same <c>lstat</c> that gave
+    /// <paramref name="attributes"/>), and <see cref="FileSystemInfo.LinkTarget"/> is null for anything without it, so
+    /// only an entry with the flag costs the second call. The answer is the same as asking every time: it describes
+    /// the entry as <paramref name="attributes"/> found it, a moment earlier.
+    /// </summary>
+    internal static string? ReadLinkTarget(FileSystemInfo info, FileAttributes attributes) =>
+        attributes.HasFlag(FileAttributes.ReparsePoint) ? info.LinkTarget : null;
 
     /// <summary>Puts a link's target on the list. An absolute target has to name the root, and restarts the walk there.</summary>
     private void PushLink(string target, List<string> parts, Stack<string> pending)
