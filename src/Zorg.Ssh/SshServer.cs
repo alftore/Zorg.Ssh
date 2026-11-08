@@ -18,6 +18,11 @@ using Zorg.Ssh.Transport;
 namespace Zorg.Ssh;
 
 /// <summary>An SSH server. Start with <see cref="StartAsync"/>, and dispose it to stop.</summary>
+/// <remarks>
+/// Don't expose it to the public internet or to users you don't trust. It hasn't had an external security review or
+/// time in production, and a version number won't change that. It suits tests, local tools, and a trusted internal
+/// network or VPN where you know who can connect. See <c>docs/server.md</c>.
+/// </remarks>
 /// <example>
 /// <code>
 /// await using SshServer server = await SshServer.StartAsync(new SshServerOptions

@@ -291,6 +291,10 @@ public sealed record SshDirectTcpRequest
 public sealed record SshServerOptions
 {
     /// <summary>Gets the address to listen on. The default is loopback, so exposing a server is a deliberate choice.</summary>
+    /// <remarks>
+    /// An address other than loopback should still be on a trusted network or a VPN, never the public internet: the
+    /// server hasn't had an external security review or time in production. See <c>docs/server.md</c>.
+    /// </remarks>
     public IPAddress Address { get; init; } = IPAddress.Loopback;
 
     /// <summary>Gets the port. Zero, the default, picks a free one: read it from <see cref="SshServer.LocalEndPoint"/>.</summary>

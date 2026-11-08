@@ -43,6 +43,7 @@ internal static class ServerExamples
         // doc:server-public-key
         SshServerOptions options = new()
         {
+            // Every interface: only on a trusted network, never the public internet.
             Address = IPAddress.Any,
             Port = 2222,
             HostKeys = [hostKey],

@@ -2,7 +2,18 @@
 
 `SshServer` runs an SSH server inside your process. It doesn't run a shell or log people in to the machine: your handlers decide who gets in and what a session does.
 
-The server is the newest and least tested part of the library. See [security.md](security.md#unverified) before you expose one to a network.
+## Where to run it
+
+> **Don't put this server on the public internet, or in front of users you don't trust.** It hasn't been battle-tested, and that doesn't change with a version number: a 1.0 release won't mean it's ready for the internet.
+
+It suits:
+
+- tests, and local tools on one machine;
+- a trusted internal network or a VPN, where you know who can connect.
+
+It doesn't suit a port open to the internet, or users you don't know. That's where SSH servers meet constant scanning, credential stuffing and new attacks, and this one has had none of that: no external security review, no penetration test, and no time in production. It's also the newest and least tested part of the library. [security.md](security.md#unverified) lists what has and hasn't been checked.
+
+If it has to be reachable from outside, keep it off the internet anyway: put it behind a VPN or a firewall that only lets known addresses in, and keep the logins to people you know.
 
 ## Starting a server
 
@@ -67,6 +78,7 @@ private static bool IsPasswordRight(string userName, string password)
 ```csharp
 SshServerOptions options = new()
 {
+    // Every interface: only on a trusted network, never the public internet.
     Address = IPAddress.Any,
     Port = 2222,
     HostKeys = [hostKey],
