@@ -201,6 +201,8 @@ A path with an unpaired surrogate, such as half an emoji from a string cut in th
 
 Limits reached in the library also arrive as `SftpException`: raise `MaxReadAllBytes` or `MaxDirectoryEntries` in `SftpClientOptions`, or `maxTotalBytes`, if the size is expected.
 
+`IsLocalLimit` tells the two apart. It is true when Zorg.Ssh refused on its own side and the server said nothing: `MaxDirectoryEntries` in a listing or a tree, `MaxReadAllBytes`, `maxTotalBytes`, a tree nested more than 64 levels, and every `SftpUnsafeNameException`. `StatusCode` is then only `Failure`, a stand-in, and retrying gives the same answer until you raise the limit. It is false for every status a server sent (including `NoSuchFile` and `PermissionDenied`) and for an error writing to the local disk, which has an `InnerException`.
+
 `CreateDirectoryAsync` on an existing directory usually gives `Failure`. Use `CreateDirectoryAsync(path, recursive: true)`, which accepts a directory that is already there and also makes the missing parents.
 
 A `RenameAsync` with `overwrite: false` and a `CreateDirectoryAsync` both report a taken target as `Failure` too, because version 3 has no "already exists" status. Call `ExistsAsync` or `GetAttributesAsync` afterwards to see why. To let one of several clients take a file, have each rename it to a name of its own: see [Claiming a file by renaming it](sftp.md#claiming-a-file-by-renaming-it).

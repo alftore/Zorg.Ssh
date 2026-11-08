@@ -106,6 +106,20 @@ internal static class SftpExamples
         // end-doc
     }
 
+    public static async Task LocalLimit(SftpClient sftp, CancellationToken cancellationToken)
+    {
+        // doc:sftp-local-limit
+        try
+        {
+            await sftp.DownloadDirectoryAsync("/srv/reports", "reports", maxTotalBytes: 1L << 30, cancellationToken);
+        }
+        catch (SftpException ex) when (ex.IsLocalLimit)
+        {
+            Console.WriteLine($"Stopped here, not by the server: {ex.Message}");
+        }
+        // end-doc
+    }
+
     public static async Task Streams(SftpClient sftp, CancellationToken cancellationToken)
     {
         // doc:sftp-stream

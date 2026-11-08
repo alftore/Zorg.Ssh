@@ -92,7 +92,7 @@ await foreach (SftpEntry entry in sftp.ListDirectoryAsync("reports", cancellatio
 }
 ```
 
-Names come back exactly as the server sent them, including `.` and `..`, and they can be hostile. Check `IsSafeName` before you build a local path from one. A listing that passes `SftpClientOptions.MaxDirectoryEntries`, by default 1,000,000, fails with `SftpException`.
+Names come back exactly as the server sent them, including `.` and `..`, and they can be hostile. Check `IsSafeName` before you build a local path from one. A listing that passes `SftpClientOptions.MaxDirectoryEntries`, by default 1,000,000, fails with `SftpException`. That failure has `IsLocalLimit` set: see below.
 
 What a listing gives you:
 
@@ -262,3 +262,18 @@ A refusal from the server is an `SftpException` and leaves the session usable. A
 SFTP version 3 has few status codes. Most servers report an existing directory or target as `SftpStatusCode.Failure`, so the code alone won't tell you why.
 
 SCP isn't supported. See [security.md](security.md#out-of-scope).
+
+## Telling the library's limits from the server's answers
+
+`SftpException` covers both a status the server sent and a limit Zorg.Ssh applies on its own side. `SftpException.IsLocalLimit` separates them. It is true for a listing or tree past `MaxDirectoryEntries`, a file past `MaxReadAllBytes` or a directory download past `maxTotalBytes`, a tree nested more than 64 levels, and an unsafe name (`SftpUnsafeNameException`). In those cases `StatusCode` is `Failure` as a stand-in, and the same call on the same server fails the same way until you raise the limit. It is false for anything the server said and for local disk errors.
+
+```csharp
+try
+{
+    await sftp.DownloadDirectoryAsync("/srv/reports", "reports", maxTotalBytes: 1L << 30, cancellationToken);
+}
+catch (SftpException ex) when (ex.IsLocalLimit)
+{
+    Console.WriteLine($"Stopped here, not by the server: {ex.Message}");
+}
+```

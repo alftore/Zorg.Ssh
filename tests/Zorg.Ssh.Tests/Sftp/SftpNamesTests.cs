@@ -66,6 +66,7 @@ public sealed class SftpNamesTests : IDisposable
         SftpUnsafeNameException ex = await Assert.ThrowsAsync<SftpUnsafeNameException>(() => fake.Client.DownloadDirectoryAsync("/d", Destination, long.MaxValue, Ct));
         Assert.Equal(name, ex.EntryName);
         Assert.Equal("/d", ex.Path);
+        Assert.True(ex.IsLocalLimit);
 
         // The whole directory is checked first, so not even the good file was written.
         Assert.Empty(new DirectoryInfo(_sandbox).GetFiles("*", SearchOption.AllDirectories));
@@ -226,6 +227,7 @@ public sealed class SftpNamesTests : IDisposable
 
         SftpException ex = await Assert.ThrowsAsync<SftpException>(() => fake.Client.DownloadDirectoryAsync("/d", Destination, long.MaxValue, Ct));
         Assert.Contains("levels deep", ex.Message);
+        Assert.True(ex.IsLocalLimit);
     }
 
     [Fact(Timeout = Limit)]
@@ -239,6 +241,7 @@ public sealed class SftpNamesTests : IDisposable
 
         SftpException ex = await Assert.ThrowsAsync<SftpException>(() => fake.Client.DownloadDirectoryAsync("/d", Destination, maxTotalBytes: 1000, Ct));
         Assert.Contains("limit of", ex.Message);
+        Assert.True(ex.IsLocalLimit);
     }
 
     [Fact(Timeout = Limit)]
@@ -252,7 +255,9 @@ public sealed class SftpNamesTests : IDisposable
         await using FakeSftpServer fake = await ServerWithAsync(files);
 
         fake.Client.Options = new SftpClientOptions { MaxDirectoryEntries = 2 };
-        await Assert.ThrowsAsync<SftpException>(() => fake.Client.DownloadDirectoryAsync("/d", Destination, long.MaxValue, Ct));
+        SftpException ex = await Assert.ThrowsAsync<SftpException>(() => fake.Client.DownloadDirectoryAsync("/d", Destination, long.MaxValue, Ct));
+        Assert.Contains("entries", ex.Message);
+        Assert.True(ex.IsLocalLimit);
     }
 
     [Fact(Timeout = Limit)]

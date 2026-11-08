@@ -43,3 +43,4 @@ static Zorg.Ssh.Sftp.SftpTransferProgress.operator !=(Zorg.Ssh.Sftp.SftpTransfer
 static Zorg.Ssh.Sftp.SftpTransferProgress.operator ==(Zorg.Ssh.Sftp.SftpTransferProgress? left, Zorg.Ssh.Sftp.SftpTransferProgress? right) -> bool
 Zorg.Ssh.SshClient.ConnectionClosed.get -> System.Threading.CancellationToken
 Zorg.Ssh.SshClient.WaitForCloseAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Zorg.Ssh.SshException?>!
+Zorg.Ssh.Sftp.SftpException.IsLocalLimit.get -> bool

@@ -154,6 +154,27 @@ public class SftpException : SshException
     /// </code>
     /// </example>
     public string? Path { get; }
+
+    /// <summary>
+    /// Gets a value saying whether Zorg.Ssh refused this itself, on its own side, and the server did not.
+    /// It's true for the limits and checks the library applies to what a server sends: more entries than
+    /// <see cref="SftpClientOptions.MaxDirectoryEntries"/> in a listing or a tree, a file over
+    /// <see cref="SftpClientOptions.MaxReadAllBytes"/> or over the <c>maxTotalBytes</c> of a directory download, a
+    /// tree nested too deep, and a name that isn't safe locally (<see cref="SftpUnsafeNameException"/>). Then
+    /// <see cref="StatusCode"/> is a stand-in (<see cref="SftpStatusCode.Failure"/>), not something the server sent,
+    /// and retrying the same call on the same server gives the same answer until the limit is raised or the server changes.
+    /// It's false for every status a server sent, and for failures of the local disk, which carry an
+    /// <see cref="Exception.InnerException"/>.
+    /// </summary>
+    /// <example>
+    /// <code>
+    /// catch (SftpException ex) when (ex.IsLocalLimit)
+    /// {
+    ///     Console.WriteLine($"Zorg.Ssh stopped this, not the server: {ex.Message}");
+    /// }
+    /// </code>
+    /// </example>
+    public bool IsLocalLimit { get; internal init; }
 }
 
 /// <summary>The remote file or directory doesn't exist.</summary>
@@ -305,6 +326,7 @@ public sealed class SftpUnsafeNameException : SftpException
     public SftpUnsafeNameException()
         : base("The server sent a file name that isn't safe to use locally. Don't trust this server's listing.")
     {
+        IsLocalLimit = true;
     }
 
     /// <summary>Creates an exception with a message.</summary>
@@ -317,6 +339,7 @@ public sealed class SftpUnsafeNameException : SftpException
     public SftpUnsafeNameException(string message)
         : base(message)
     {
+        IsLocalLimit = true;
     }
 
     /// <summary>Creates an exception with a message and a cause.</summary>
@@ -330,6 +353,7 @@ public sealed class SftpUnsafeNameException : SftpException
     public SftpUnsafeNameException(string message, Exception innerException)
         : base(message, innerException)
     {
+        IsLocalLimit = true;
     }
 
     /// <summary>Creates an exception naming the entry.</summary>
@@ -344,6 +368,7 @@ public sealed class SftpUnsafeNameException : SftpException
     public SftpUnsafeNameException(string message, string entryName, string? path)
         : base(message, SftpStatusCode.Failure, path)
     {
+        IsLocalLimit = true;
         EntryName = entryName;
     }
 

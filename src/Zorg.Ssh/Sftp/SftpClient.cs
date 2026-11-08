@@ -349,7 +349,7 @@ public sealed class SftpClient : IAsyncDisposable
                 total += batch.Length;
                 if (total > limit)
                 {
-                    throw new SftpException($"The server listed more than {limit} entries in '{SftpParser.Sanitise(path)}'. Raise SftpClientOptions.MaxDirectoryEntries if that's expected.", SftpStatusCode.Failure, path);
+                    throw new SftpException($"The server listed more than {limit} entries in '{SftpParser.Sanitise(path)}'. Raise SftpClientOptions.MaxDirectoryEntries if that's expected.", SftpStatusCode.Failure, path) { IsLocalLimit = true };
                 }
 
                 foreach (SftpEntry entry in batch)
@@ -824,7 +824,7 @@ public sealed class SftpClient : IAsyncDisposable
 
                 if (length > maxBytes - written)
                 {
-                    throw new SftpException($"'{SftpParser.Sanitise(path)}' is larger than the limit of {maxBytes} bytes.{(limitName is null ? string.Empty : $" Raise {limitName}, or stream it with DownloadFileAsync.")}", SftpStatusCode.Failure, path);
+                    throw new SftpException($"'{SftpParser.Sanitise(path)}' is larger than the limit of {maxBytes} bytes.{(limitName is null ? string.Empty : $" Raise {limitName}, or stream it with DownloadFileAsync.")}", SftpStatusCode.Failure, path) { IsLocalLimit = true };
                 }
 
                 await destination.WriteAsync(response.Slice(start, length), cancellationToken).ConfigureAwait(false);
@@ -1304,7 +1304,7 @@ public sealed class SftpClient : IAsyncDisposable
     {
         if (depth >= MaxDownloadDepth)
         {
-            throw new SftpException($"'{SftpParser.Sanitise(remoteDirectory)}' is nested more than {MaxDownloadDepth} levels deep. A hostile server can fake this; copy the subtree you need instead.", SftpStatusCode.Failure, remoteDirectory);
+            throw new SftpException($"'{SftpParser.Sanitise(remoteDirectory)}' is nested more than {MaxDownloadDepth} levels deep. A hostile server can fake this; copy the subtree you need instead.", SftpStatusCode.Failure, remoteDirectory) { IsLocalLimit = true };
         }
 
         // The whole directory is checked before any of it is written.
@@ -1419,7 +1419,7 @@ public sealed class SftpClient : IAsyncDisposable
             _pathCharacters += path.Length;
             if (++_taken > entries || _pathCharacters > MaxPathCharacters)
             {
-                throw new SftpException($"The tree has more than {entries} entries, reached at '{SftpParser.Sanitise(path)}'. Raise SftpClientOptions.MaxDirectoryEntries if that's expected.", SftpStatusCode.Failure, path);
+                throw new SftpException($"The tree has more than {entries} entries, reached at '{SftpParser.Sanitise(path)}'. Raise SftpClientOptions.MaxDirectoryEntries if that's expected.", SftpStatusCode.Failure, path) { IsLocalLimit = true };
             }
         }
 
