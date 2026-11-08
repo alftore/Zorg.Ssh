@@ -505,9 +505,22 @@ public class HostileKeyFileTests
     [Fact]
     public void An_EC_key_on_another_curve_is_refused()
     {
-        using ECDsa ecdsa = ECDsa.Create(ECCurve.NamedCurves.brainpoolP256r1);
-        Assert.Equal(SshKeyFile.UnsupportedKey, Refused(ecdsa.ExportECPrivateKeyPem()).Message);
-        Assert.Equal(SshKeyFile.UnsupportedKey, Refused(ecdsa.ExportPkcs8PrivateKeyPem()).Message);
+        // Written by hand: macOS can't make a brainpool key. The values are a P-256 key's, but the OID is read first.
+        using ECDsa ecdsa = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        ECParameters key = ecdsa.ExportParameters(includePrivateParameters: true);
+        Action<AsnWriter> brainpool = EcKeyFileWriter.Named(EcKeyFileWriter.BrainpoolP256r1);
+        string sec1 = KeyFileTools.Armor("EC PRIVATE KEY", EcKeyFileWriter.Sec1(key, brainpool));
+        string pkcs8 = KeyFileTools.Armor("PRIVATE KEY", EcKeyFileWriter.Pkcs8(EcKeyFileWriter.Sec1(key, null), brainpool));
+        Assert.Equal(SshKeyFile.UnsupportedKey, Refused(sec1).Message);
+        Assert.Equal(SshKeyFile.UnsupportedKey, Refused(pkcs8).Message);
+
+        // And as the platform writes it, where the platform can.
+        if (!OperatingSystem.IsMacOS())
+        {
+            using ECDsa real = ECDsa.Create(ECCurve.NamedCurves.brainpoolP256r1);
+            Assert.Equal(SshKeyFile.UnsupportedKey, Refused(real.ExportECPrivateKeyPem()).Message);
+            Assert.Equal(SshKeyFile.UnsupportedKey, Refused(real.ExportPkcs8PrivateKeyPem()).Message);
+        }
     }
 
     [Fact]

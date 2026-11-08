@@ -37,6 +37,11 @@ internal static class KeyFileTools
         AddOption(arguments, "-a", rounds);
 
         (int exitCode, string output) = OpenSshTools.Run(keygen, arguments);
+
+        // macOS's ssh-keygen can't write an Ed25519 key as PKCS#8: its libcrypto refuses, and nothing is written.
+        Assert.SkipWhen(
+            exitCode != 0 && type == "ed25519" && format == "PKCS8" && output.Contains("error in libcrypto", StringComparison.Ordinal),
+            "This ssh-keygen's libcrypto can't write an Ed25519 key as PKCS#8 (macOS's ssh-keygen says 'error in libcrypto').");
         Assert.True(exitCode == 0, output);
         return new GeneratedKey(File.ReadAllText(file), Sshsig.PublicKeyLine(File.ReadAllText(file + ".pub")));
     }

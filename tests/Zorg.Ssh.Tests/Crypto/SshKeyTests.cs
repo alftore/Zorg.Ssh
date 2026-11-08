@@ -375,6 +375,22 @@ public class SshKeyTests
     public void RSA_modulus_limits_are_exact(int bits, bool accepted)
     {
         byte[] blob = RsaBlob([0x01, 0x00, 0x01], OddModulus(bits));
+        if (accepted && bits > 4096 && OperatingSystem.IsMacOS())
+        {
+            // Our limit lets the key through, and the Security framework then refuses it, as it may: CI saw OSStatus
+            // -50 at 16384 bits. The refusal must still be the protocol exception, with the platform's as its cause.
+            try
+            {
+                Assert.Equal("ssh-rsa", SshPublicKey.Parse(blob).KeyType);
+            }
+            catch (SshProtocolException refused) when (refused.InnerException is CryptographicException)
+            {
+                Assert.Skip($"macOS's Security framework refuses a {bits}-bit RSA public key that the library's own limit allows.");
+            }
+
+            return;
+        }
+
         if (accepted)
         {
             Assert.Equal("ssh-rsa", SshPublicKey.Parse(blob).KeyType);
