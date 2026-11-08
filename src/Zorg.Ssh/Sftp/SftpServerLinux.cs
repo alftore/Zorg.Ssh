@@ -88,8 +88,8 @@ internal static partial class SftpServerLinux
     public static bool IsSupported => OperatingSystem.IsLinux() && OpenDirectoryFlags != 0 && Supported.Value;
 
     /// <summary>
-    /// Opens a directory to list it, never through a final link. A directory that can't be read gives an empty
-    /// listing, as .NET's does with <c>IgnoreInaccessible</c>. Throws what .NET would for one that's gone.
+    /// Opens a directory to list it, never through a final link. Throws what .NET would for one that's
+    /// gone, and <see cref="UnauthorizedAccessException"/> for one that can't be opened: that's not an empty directory.
     /// </summary>
     public static SftpServerListing OpenListing(string path)
     {
@@ -97,11 +97,6 @@ internal static partial class SftpServerLinux
         if (fd.IsInvalid)
         {
             fd.Dispose();
-            if (errno is EAcces or EPerm)
-            {
-                return SftpServerListing.Empty;
-            }
-
             throw Error(errno);
         }
 

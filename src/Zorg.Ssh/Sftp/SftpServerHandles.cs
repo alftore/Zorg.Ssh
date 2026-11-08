@@ -27,19 +27,20 @@ internal sealed class SftpServerFile(FileStream stream, bool canRead, bool canWr
 /// <summary>An entry of a listing. <paramref name="RawName"/> holds the name's bytes when they aren't UTF-8, and is null otherwise.</summary>
 internal readonly record struct SftpServerListedEntry(string Name, byte[]? RawName, SftpAttributes Attributes);
 
-/// <summary>Reads a directory an entry at a time, without <c>.</c> and <c>..</c>. An entry that can't be looked at is left out.</summary>
+/// <summary>
+/// Reads a directory an entry at a time, without <c>.</c> and <c>..</c>. An entry that can't be looked at is left out.
+/// A directory that can't be opened is not an empty one: opening it throws <see cref="UnauthorizedAccessException"/>,
+/// which the session answers with permission denied, as OpenSSH does.
+/// </summary>
 internal abstract class SftpServerListing : IDisposable
 {
     private static readonly EnumerationOptions ListingOptions = new()
     {
         AttributesToSkip = 0,
-        IgnoreInaccessible = true,
+        IgnoreInaccessible = false,
         RecurseSubdirectories = false,
         ReturnSpecialDirectories = false,
     };
-
-    /// <summary>Gets a listing with nothing in it.</summary>
-    public static SftpServerListing Empty => new DotNetListing(null);
 
     /// <summary>
     /// Opens a directory to list it. On Linux it's read as bytes (<see cref="SftpServerLinux"/>), so a name that isn't
@@ -49,8 +50,23 @@ internal abstract class SftpServerListing : IDisposable
         SftpServerLinux.IsSupported ? SftpServerLinux.OpenListing(path) : OpenWithDotNet(path);
 
     /// <summary>Opens a directory through .NET, which decodes each name with U+FFFD in place of bytes that aren't UTF-8.</summary>
-    internal static SftpServerListing OpenWithDotNet(string path) =>
-        new DotNetListing(new DirectoryInfo(path).EnumerateFileSystemInfos("*", ListingOptions).GetEnumerator());
+    internal static SftpServerListing OpenWithDotNet(string path)
+    {
+        // .NET opens the directory on the first MoveNext, so do that now: a directory that can't be opened has to fail
+        // here, not turn into a listing with nothing in it.
+        IEnumerator<FileSystemInfo> entries = new DirectoryInfo(path).EnumerateFileSystemInfos("*", ListingOptions).GetEnumerator();
+        try
+        {
+            bool any = entries.MoveNext();
+            SftpServerListing listing = new DotNetListing(entries, any);
+            entries = null!;
+            return listing;
+        }
+        finally
+        {
+            entries?.Dispose();
+        }
+    }
 
     public abstract bool TryNext(out SftpServerListedEntry entry);
 
@@ -62,13 +78,16 @@ internal abstract class SftpServerListing : IDisposable
 
     protected abstract void Dispose(bool disposing);
 
-    private sealed class DotNetListing(IEnumerator<FileSystemInfo>? entries) : SftpServerListing
+    private sealed class DotNetListing(IEnumerator<FileSystemInfo> entries, bool hasCurrent) : SftpServerListing
     {
+        private bool _hasCurrent = hasCurrent;
+
         public override bool TryNext(out SftpServerListedEntry entry)
         {
-            while (entries is not null && entries.MoveNext())
+            while (_hasCurrent)
             {
                 FileSystemInfo info = entries.Current;
+                _hasCurrent = Advance();
                 try
                 {
                     entry = new SftpServerListedEntry(info.Name, null, SftpServerAttributes.FromInfo(info));
@@ -84,7 +103,20 @@ internal abstract class SftpServerListing : IDisposable
             return false;
         }
 
-        protected override void Dispose(bool disposing) => entries?.Dispose();
+        protected override void Dispose(bool disposing) => entries.Dispose();
+
+        private bool Advance()
+        {
+            try
+            {
+                return entries.MoveNext();
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // The directory went away, or became unreadable, in the middle of the listing: what was read stands.
+                return false;
+            }
+        }
     }
 }
 
