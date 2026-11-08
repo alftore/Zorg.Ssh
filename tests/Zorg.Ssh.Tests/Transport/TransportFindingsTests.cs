@@ -4,6 +4,7 @@ using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using Xunit;
+using Zorg.Ssh.Protocol;
 using Zorg.Ssh.Transport;
 using static Zorg.Ssh.Tests.Transport.TransportHarness;
 
@@ -62,6 +63,20 @@ public sealed class TransportFindingsTests
         }
     }
 
+    private static async Task DrainAsync(SshTransport transport, CancellationToken stop)
+    {
+        try
+        {
+            while (true)
+            {
+                await transport.ReceiveAsync(stop);
+            }
+        }
+        catch (Exception ex) when (ex is SshDisconnectedException || (ex is OperationCanceledException && stop.IsCancellationRequested))
+        {
+        }
+    }
+
     private static async Task ReceiveUntilFailureAsync(SshTransport transport)
     {
         while (true)
@@ -94,6 +109,63 @@ public sealed class TransportFindingsTests
 
             mute.Muted = true;
             await Assert.ThrowsAsync<SshDisconnectedException>(async () => await ReceiveUntilFailureAsync(server));
+        }
+    }
+
+    // T3, libssh CVE-2023-1667: a wrong first_kex_packet_follows guess during a rekey, on the server side.
+    // Exactly one stray packet is dropped, and the exchange then completes.
+    [Fact]
+    public async Task T3_CVE_2023_1667_a_wrong_guess_in_a_server_side_rekey_drops_one_packet_and_the_rekey_completes()
+    {
+        (SshTransport client, SshTransport server) = await ConnectAsync(
+            ClientOptions(kex: ["curve25519-sha256", "ecdh-sha2-nistp256"]),
+            ServerOptions(kex: ["ecdh-sha2-nistp256", "curve25519-sha256"]),
+            Ct);
+        await using (client)
+        await using (server)
+        {
+            MarkConnected(client, server);
+            using CancellationTokenSource stop = CancellationTokenSource.CreateLinkedTokenSource(Ct);
+            Task clientSide = DrainAsync(client, stop.Token);
+
+            // The client's first choice differs from the server's, so its guessed packet is the stray one.
+            client.NextKexInitFollowsForTests = true;
+            client.RequestRekey();
+            client.SendIgnoringKexForTests([MessageNumber.KexEcdhInit, 1, 2, 3]);
+
+            Task serverSide = ReceiveUntilFailureAsync(server);
+            using CancellationTokenSource limit = CancellationTokenSource.CreateLinkedTokenSource(Ct);
+            limit.CancelAfter(TimeSpan.FromSeconds(30));
+            while (server.CompletedKeyExchanges < 2 || client.CompletedKeyExchanges < 2)
+            {
+                await Task.Delay(5, limit.Token);
+                Assert.False(serverSide.IsCompleted, "the server ended the connection");
+            }
+
+            // The flag is spent: a further stray KEX packet is refused, not swallowed.
+            client.SendIgnoringKexForTests([MessageNumber.KexEcdhInit, 1, 2, 3]);
+            await Assert.ThrowsAsync<SshProtocolException>(async () => await serverSide);
+            await stop.CancelAsync();
+            await clientSide.WaitAsync(TimeSpan.FromSeconds(30), Ct);
+        }
+    }
+
+    [Fact]
+    public async Task T3_CVE_2023_1667_a_second_stray_packet_in_a_rekey_is_refused()
+    {
+        (SshTransport client, SshTransport server) = await ConnectAsync(
+            ClientOptions(kex: ["curve25519-sha256", "ecdh-sha2-nistp256"]),
+            ServerOptions(kex: ["ecdh-sha2-nistp256", "curve25519-sha256"]),
+            Ct);
+        await using (client)
+        await using (server)
+        {
+            MarkConnected(client, server);
+            client.NextKexInitFollowsForTests = true;
+            client.RequestRekey();
+            client.SendIgnoringKexForTests([MessageNumber.KexEcdhInit, 1, 2, 3]);
+            client.SendIgnoringKexForTests([MessageNumber.KexEcdhInit, 1, 2, 3]);
+            await Assert.ThrowsAnyAsync<SshProtocolException>(async () => await ReceiveUntilFailureAsync(server));
         }
     }
 }

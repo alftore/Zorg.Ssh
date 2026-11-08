@@ -65,6 +65,12 @@ internal sealed partial class SshTransport
     internal void SendIgnoringKexForTests(byte[] payload) =>
         EnqueueKex(OutgoingPacket.Create(payload));
 
+    /// <summary>
+    /// Test hook: the next KEXINIT we build says first_kex_packet_follows, as a peer that guesses would.
+    /// Nothing in the library sets it.
+    /// </summary>
+    internal bool NextKexInitFollowsForTests { get; set; }
+
     /// <summary>Called by the send loop once our NEWKEYS is on the wire and the new cipher is in place.</summary>
     private void OnNewKeysWritten(int generation)
     {
@@ -154,6 +160,7 @@ internal sealed partial class SshTransport
             MacsServerToClient = _options.Macs,
             CompressionClientToServer = ["none"],
             CompressionServerToClient = ["none"],
+            FirstKexPacketFollows = NextKexInitFollowsForTests,
         };
     }
 
