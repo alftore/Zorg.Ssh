@@ -296,7 +296,18 @@ internal sealed partial class SshTransport : IAsyncDisposable
         if (Failure is null && _sendLoopStarted != 0)
         {
             OutgoingPacket goodbye = BuildDisconnect(DisconnectReason.ByApplication, "closed");
-            if (!_sendQueue.Writer.TryWrite(goodbye) && !_kexQueue.Writer.TryWrite(goodbye))
+
+            // T1: while a key exchange has our KEXINIT out, the send loop serves only the KEX queue, and
+            // DISCONNECT may legally go out before NEWKEYS. Otherwise data queued earlier goes out first.
+            bool queued;
+            lock (_kexLock)
+            {
+                queued = _parked
+                    ? _kexQueue.Writer.TryWrite(goodbye)
+                    : _sendQueue.Writer.TryWrite(goodbye) || _kexQueue.Writer.TryWrite(goodbye);
+            }
+
+            if (!queued)
             {
                 goodbye.Discard();
             }
