@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Unicode;
 using System.Threading;
@@ -149,7 +150,11 @@ public sealed class SftpServerRawNameTests : IDisposable
     public async Task A_FIFO_with_a_name_that_isnt_UTF8_is_listed_as_a_FIFO()
     {
         Assert.SkipUnless(OperatingSystem.IsLinux(), LinuxOnly);
-        Sh(@"mkfifo ""$(printf 'pipe\346')"" && ln -s ""$(printf 'pipe\346')"" ""$(printf 'to-pipe\346')""");
+
+        // libc rather than the mkfifo program: uutils mkfifo (Ubuntu 25.10 and later) refuses an argument that isn't UTF-8.
+        byte[] fifoName = [.. "pipe"u8, 0xE6];
+        Assert.Equal(0, NativeMethods.MkFifo(RawPath(fifoName), Convert.ToUInt32("600", 8)));
+        Assert.Equal(0, NativeMethods.SymLink([.. fifoName, 0], RawPath([.. "to-pipe"u8, 0xE6])));
 
         await using SftpServerHarness client = await StartAsync(Options);
         List<RawEntry> raw = await ListRawAsync(client, "/");
@@ -264,5 +269,20 @@ public sealed class SftpServerRawNameTests : IDisposable
 
     private static bool Is(byte[] name, byte[] expected) => name.AsSpan().SequenceEqual(expected);
 
+    /// <summary>A name in the root, as the NUL-terminated bytes libc takes.</summary>
+    private byte[] RawPath(byte[] name) => [.. Encoding.UTF8.GetBytes(_sandbox.Root + "/"), .. name, 0];
+
     private sealed record RawEntry(byte[] Name, byte[] LongName, SftpAttributes Attributes);
+
+    /// <summary>Calls that take a path as bytes, so a name needn't be valid UTF-8.</summary>
+    private static class NativeMethods
+    {
+        [DllImport("libc", EntryPoint = "mkfifo", SetLastError = true)]
+        [DefaultDllImportSearchPaths(DllImportSearchPath.SafeDirectories)]
+        public static extern int MkFifo(byte[] path, uint mode);
+
+        [DllImport("libc", EntryPoint = "symlink", SetLastError = true)]
+        [DefaultDllImportSearchPaths(DllImportSearchPath.SafeDirectories)]
+        public static extern int SymLink(byte[] target, byte[] link);
+    }
 }
