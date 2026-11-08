@@ -137,6 +137,14 @@ internal sealed class SftpServerSandbox : IDisposable
 
     private static void RemoveLinks(string directory)
     {
+        // A client can make a directory its owner can't read or enter, with MKDIR or SETSTAT. Root reads it anyway,
+        // but a normal user (as in CI) can't list or empty it until the owner's bits are back. This is never a link.
+        if (!OperatingSystem.IsWindows())
+        {
+            const UnixFileMode Owner = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
+            File.SetUnixFileMode(directory, File.GetUnixFileMode(directory) | Owner);
+        }
+
         foreach (string entry in Directory.GetFileSystemEntries(directory))
         {
             FileInfo info = new(entry);
