@@ -36,10 +36,11 @@ public sealed record SshAlgorithms
     }
 
     /// <summary>Makes a preset. Its lists don't count as explicit.</summary>
-    private SshAlgorithms(IReadOnlyList<string> keyExchange, IReadOnlyList<string> hostKeys, IReadOnlyList<string> macs, KeyExchangeExtension extension)
+    private SshAlgorithms(IReadOnlyList<string> keyExchange, IReadOnlyList<string> hostKeys, IReadOnlyList<string> userKeys, IReadOnlyList<string> macs, KeyExchangeExtension extension)
     {
         _keyExchange = keyExchange;
         _hostKeys = hostKeys;
+        UserKeys = userKeys;
         Macs = macs;
         _keyExchangeExtension = extension;
         _allowsLegacy = true;
@@ -93,10 +94,7 @@ public sealed record SshAlgorithms
         }
     }
 
-    /// <summary>
-    /// Gets the host key algorithms. On a server this also limits the signature algorithms a user key may use, and the list
-    /// advertised in <c>server-sig-algs</c>, so a list without any RSA name refuses RSA user keys.
-    /// </summary>
+    /// <summary>Gets the host key algorithms.</summary>
     public IReadOnlyList<string> HostKeys
     {
         get => _hostKeys;
@@ -106,6 +104,20 @@ public sealed record SshAlgorithms
             _hostKeysIsExplicit = true;
         }
     }
+
+    /// <summary>
+    /// Gets the signature algorithms for user keys, as OpenSSH's <c>PubkeyAcceptedAlgorithms</c>. A server accepts a
+    /// user key's signature only in one of these, refusing it before <see cref="SshServerOptions.PublicKeyHandler"/> runs,
+    /// and lists them in <c>server-sig-algs</c>. A client signs with its own keys only in one of these, and skips a key
+    /// that has none. A certificate's algorithm, such as <c>ssh-ed25519-cert-v01@openssh.com</c>, counts as the plain name
+    /// behind it, so list plain names only.
+    /// </summary>
+    /// <remarks>
+    /// The default is every algorithm in the default <see cref="HostKeys"/>. Leave out <c>rsa-sha2-512</c> and
+    /// <c>rsa-sha2-256</c> to refuse RSA user keys. <see cref="LegacyUnsafe"/> adds <c>ssh-rsa</c> (SHA-1), which is
+    /// allowed for user keys only when this list names it.
+    /// </remarks>
+    public IReadOnlyList<string> UserKeys { get; init; } = HostKeyAlgorithms.Default;
 
     /// <summary>Gets the ciphers.</summary>
     public IReadOnlyList<string> Ciphers { get; init; } = PacketCipherCatalog.DefaultCiphers;
@@ -125,15 +137,14 @@ public sealed record SshAlgorithms
     /// <summary>Gets the creator of the key exchange methods outside the default catalog, or null when none can be named.</summary>
     internal KeyExchangeExtension? KeyExchangeExtension => _keyExchangeExtension;
 
-    /// <summary>Gets whether <c>ssh-rsa</c> (SHA-1) signatures may be used, for host keys and for user authentication.</summary>
-    internal bool AllowsRsaSha1 => HostKeys.Contains(LegacyAlgorithms.RsaSha1);
-
     /// <summary>
-    /// Gets what a server lists in <c>server-sig-algs</c> and accepts from a user key (A4): the defaults that <see cref="HostKeys"/> names,
-    /// and <c>ssh-rsa</c> when it's allowed.
+    /// Gets whether user keys may sign with <c>ssh-rsa</c> (SHA-1), which only <see cref="UserKeys"/> decides. For host keys,
+    /// <see cref="HostKeys"/> decides on its own, through the negotiated host key algorithm.
     /// </summary>
-    internal IReadOnlyList<string> ServerSignatureAlgorithms =>
-        [.. HostKeyAlgorithms.Default.Where(HostKeys.Contains), .. AllowsRsaSha1 ? (string[])[LegacyAlgorithms.RsaSha1] : []];
+    internal bool UserKeysAllowRsaSha1 => UserKeys.Contains(LegacyAlgorithms.RsaSha1);
+
+    /// <summary>Gets what a server lists in <c>server-sig-algs</c> and accepts from a user key (A4): <see cref="UserKeys"/>.</summary>
+    internal IReadOnlyList<string> ServerSignatureAlgorithms => UserKeys;
 
     /// <summary>Gets the key exchange list a server offers: finite-field Diffie-Hellman only if it was named explicitly.</summary>
     internal IReadOnlyList<string> ServerKeyExchange =>
@@ -151,6 +162,7 @@ public sealed record SshAlgorithms
     {
         Check("KeyExchange", KeyExchange, KeyExchangeCatalog.Default, LegacyAlgorithms.KeyExchange);
         Check("HostKeys", HostKeys, HostKeyAlgorithms.Default, LegacyAlgorithms.HostKeys);
+        Check("UserKeys", UserKeys, HostKeyAlgorithms.Default, LegacyAlgorithms.HostKeys);
         Check("Ciphers", Ciphers, PacketCipherCatalog.DefaultCiphers, []);
         Check("Macs", Macs, PacketCipherCatalog.DefaultMacs, LegacyAlgorithms.Macs);
     }
@@ -184,6 +196,7 @@ public sealed record SshAlgorithms
     {
         builder.Append("KeyExchange = [").AppendJoin(", ", KeyExchange)
             .Append("], HostKeys = [").AppendJoin(", ", HostKeys)
+            .Append("], UserKeys = [").AppendJoin(", ", UserKeys)
             .Append("], Ciphers = [").AppendJoin(", ", Ciphers)
             .Append("], Macs = [").AppendJoin(", ", Macs)
             .Append(']');
@@ -202,6 +215,7 @@ public sealed record SshAlgorithms
         // exchange hash, so a man in the middle can't remove the modern names to push the choice down to these.
         public static readonly SshAlgorithms Instance = new(
             Array.AsReadOnly([.. KeyExchangeCatalog.Default, .. LegacyAlgorithms.KeyExchange]),
+            Array.AsReadOnly([.. HostKeyAlgorithms.Default, .. LegacyAlgorithms.HostKeys]),
             Array.AsReadOnly([.. HostKeyAlgorithms.Default, .. LegacyAlgorithms.HostKeys]),
             Array.AsReadOnly([.. PacketCipherCatalog.DefaultMacs, .. LegacyAlgorithms.Macs]),
             FiniteFieldDhExtension.Instance);

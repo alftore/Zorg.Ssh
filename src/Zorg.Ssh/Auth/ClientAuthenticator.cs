@@ -15,9 +15,11 @@ namespace Zorg.Ssh.Auth;
 
 /// <summary>
 /// Client side of RFC 4252. Asks for the auth service, then works through the credentials. Message 60
-/// means different things per method, so it's read by whichever method is running.
+/// means different things per method, so it's read by whichever method is running. <paramref name="userKeys"/> is
+/// <see cref="SshAlgorithms.UserKeys"/>: the signature algorithms the client may use with its keys. Null means every one a
+/// key has, without legacy <c>ssh-rsa</c>.
 /// </summary>
-internal sealed class ClientAuthenticator(SshTransport transport, string userName, Action<string>? onBanner, bool allowRsaSha1 = false)
+internal sealed class ClientAuthenticator(SshTransport transport, string userName, Action<string>? onBanner, IReadOnlyList<string>? userKeys = null)
 {
     private const string ConnectionService = "ssh-connection";
     private const byte PublicKeyOk = 60;
@@ -89,7 +91,8 @@ internal sealed class ClientAuthenticator(SshTransport transport, string userNam
     /// </summary>
     internal static string SignatureAlgorithmFor(IReadOnlyList<string> algorithms, IReadOnlyDictionary<string, byte[]> extensions, bool rsaSha1)
     {
-        if (!extensions.TryGetValue("server-sig-algs", out byte[]? value))
+        // An empty list happens only when ssh-rsa is the one algorithm SshAlgorithms.UserKeys leaves a key.
+        if (!extensions.TryGetValue("server-sig-algs", out byte[]? value) || algorithms.Count == 0)
         {
             return rsaSha1 ? LegacyAlgorithms.RsaSha1 : algorithms[0];
         }
@@ -105,7 +108,28 @@ internal sealed class ClientAuthenticator(SshTransport transport, string userNam
         return rsaSha1 && supported.Contains(LegacyAlgorithms.RsaSha1) ? LegacyAlgorithms.RsaSha1 : algorithms[0];
     }
 
-    private bool UsesRsaSha1(SshPublicKey key) => allowRsaSha1 && LegacyRsa.CanVerify(key);
+    /// <summary>Gets a key's algorithms that <see cref="SshAlgorithms.UserKeys"/> names. A certificate's count as the plain one behind it.</summary>
+    internal static IReadOnlyList<string> Permitted(IReadOnlyList<string> algorithms, IReadOnlyList<string>? userKeys) =>
+        userKeys is null ? algorithms : [.. algorithms.Where(a => userKeys.Contains(SshCertificate.PlainSignatureAlgorithm(a) ?? a))];
+
+    private bool UsesRsaSha1(SshPublicKey key) => userKeys?.Contains(LegacyAlgorithms.RsaSha1) == true && LegacyRsa.CanVerify(key);
+
+    /// <summary>
+    /// Picks the algorithm for a key within <see cref="SshAlgorithms.UserKeys"/>, or returns null after noting why the key
+    /// was skipped when the list leaves it nothing.
+    /// </summary>
+    private string? ChooseAlgorithm(IReadOnlyList<string> algorithms, SshPublicKey key)
+    {
+        IReadOnlyList<string> permitted = Permitted(algorithms, userKeys);
+        bool rsaSha1 = UsesRsaSha1(key);
+        if (permitted.Count == 0 && !rsaSha1)
+        {
+            _notes.Add($"Skipped a {key.KeyType} key: SshAlgorithms.UserKeys names none of its signature algorithms ({string.Join(", ", algorithms)}).");
+            return null;
+        }
+
+        return SignatureAlgorithmFor(permitted, transport.PeerExtensions, rsaSha1);
+    }
 
     private async ValueTask SendAsync(Action<SshRequestWriter> build, CancellationToken cancellationToken)
     {
@@ -349,7 +373,11 @@ internal sealed class ClientAuthenticator(SshTransport transport, string userNam
 
         try
         {
-            string algorithm = SignatureAlgorithmFor(key.SignatureAlgorithms, transport.PeerExtensions, UsesRsaSha1(key.PublicKey));
+            if (ChooseAlgorithm(key.SignatureAlgorithms, key.PublicKey) is not { } algorithm)
+            {
+                return new SendResult(Outcome.Failure, allowed);
+            }
+
             byte[] blob = key.PublicKey.Blob.ToArray();
             tried.Add($"publickey ({algorithm})");
             return await OfferKeyAsync(
@@ -396,8 +424,12 @@ internal sealed class ClientAuthenticator(SshTransport transport, string userNam
                         break;
                     }
 
+                    if (ChooseAlgorithm(identity.SignatureAlgorithms, identity.Key) is not { } algorithm)
+                    {
+                        continue;
+                    }
+
                     offered++;
-                    string algorithm = SignatureAlgorithmFor(identity.SignatureAlgorithms, transport.PeerExtensions, UsesRsaSha1(identity.Key));
                     tried.Add($"publickey ({algorithm}, agent)");
                     result = await OfferKeyAsync(
                         algorithm,

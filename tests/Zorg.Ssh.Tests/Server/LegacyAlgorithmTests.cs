@@ -38,6 +38,7 @@ public sealed class LegacyAlgorithmTests : IDisposable
 
         Assert.Equal([.. defaults.KeyExchange, "diffie-hellman-group14-sha256", "diffie-hellman-group16-sha512", "diffie-hellman-group14-sha1"], legacy.KeyExchange);
         Assert.Equal([.. defaults.HostKeys, "ssh-rsa"], legacy.HostKeys);
+        Assert.Equal([.. defaults.UserKeys, "ssh-rsa"], legacy.UserKeys);
         Assert.Equal(defaults.Ciphers, legacy.Ciphers);
         Assert.Equal([.. defaults.Macs, "hmac-sha1-etm@openssh.com", "hmac-sha1"], legacy.Macs);
         Assert.Same(legacy, SshAlgorithms.LegacyUnsafe);
@@ -48,10 +49,10 @@ public sealed class LegacyAlgorithmTests : IDisposable
     public void The_defaults_hold_no_legacy_name()
     {
         SshAlgorithms defaults = SshAlgorithms.Default;
-        string[] all = [.. defaults.KeyExchange, .. defaults.HostKeys, .. defaults.Ciphers, .. defaults.Macs];
+        string[] all = [.. defaults.KeyExchange, .. defaults.HostKeys, .. defaults.UserKeys, .. defaults.Ciphers, .. defaults.Macs];
 
         Assert.DoesNotContain(all, LegacyAlgorithms.IsLegacy);
-        Assert.False(defaults.AllowsRsaSha1);
+        Assert.False(defaults.UserKeysAllowRsaSha1);
         Assert.Null(defaults.KeyExchangeExtension);
     }
 
@@ -60,6 +61,7 @@ public sealed class LegacyAlgorithmTests : IDisposable
     [InlineData("KeyExchange", "diffie-hellman-group16-sha512")]
     [InlineData("KeyExchange", "diffie-hellman-group14-sha1")]
     [InlineData("HostKeys", "ssh-rsa")]
+    [InlineData("UserKeys", "ssh-rsa")]
     [InlineData("Macs", "hmac-sha1")]
     [InlineData("Macs", "hmac-sha1-etm@openssh.com")]
     public void A_legacy_name_may_be_named_on_a_copy_of_LegacyUnsafe(string family, string name) => Build(family, name, SshAlgorithms.LegacyUnsafe).Validate();
@@ -69,6 +71,7 @@ public sealed class LegacyAlgorithmTests : IDisposable
     [InlineData("KeyExchange", "diffie-hellman-group16-sha512")]
     [InlineData("KeyExchange", "diffie-hellman-group14-sha1")]
     [InlineData("HostKeys", "ssh-rsa")]
+    [InlineData("UserKeys", "ssh-rsa")]
     [InlineData("Macs", "hmac-sha1")]
     [InlineData("Macs", "hmac-sha1-etm@openssh.com")]
     public void A_legacy_name_in_a_plain_list_is_refused_and_the_message_points_at_LegacyUnsafe(string family, string name)
@@ -125,6 +128,8 @@ public sealed class LegacyAlgorithmTests : IDisposable
     [InlineData("KeyExchange", "diffie-hellman-group18-sha512")]
     [InlineData("HostKeys", "ssh-dss")]
     [InlineData("HostKeys", "ssh-rsa-cert-v01@openssh.com")]
+    [InlineData("UserKeys", "ssh-dss")]
+    [InlineData("UserKeys", "ssh-ed25519-cert-v01@openssh.com")]
     [InlineData("Ciphers", "3des-cbc")]
     [InlineData("Ciphers", "aes128-cbc")]
     [InlineData("Ciphers", "arcfour")]
@@ -461,6 +466,7 @@ public sealed class LegacyAlgorithmTests : IDisposable
         {
             "KeyExchange" => start with { KeyExchange = [name] },
             "HostKeys" => start with { HostKeys = [name] },
+            "UserKeys" => start with { UserKeys = [name] },
             "Ciphers" => start with { Ciphers = [name] },
             _ => start with { Macs = [name] },
         };

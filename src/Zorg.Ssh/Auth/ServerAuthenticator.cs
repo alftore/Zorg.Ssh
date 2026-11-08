@@ -36,12 +36,12 @@ internal sealed class ServerAuthOptions
 
     public string? Banner { get; init; }
 
-    /// <summary>Gets whether a client may sign with legacy <c>ssh-rsa</c> (SHA-1): only when the server's algorithm list names it.</summary>
+    /// <summary>Gets whether a client may sign with legacy <c>ssh-rsa</c> (SHA-1): only when <see cref="SshAlgorithms.UserKeys"/> names it.</summary>
     public bool AllowRsaSha1 { get; init; }
 
     /// <summary>
-    /// Gets the signature algorithms a client may use with a key (A4), other than legacy <c>ssh-rsa</c>, which <see cref="AllowRsaSha1"/>
-    /// governs. Null means every algorithm the library implements.
+    /// Gets the signature algorithms a client may use with a key (A4), from <see cref="SshAlgorithms.UserKeys"/>, other than
+    /// legacy <c>ssh-rsa</c>, which <see cref="AllowRsaSha1"/> governs. Null means every algorithm the library implements.
     /// </summary>
     public IReadOnlyList<string>? PublicKeyAlgorithms { get; init; }
 }

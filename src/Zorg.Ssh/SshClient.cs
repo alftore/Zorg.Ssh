@@ -482,7 +482,7 @@ public sealed partial class SshClient : IAsyncDisposable
         try
         {
             transport = await SshTransport.StartAsync(stream, transportOptions, timeoutToken).ConfigureAwait(false);
-            ClientAuthenticator authenticator = new(transport, options.UserName, options.BannerHandler, options.Algorithms.AllowsRsaSha1);
+            ClientAuthenticator authenticator = new(transport, options.UserName, options.BannerHandler, options.Algorithms.UserKeys);
             await authenticator.AuthenticateAsync(options.Credentials, timeoutToken).ConfigureAwait(false);
             RemoteForwardTable remoteForwards = new();
             SshConnection connection = new(transport) { ForwardedChannelHandler = remoteForwards.HandleOpen };

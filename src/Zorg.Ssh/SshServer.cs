@@ -589,8 +589,8 @@ public sealed partial class SshServer : IAsyncDisposable
             Banner = options.Banner,
             MaxAttempts = options.MaxAuthAttempts,
             RequiredMethods = options.RequiredAuthMethods,
-            AllowRsaSha1 = options.Algorithms.AllowsRsaSha1,
-            PublicKeyAlgorithms = options.Algorithms.ServerSignatureAlgorithms,
+            AllowRsaSha1 = options.Algorithms.UserKeysAllowRsaSha1,
+            PublicKeyAlgorithms = options.Algorithms.UserKeys,
             Password = options.PasswordHandler is { } password
                 ? (user, secret, ct) => CheckAsync(() => password(new SshPasswordRequest { UserName = user, Password = secret, RemoteEndPoint = remote }, ct))
                 : null,
