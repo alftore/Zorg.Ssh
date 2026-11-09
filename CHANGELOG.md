@@ -4,7 +4,9 @@ All notable changes to Zorg.Ssh are listed here, newest first. The format follow
 
 ## Unreleased
 
-No changes to the library yet. Documentation and repository changes:
+## 0.1.0 (2026-11-09)
+
+The first release. No changes to the library since 0.1.0-preview.3. Documentation and repository changes:
 
 - The README and the docs index say what the library has and hasn't had checked: internal and AI-agent reviews, fuzzing and interop tests, and no external security audit. The server is still not for the public internet or for users you don't trust.
 - Added this changelog, a security policy with supported versions and response times, issue forms, and a release workflow that publishes with NuGet trusted publishing and a provenance attestation.
