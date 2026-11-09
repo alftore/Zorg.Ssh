@@ -1,0 +1,33 @@
+name: Feature request
+description: An algorithm, extension, option or API you'd like.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        SCP, compression and agent forwarding are out of scope, and so are some older algorithms. [docs/security.md](https://github.com/alftore/Zorg.Ssh/blob/main/docs/security.md#out-of-scope) has the full list and why.
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What you're trying to do, and what gets in the way today.
+    validations:
+      required: true
+  - type: input
+    id: spec
+    attributes:
+      label: RFC or OpenSSH extension
+      description: The specification involved, if there is one.
+      placeholder: RFC 4254 section 7.1, or PROTOCOL in OpenSSH
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you'd like
+      description: The API you'd want, with a short example.
+      render: csharp
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you've tried

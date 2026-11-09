@@ -1,0 +1,83 @@
+name: Interop problem
+description: Zorg.Ssh doesn't work with a particular SSH server or client, but OpenSSH does.
+labels: [interop]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. Interop problems usually come down to a peer's quirk, so the peer's product, version and debug output help most.
+
+        **Security problems go [here, privately](https://github.com/alftore/Zorg.Ssh/security/advisories/new), not in an issue.**
+
+        Old equipment that offers only SHA-1 or finite-field Diffie-Hellman may need `SshAlgorithms.LegacyUnsafe`. Algorithms older than that aren't supported: see [what's out of scope](https://github.com/alftore/Zorg.Ssh/blob/main/docs/security.md#out-of-scope).
+  - type: input
+    id: version
+    attributes:
+      label: Zorg.Ssh version
+      placeholder: 0.1.0
+    validations:
+      required: true
+  - type: input
+    id: runtime
+    attributes:
+      label: .NET version, OS and architecture
+      placeholder: .NET 10.0.1 on Windows 11, x64
+    validations:
+      required: true
+  - type: dropdown
+    id: role
+    attributes:
+      label: Which side is Zorg.Ssh
+      options:
+        - Client, against another server
+        - Server, with another client
+    validations:
+      required: true
+  - type: input
+    id: peer
+    attributes:
+      label: The other product and its version
+      description: Such as an OpenSSH, Dropbear or Windows OpenSSH version, a network device or appliance and its firmware, or another library.
+      placeholder: Dropbear 2022.83 on a router
+    validations:
+      required: true
+  - type: input
+    id: algorithms
+    attributes:
+      label: Negotiated algorithms, if you know them
+      description: Key exchange, host key, cipher and MAC.
+  - type: textarea
+    id: repro
+    attributes:
+      label: Code sample
+      description: The options and calls that fail.
+      render: csharp
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happens with Zorg.Ssh
+      description: The exception type, message and stack trace, or what goes wrong.
+    validations:
+      required: true
+  - type: textarea
+    id: openssh
+    attributes:
+      label: What OpenSSH does with the same peer
+      description: Does `ssh` or `sftp` work against the same server, with the same user and key? Which version?
+    validations:
+      required: true
+  - type: textarea
+    id: verbose
+    attributes:
+      label: ssh -vvv output
+      description: The output of `ssh -vvv` (or `sftp -vvv`) against the same peer, with passwords, keys, user names and host names you don't want public removed.
+      render: text
+  - type: checkboxes
+    id: secrets
+    attributes:
+      label: Secrets
+      options:
+        - label: I removed passwords, private keys and host names I don't want public.
+          required: true

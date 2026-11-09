@@ -1,5 +1,15 @@
 # Contributing
 
+## How to contribute
+
+Issues are welcome: bug reports, interop problems with a server or client, feature requests and questions about the documentation. Please use one of the issue forms. A bug report with the peer's product and version and a small code sample usually gets fixed fastest. Remove passwords, private keys and host names you don't want public before you post.
+
+Pull requests are open to collaborators only. An SSH library is a security boundary, and one maintainer can't review a stranger's change to the transport, login or the SFTP server's root well enough. That also keeps one person responsible for every change, its tests and its signed history. If you have a fix in mind, describe it or paste the patch in the issue, and it will be credited in the changelog.
+
+Report security problems privately, as [SECURITY.md](SECURITY.md) describes, not in an issue.
+
+SCP, compression and agent forwarding are out of scope: see [docs/security.md](docs/security.md#out-of-scope).
+
 ## Build and test
 
 You need the .NET SDK version in `global.json`.
@@ -139,3 +149,44 @@ It also opens a real connection: an in-memory client and server, a command, an S
 ## Commits
 
 Signed, with no co-author or generator lines. The README covers how the library is built.
+
+## Releases
+
+1. Through a pull request: set `VersionPrefix` and `VersionSuffix` in `Directory.Build.props` to the version the tag will have (the workflow builds with the tag's version), move the lines of `PublicAPI.Unshipped.txt` into `PublicAPI.Shipped.txt`, and turn the Unreleased section of `CHANGELOG.md` into the new version with its date.
+2. Run CI by hand once (Actions > CI > Run workflow), so the macOS job runs on the same commit.
+3. Sign and push a tag `vMAJOR.MINOR.PATCH`, with an optional `-prerelease`, on that commit of `main`.
+4. `.github/workflows/release.yml` builds, runs the unit tests and packs. Check the `packages` artifact, then approve the `nuget` environment. The publish job attests the packages and pushes them with NuGet trusted publishing.
+
+## Repository settings (for the owner)
+
+GitHub can't read these from files, so the owner has to turn them on by hand.
+
+The rulesets are in `.github/rulesets/`. They need a public repository or GitHub Pro. Apply them with:
+
+```bash
+gh api repos/alftore/Zorg.Ssh/rulesets --method POST --input .github/rulesets/main.json
+```
+
+```bash
+gh api repos/alftore/Zorg.Ssh/rulesets --method POST --input .github/rulesets/tags.json
+```
+
+`main.json` requires a pull request, signed commits, resolved conversations, and these checks on a branch that's up to date: `Build and test (windows-latest)`, `Build and test (ubuntu-latest)`, `AOT smoke publish` and `Interop tests (ubuntu-latest, Docker)`. It blocks force pushes and deletions, and has no bypass list, so it applies to administrators too. A sole maintainer can't approve their own pull request, so it asks for 0 approvals until there's a second maintainer. `tags.json` stops a `v*` tag from being moved or deleted.
+
+**Pull requests:** Settings > General > Features > Pull requests > Collaborators only. There's no API for it.
+
+**The `nuget` environment** (Settings > Environments):
+
+- Add required reviewers. Turn on "Prevent self-review" once there's a second maintainer.
+- Limit deployments to selected tags, with the rule `v*`.
+- Turn off administrator bypass.
+- Add the secret `NUGET_USER`, holding the nuget.org profile name (not an email address).
+
+**nuget.org** (your username > Trusted Publishing): add a policy with the repository owner, repository `Zorg.Ssh`, workflow file `release.yml` and environment `nuget`.
+
+**Actions and security** (Settings > Actions, and Advanced Security):
+
+- Set the default `GITHUB_TOKEN` permission to read-only, and don't let Actions approve pull requests.
+- Require actions to be pinned to a full-length commit SHA.
+- Turn on private vulnerability reporting, Dependabot alerts, secret scanning and push protection.
+- Use two-factor authentication on GitHub and nuget.org.

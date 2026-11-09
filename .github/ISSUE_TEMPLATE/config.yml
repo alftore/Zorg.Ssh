@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/alftore/Zorg.Ssh/security/advisories/new
+    about: Report it privately here, not in a public issue.
+  - name: Documentation
+    url: https://github.com/alftore/Zorg.Ssh/tree/main/docs
+    about: The client, SFTP and server guides, the security notes and troubleshooting for each exception.

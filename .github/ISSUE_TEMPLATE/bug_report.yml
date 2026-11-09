@@ -1,0 +1,91 @@
+name: Bug report
+description: Something fails, gives the wrong result, hangs, or throws the wrong exception.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. A small, complete example gets a fix fastest. If the problem is with a particular server or client, the [interop form](https://github.com/alftore/Zorg.Ssh/issues/new?template=interop.yml) asks for what helps there.
+
+        **Security problems go [here, privately](https://github.com/alftore/Zorg.Ssh/security/advisories/new), not in an issue.**
+
+        An exception message from Zorg.Ssh is safe to paste: secrets never reach one. A packet capture, a log from another tool or your own handlers' output may not be.
+  - type: input
+    id: version
+    attributes:
+      label: Zorg.Ssh version
+      placeholder: 0.1.0
+    validations:
+      required: true
+  - type: input
+    id: runtime
+    attributes:
+      label: .NET version, OS and architecture
+      description: Say if you publish with Native AOT or trimming.
+      placeholder: .NET 10.0.1 on Ubuntu 24.04, x64, Native AOT
+    validations:
+      required: true
+  - type: dropdown
+    id: role
+    attributes:
+      label: Client or server
+      options:
+        - Client (SshClient)
+        - SFTP client (SftpClient)
+        - Server (SshServer)
+        - SFTP server (SftpServer)
+        - Something else
+    validations:
+      required: true
+  - type: input
+    id: peer
+    attributes:
+      label: The peer and its version
+      description: The server or client on the other end, such as the output of `ssh -V`, a Dropbear version or a vendor appliance and its firmware.
+      placeholder: OpenSSH_9.6p1 on Ubuntu 24.04
+    validations:
+      required: true
+  - type: input
+    id: algorithms
+    attributes:
+      label: Negotiated algorithms, if you know them
+      description: Key exchange, host key, cipher and MAC. A debug log from Zorg.Ssh or `ssh -vvv` shows them.
+      placeholder: mlkem768x25519-sha256, ssh-ed25519, aes256-gcm@openssh.com
+  - type: textarea
+    id: repro
+    attributes:
+      label: Code sample
+      description: The smallest code that shows the problem, with its options. Keep it as small as you can.
+      render: csharp
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected result
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual result
+      description: What happened instead. For an exception, its type, message and stack trace.
+    validations:
+      required: true
+  - type: input
+    id: exception
+    attributes:
+      label: Exception type and message
+      placeholder: "SshNegotiationException: no common key exchange algorithm ..."
+  - type: textarea
+    id: notes
+    attributes:
+      label: Anything else
+      description: What OpenSSH does in the same case, the RFC section, or a fix you have in mind.
+  - type: checkboxes
+    id: secrets
+    attributes:
+      label: Secrets
+      options:
+        - label: I removed passwords, private keys and host names I don't want public.
+          required: true
