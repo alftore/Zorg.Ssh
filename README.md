@@ -5,7 +5,7 @@ An async SSH client and server library for .NET 10, with SFTP, written in C# onl
 Status: early, version 0.1. The public API can still change before 1.0. It has had internal reviews and tests, not an external security audit: see [Status and security](#status-and-security).
 
 ```
-dotnet add package Zorg.Ssh --prerelease
+dotnet add package Zorg.Ssh
 ```
 
 ```csharp

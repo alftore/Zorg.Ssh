@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-Only the latest release on nuget.org gets security fixes. Today that's `0.1.0-preview.3`. A fix ships as a new version, not as a patch to an old one.
+Only the latest release on nuget.org gets security fixes. Today that's `0.1.0`. A fix ships as a new version, not as a patch to an old one.
 
 Zorg.Ssh has had internal reviews and tests, not an external security audit or a penetration test. [docs/security.md](docs/security.md) says what has and hasn't been checked.
 

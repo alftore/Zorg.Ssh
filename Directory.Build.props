@@ -21,7 +21,6 @@
 
     <!-- Packaging metadata -->
     <VersionPrefix>0.1.0</VersionPrefix>
-    <VersionSuffix>preview.3</VersionSuffix>
     <Authors>Zorg.Ssh contributors</Authors>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageReadmeFile>README.md</PackageReadmeFile>
