@@ -1,16 +1,24 @@
 # Documentation
 
-Zorg.Ssh is an async SSH client and server library for .NET 10. It's pre-release and hasn't had an external security review. Read [security.md](security.md) before you depend on it.
+Zorg.Ssh is an async SSH client and server library for .NET 10. It has had internal reviews and tests, but no external security audit. Read [security.md](security.md) before you depend on it.
 
-| Page | What it covers |
-|---|---|
-| [client.md](client.md) | Connecting, credentials, host key policies, commands, processes and shells |
-| [sftp.md](sftp.md) | File transfer and file management over SFTP |
-| [server.md](server.md) | Running an SSH server in your own process |
-| [security.md](security.md) | The four guarantees, defaults, algorithms, what's out of scope, what's unverified |
-| [troubleshooting.md](troubleshooting.md) | Each exception, and what to do about it |
-| [benchmarks.md](benchmarks.md) | Measured results against SSH.NET and Tmds.Ssh, and their limits |
-| [dependencies.md](dependencies.md) | Every third-party package, and why it's there |
+- [Client](client.md): connecting, credentials, host key policies, forwarding, commands, processes and shells.
+- [SFTP](sftp.md): file transfer and file management over SFTP.
+- [Server](server.md): running an SSH server in your own process, and where not to run it.
+- [Security](security.md): the four guarantees, defaults, algorithms, what's out of scope and what's unverified.
+- [Troubleshooting](troubleshooting.md): each exception, and what to do about it.
+- [Benchmarks](benchmarks.md): measured results against SSH.NET and Tmds.Ssh, and their limits.
+- [Dependencies](dependencies.md): every third-party package, and why it's there.
+
+## Known limits
+
+These pages say what doesn't work, or works differently than you might expect:
+
+- [Out of scope](security.md#out-of-scope): what isn't implemented, such as SCP, compression and agent forwarding.
+- [Unverified](security.md#unverified): what hasn't been tested, such as some platforms, servers and long-running connections.
+- [Where to run the server](server.md#where-to-run-it): not on the public internet, and not in front of users you don't trust.
+- [SFTP limits](sftp.md#telling-the-librarys-limits-from-the-servers-answers): telling a refusal by the library from the server's answer.
+- [Defaults](security.md#defaults) and [server limits](server.md#limits): the sizes, counts and timeouts that bound each connection.
 
 ## The samples
 

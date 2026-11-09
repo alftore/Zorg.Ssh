@@ -292,4 +292,4 @@ What the rest of a transfer costs: on the client, copying and clearing buffers i
 - **Client-side memory only.** `Allocated` is managed memory on the client. It doesn't include native memory or peak use.
 - **A file over 128 MiB** wasn't tested, so rekey cost in long transfers is only lightly covered.
 - **The server is benchmarked only against itself.** `SshServer` plays no part in the comparison tables. `--sftp-server` measures its SFTP server on one machine and one file system, and compares builds, not servers.
-- **It's a pre-release.** Performance work is planned for later, and these numbers will age.
+- **It's an early version.** Performance work is planned for later, and these numbers will age.
