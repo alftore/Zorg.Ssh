@@ -16,7 +16,7 @@
 - For SFTP on a server, call `SftpServer.ServeAsync` from the `SessionHandler`, with `SftpServerOptions.RootDirectory`.
 - `SshServer.StartAsync` needs a host key, a `PasswordHandler` or `PublicKeyHandler`, and a `SessionHandler`. Load the key with `SshHostKey.Load`, because a generated one can't be saved.
 - These don't exist, so don't call them: SCP, compression, agent forwarding. `src/Zorg.Ssh/PublicAPI.Shipped.txt` and `PublicAPI.Unshipped.txt` together are the full API.
-- It's pre-release and unreviewed. `docs/` has the details, and `docs/troubleshooting.md` covers each exception.
+- It's version 0.x, with internal and agent reviews but no external audit, and the server isn't for the public internet. `docs/` has the details, and `docs/troubleshooting.md` covers each exception.
 
 ## Working on the repo
 
@@ -33,7 +33,7 @@ dotnet test --solution Zorg.Ssh.slnx --no-build
 - A change to a decoder (anything that reads bytes or text from a peer or a file) should survive `ZORG_FUZZ_MINUTES=1` on the fuzz tests. A fuzz failure prints a seed that replays it, and `CONTRIBUTING.md` says how. Don't widen the allowed exceptions in `Fuzzing/FuzzTargets.cs` to make one pass. A change to auth, the connection, channels, SFTP or the transport should also survive `ZORG_FUZZ_MINUTES=1 ZORG_FUZZ_TARGET=Stateful`, which fuzzes a live encrypted connection. A `GUARANTEE 1` or `GUARANTEE 2 BREACH` from it goes to the maintainer before anyone fixes it.
 - Commits are signed through `commit.gpgsign`. Never bypass it. If signing fails, stop and tell the maintainer.
 - Commit messages and pull requests have no `Co-Authored-By` or "Generated with" lines. The README states that agents help build the library.
-- `.tmp/design/` holds the agreed design, where it exists on your machine. `01-implementation-plan.md` wins over older notes.
+- `.tmp/design/` holds the maintainer's local design notes, where they exist on your machine; it's gitignored and nobody else has it. `docs/` is the public reference. Among the local notes, `01-implementation-plan.md` wins over older ones.
 - Before adding a package, read `docs/dependencies.md`, check the licence in the `.nuspec`, and add a row in the same change.
 - Read other SSH libraries for ideas, but don't copy their code.
 

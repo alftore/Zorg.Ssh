@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <Description>Async-first SSH client and server library for .NET. Pre-release, and not yet security-reviewed. The server isn't meant for the public internet.</Description>
+    <Description>Async SSH client and server library for .NET, with SFTP. Reviewed internally and by AI agents, not by an external audit. The server isn't meant for the public internet or for users you don't trust.</Description>
     <PackageTags>ssh;sftp;openssh;async</PackageTags>
     <!-- Only for source-generated LibraryImport stubs (file type checks, Linux directory listings for the SFTP server, the Windows agent pipe). No unsafe code is written by hand. -->
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>

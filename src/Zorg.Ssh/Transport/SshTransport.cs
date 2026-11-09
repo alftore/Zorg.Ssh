@@ -14,7 +14,7 @@ using Zorg.Ssh.Protocol;
 namespace Zorg.Ssh.Transport;
 
 /// <summary>
-/// The SSH transport for one connection, in either role. See <c>.tmp/design/02-transport.md</c>.
+/// The SSH transport for one connection, in either role. See <c>docs/security.md</c>.
 /// <see cref="ReceiveAsync"/> is the only reader and must not be called concurrently. It handles every
 /// transport message itself, so whoever drives it also drives key exchange. <see cref="SendAsync"/> may be
 /// called from any thread.
