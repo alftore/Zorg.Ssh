@@ -187,6 +187,6 @@ gh api repos/alftore/Zorg.Ssh/rulesets --method POST --input .github/rulesets/ta
 **Actions and security** (Settings > Actions, and Advanced Security):
 
 - Set the default `GITHUB_TOKEN` permission to read-only, and don't let Actions approve pull requests.
-- Require actions to be pinned to a full-length commit SHA.
+- Under Policies, turn on "Require lockfile" and "Require actions to be pinned to a full-length commit SHA". A workflow listed in `.github/workflows/actions.lock` passes both. After adding or changing a `uses:` line, run `gh actions-lock` (the `github/gh-actions-lock` extension) and commit the lockfile with it. Never edit the lockfile by hand.
 - Turn on private vulnerability reporting, Dependabot alerts, secret scanning and push protection.
 - Use two-factor authentication on GitHub and nuget.org.
