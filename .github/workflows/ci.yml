@@ -49,6 +49,36 @@ jobs:
         shell: bash
         run: dotnet pack src/Zorg.Ssh/Zorg.Ssh.csproj -c Release --no-build -p:PackageOutputPath="$RUNNER_TEMP/packages"
 
+  # The package targets net10.0, but an app on .NET 11 runs it on the .NET 11 runtime. This builds with the SDK from
+  # global.json, then runs the same tests with DOTNET_ROLL_FORWARD=LatestMajor. It's set on the test executable only,
+  # not on the dotnet CLI, so the SDK itself stays on its own runtime. RuntimeVersionTests fails if the roll-forward
+  # didn't happen.
+  dotnet11:
+    name: Test on the .NET 11 runtime (ubuntu-latest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          global-json-file: global.json
+          dotnet-version: 11.0.x
+
+      - name: Build
+        run: dotnet build tests/Zorg.Ssh.Tests -c Release
+
+      - name: Test
+        env:
+          ZORG_REQUIRE_PEERS: '1'
+          ZORG_EXPECT_DOTNET_MAJOR: '11'
+          DOTNET_ROLL_FORWARD: LatestMajor
+        run: |
+          dotnet --list-runtimes
+          tests/Zorg.Ssh.Tests/bin/Release/net10.0/Zorg.Ssh.Tests
+
   # Manual only: Actions > CI > Run workflow. macOS minutes cost several times Linux ones on a private repository.
   # Once the repository is public, standard runners are free: consider moving macos-latest into the matrix above and
   # deleting this job. It's the only place the macOS code (lstat and stat layouts in LocalFile) runs.
