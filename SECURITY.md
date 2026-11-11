@@ -24,7 +24,7 @@ From 0.1.0, releases go through `.github/workflows/release.yml`:
 - A release runs only from a `v*` tag on a commit that's on `main`, and it waits for approval in the `nuget` environment.
 - Packages are published with NuGet trusted publishing. There's no long-lived API key: each release gets a key that lasts one hour.
 - The job that publishes doesn't run repository code. The job that builds has no access to publishing credentials.
-- Every GitHub Action is pinned to a full commit SHA. Dependabot proposes updates after a 7-day cooldown.
+- Every GitHub Action, and every action those actions use, is pinned to a commit in `.github/workflows/actions.lock`, which GitHub enforces at run time. Dependabot proposes updates after a 7-day cooldown and updates the lockfile in the same pull request.
 
 `0.1.0-preview.3` was uploaded by hand, before this workflow existed, so it has no attestation.
 
