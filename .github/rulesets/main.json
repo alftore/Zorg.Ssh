@@ -31,7 +31,8 @@
           { "context": "Build and test (windows-latest)", "integration_id": 15368 },
           { "context": "Build and test (ubuntu-latest)", "integration_id": 15368 },
           { "context": "AOT smoke publish", "integration_id": 15368 },
-          { "context": "Interop tests (ubuntu-latest, Docker)", "integration_id": 15368 }
+          { "context": "Interop tests (ubuntu-latest, Docker)", "integration_id": 15368 },
+          { "context": "Test on the .NET 11 runtime (ubuntu-latest)", "integration_id": 15368 }
         ]
       }
     }
