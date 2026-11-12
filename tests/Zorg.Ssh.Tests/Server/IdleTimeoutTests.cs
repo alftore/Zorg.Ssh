@@ -94,8 +94,13 @@ public sealed class IdleTimeoutTests : IDisposable
         await _time.WaitForTimerAsync(0);
 
         _time.Advance(TimeSpan.FromMinutes(9));
+        int armed = _time.TimersCreated;
         await Assert.ThrowsAsync<SshException>(() => client.OpenTcpStreamAsync("127.0.0.1", 9, Ct));
 
+        // The client hears the refusal before the server's monitor has counted the channel closed and armed its last minute. A timer
+        // armed from the old reading after the clock has moved on would be set a minute beyond the deadline and never fire,
+        // so wait for the monitor to arm it before moving the clock.
+        await _time.WaitForTimerAsync(armed);
         _time.Advance(TimeSpan.FromMinutes(1));
         await WaitForAsync(() => _logs.Contains("Closed a connection"));
     }
