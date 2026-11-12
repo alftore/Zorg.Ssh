@@ -184,6 +184,146 @@ public sealed class SftpServerPathTests : IDisposable
         Assert.Equal(Failure, (await client.OpenAsync("file.txt:hidden", OpenRead)).Status);
     }
 
+    // Erlang/OTP CVE-2026-23942: the root was checked as a string prefix, so /x/user1 admitted /x/user10. Here the root is a
+    // directory whose name is a prefix of a sibling's, and every way to the sibling is refused or lands inside the root.
+    [Fact]
+    public async Task Erlang_CVE_2026_23942_a_sibling_whose_name_starts_with_the_roots_is_not_inside_it()
+    {
+        // Inside the sandbox's root directory, which the sandbox cleans up link by link, though nothing here serves that directory.
+        string user1 = _sandbox.InRoot("user1");
+        string user10 = _sandbox.InRoot("user10");
+        Directory.CreateDirectory(user1);
+        Directory.CreateDirectory(user10);
+        string secretFile = System.IO.Path.Combine(user10, "secret.txt");
+        await File.WriteAllTextAsync(secretFile, SftpServerSandbox.Secret, TestContext.Current.CancellationToken);
+        SftpServerSandbox.LinkDirectory(System.IO.Path.Combine(user1, "sibling"), user10);
+        SftpServerSandbox.Link(System.IO.Path.Combine(user1, "file-link.txt"), secretFile);
+        await using SftpServerHarness client = await StartAsync(new SftpServerOptions { RootDirectory = user1 });
+
+        // Climbing and absolute names are re-rooted, so they name something that isn't there.
+        foreach (string path in new[] { "../user10/secret.txt", "/../user10/secret.txt", "..//user10/secret.txt", "a/../../user10/secret.txt", secretFile.Replace('\\', '/') })
+        {
+            // Windows refuses a drive letter outright, where elsewhere the same text is a name under the root.
+            uint[] refusals = [NoSuchFile, Failure];
+            Assert.Contains((await client.OpenAsync(path, OpenRead)).Status, refusals);
+            Assert.Contains((await client.RequestAsync(SftpMessage.Stat, Path(path))).Status, refusals);
+        }
+
+        Assert.Equal(NoSuchFile, (await client.OpenAsync("../user10/new.txt", OpenWrite | OpenCreate)).Status);
+
+        // Links in the root that lead to the sibling are refused, whatever the operation.
+        foreach (string path in new[] { "sibling/secret.txt", "file-link.txt" })
+        {
+            Assert.Equal(PermissionDenied, (await client.OpenAsync(path, OpenRead)).Status);
+            Assert.Equal(PermissionDenied, (await client.OpenAsync(path, OpenWrite | OpenTruncate)).Status);
+            Assert.Equal(PermissionDenied, (await client.RequestAsync(SftpMessage.Stat, Path(path))).Status);
+        }
+
+        Assert.Equal(PermissionDenied, (await client.RequestAsync(SftpMessage.OpenDir, Path("sibling"))).Status);
+
+        // A link to it can't be made either.
+        Assert.NotEqual(Ok, (await client.RequestAsync(SftpMessage.SymLink, Path("../user10").Text("made"))).Status);
+        Assert.NotEqual(Ok, (await client.RequestAsync(SftpMessage.SymLink, Path(user10.Replace('\\', '/')).Text("made"))).Status);
+        Assert.DoesNotContain("made", Directory.GetFileSystemEntries(user1).Select(System.IO.Path.GetFileName));
+
+        Assert.Equal(SftpServerSandbox.Secret, await File.ReadAllTextAsync(secretFile, TestContext.Current.CancellationToken));
+        Assert.Equal(["secret.txt"], Directory.GetFileSystemEntries(user10).Select(System.IO.Path.GetFileName));
+    }
+
+    // Erlang/OTP CVE-2026-32147: a handle kept the client's path, and FSETSTAT acted on whatever the path named by then. Here the
+    // path of an open file is moved away and a link out is put in its place, and every request on the handle still acts on the
+    // file that was opened.
+    [Fact]
+    public async Task Erlang_CVE_2026_32147_a_handle_acts_on_the_file_it_opened_even_when_its_path_becomes_a_link_out()
+    {
+        await File.WriteAllTextAsync(_sandbox.InRoot("f.txt"), "inside", TestContext.Current.CancellationToken);
+        Dictionary<string, string> before = _sandbox.SnapshotOutside();
+        await using SftpServerHarness client = await StartAsync(Options);
+        byte[] handle = await client.OpenHandleAsync("f.txt", OpenRead | OpenWrite);
+
+        Assert.Equal(Ok, (await client.RequestAsync(SftpMessage.Rename, Path("f.txt").Text("moved.txt"))).Status);
+        SftpServerSandbox.Link(_sandbox.InRoot("f.txt"), System.IO.Path.Combine(_sandbox.Outside, "secret.txt"));
+
+        Assert.Equal(6, (await client.RequestAsync(SftpMessage.Fstat, Empty().Bytes(handle))).Attributes.Size);
+        Assert.Equal("inside", System.Text.Encoding.UTF8.GetString((await client.ReadAsync(handle, 0, 100)).Data));
+
+        Assert.Equal(Ok, (await client.WriteAsync(handle, 0, "XX"u8.ToArray())).Status);
+        Assert.Equal("XXside", await ReadSharedAsync(_sandbox.InRoot("moved.txt")));
+        Assert.Equal(before, _sandbox.SnapshotOutside());
+
+        Assert.Equal(Ok, (await client.RequestAsync(SftpMessage.FSetStat, Empty().Bytes(handle).U32(1).U64(2))).Status);
+        Assert.Equal("XX", await ReadSharedAsync(_sandbox.InRoot("moved.txt")));
+        Assert.Equal(before, _sandbox.SnapshotOutside());
+
+        Assert.Equal(Ok, (await client.ExtendedAsync("fsync@openssh.com", Empty().Bytes(handle))).Status);
+        Assert.Equal(Ok, (await client.CloseAsync(handle)).Status);
+        Assert.Equal(before, _sandbox.SnapshotOutside());
+        Assert.Equal(SftpServerSandbox.Secret, await File.ReadAllTextAsync(System.IO.Path.Combine(_sandbox.Outside, "secret.txt"), TestContext.Current.CancellationToken));
+    }
+
+    // Apache MINA CVE-2023-35887: a rooted file system let a user find out whether a path outside the root exists, by how the error
+    // differed. Here, for each operation that takes a path, an outside path that exists and one that doesn't get the same answer,
+    // so a client learns nothing about what is outside. Through a link out, the answer is one refusal, whatever is behind it.
+    [Fact]
+    public async Task Mina_CVE_2023_35887_what_is_outside_the_root_gives_the_same_answer_whether_it_exists_or_not()
+    {
+        SftpServerSandbox.LinkDirectory(_sandbox.InRoot("out"), _sandbox.Outside);
+        SftpServerSandbox.Link(_sandbox.InRoot("file-out"), System.IO.Path.Combine(_sandbox.Outside, "secret.txt"));
+        Directory.CreateDirectory(System.IO.Path.Combine(_sandbox.Outside, "dir"));
+        Dictionary<string, string> before = _sandbox.SnapshotOutside();
+        await using SftpServerHarness client = await StartAsync(Options);
+
+        // Each pair is an outside path that exists and one that doesn't.
+        (string Exists, string Missing)[] pairs =
+        [
+            ("out/secret.txt", "out/no-such-file.txt"),
+            ("out/dir", "out/no-such-dir"),
+            ("out/dir/x", "out/no-such-dir/x"),
+        ];
+        foreach ((string exists, string missing) in pairs)
+        {
+            await AssertSameAnswersAsync(client, exists, missing);
+        }
+
+        // A path that climbs or is absolute is re-rooted, so it is a path inside the root: the real file outside and a made-up one
+        // are both just missing.
+        await AssertSameAnswersAsync(client, "../secret.txt", "../no-such-file.txt");
+        await AssertSameAnswersAsync(client, "../outside/secret.txt", "../outside/no-such-file.txt");
+        await AssertSameAnswersAsync(client, System.IO.Path.Combine(_sandbox.Outside, "secret.txt").Replace('\\', '/'), System.IO.Path.Combine(_sandbox.Outside, "no-such-file.txt").Replace('\\', '/'));
+
+        Assert.Equal(before, _sandbox.SnapshotOutside());
+        client.AssertNothingLeaked(_sandbox.Base);
+    }
+
+    /// <summary>Reads a file the server still has open for writing.</summary>
+    private static async Task<string> ReadSharedAsync(string path)
+    {
+        await using FileStream stream = new(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        using StreamReader reader = new(stream);
+        return await reader.ReadToEndAsync(TestContext.Current.CancellationToken);
+    }
+
+    private static async Task AssertSameAnswersAsync(SftpServerHarness client, string exists, string missing)
+    {
+        foreach (byte type in new[] { SftpMessage.Stat, SftpMessage.Lstat, SftpMessage.RealPath, SftpMessage.ReadLink, SftpMessage.OpenDir, SftpMessage.Remove, SftpMessage.RmDir })
+        {
+            SftpServerReply one = await client.RequestAsync(type, Path(exists));
+            SftpServerReply two = await client.RequestAsync(type, Path(missing));
+            Assert.True(one.Type == two.Type, $"Request {type} on {exists} and {missing}: type {one.Type} against {two.Type}.");
+            if (one.Type == SftpMessage.Status)
+            {
+                Assert.True(one.Status == two.Status, $"Request {type} on {exists} and {missing}: status {one.Status} against {two.Status}.");
+            }
+        }
+
+        foreach (uint flags in new[] { OpenRead, OpenWrite | OpenTruncate, OpenWrite | OpenCreate | OpenExclusive })
+        {
+            SftpServerReply one = await client.OpenAsync(exists, flags);
+            SftpServerReply two = await client.OpenAsync(missing, flags);
+            Assert.True(one.Type == two.Type && (one.Type != SftpMessage.Status || one.Status == two.Status), $"Open {flags} on {exists} and {missing} differ.");
+        }
+    }
+
     [Fact]
     public async Task Dot_dot_stops_at_the_root_and_lands_inside_it()
     {
