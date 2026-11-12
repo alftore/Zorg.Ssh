@@ -20,6 +20,7 @@ These pages say what doesn't work, or works differently than you might expect:
 - [Where to run the server](server.md#where-to-run-it): not on the public internet, and not in front of users you don't trust.
 - [SFTP limits](sftp.md#telling-the-librarys-limits-from-the-servers-answers): telling a refusal by the library from the server's answer.
 - [Defaults](security.md#defaults) and [server limits](server.md#limits): the sizes, counts and timeouts that bound each connection.
+- [Known issues](troubleshooting.md#known-issues): occasional delays over loopback on Windows.
 
 ## The samples
 
