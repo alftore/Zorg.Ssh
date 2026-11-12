@@ -22,7 +22,7 @@ Tested: CI runs the `net10.0` tests on the .NET 11 runtime as a required check. 
 
 - **`X25519DiffieHellman`:** built-in X25519. It passes the RFC 7748 vectors, matches BouncyCastle, and refuses low-order points by itself (it throws `CryptographicException` rather than return an all-zero secret). It's supported on Windows 11 and on Linux with OpenSSL 3.0 and 3.5; macOS and Windows 10 weren't tested. The private key stays in a native handle. It's faster than BouncyCastle on Linux and about four times slower on Windows. It needs a `net11.0` or later build; `Microsoft.Bcl.Cryptography` doesn't bring it to .NET 10. When adopted: use it where `IsSupported` and keep BouncyCastle otherwise, as `MlKem768` does, check the length first, and map `CryptographicException` to `SshProtocolException`.
 - **Runtime async (preview):** not worth turning on. Times stay level and allocations rise 4 to 7 times, because the pooled builders stop pooling. Revisit when it leaves preview, by removing the `[AsyncMethodBuilder]` attributes and measuring again.
-- **Thread pool:** on Windows, about 1 or 2 in 100 short request and reply round trips (such as `ExecuteAsync`) stall for 5 to 25 ms, which raises the average by about 50%. The median is unchanged. The cause is the reworked .NET 11 thread pool, not this library. Apps can set `System.Threading.ThreadPool.UnfairSemaphoreSpinLimit` to 0 in runtimeconfig, at the cost of about 60 µs more per round trip. Linux wasn't measured.
+- **Loopback stalls on Windows:** short request and reply round trips over loopback (such as `ExecuteAsync` against a server in the same process) have the same median on .NET 10 and 11, but on .NET 11 more of them stall for 10 to 25 ms, which raised the average by 50% or more in our benchmark. The stall is in Windows loopback TCP, when sends from both ends of one connection coincide; it happens on .NET 10 too, and the thread pool is idle while it lasts. .NET 11's thread pool timing makes the sends coincide more often. Linux doesn't show it. Apps that care can set `System.Threading.ThreadPool.UnfairSemaphoreSpinLimit` to 0 in runtimeconfig, at the cost of about 50 µs more per round trip.
 - **Smaller additions:** `SafeFileHandle.Type` could replace part of the SFTP server's own file-type check on Linux and macOS. `RandomAccess` now reads and writes pipes. The new `Process` APIs could simplify the test helpers.
 - **A `net11.0` build would raise these warnings,** which fail the build: NU1510 (the logging abstractions are part of the framework), CA1307, CA1830 and CA2027.
 - **Not relevant:** AES key wrap, HPKE, composite ML-KEM (a different construction from SSH's hybrid), ML-KEM in CMS, Zstandard, and the new x86-64-v2 hardware baseline.
@@ -35,6 +35,6 @@ Check when it ships:
 - Is Ed25519 (EdDSA) built in? That would remove BouncyCastle's largest remaining use.
 - Have raw ChaCha20 or Poly1305 been added?
 - Has runtime async left preview, and is it faster without the pooled builders?
-- Is the .NET 11 thread pool stall fixed?
+- Do loopback round trips on Windows still stall more often than on .NET 10?
 - Does `X25519DiffieHellman` support macOS?
 - Then: target `net12.0` alone once .NET 10 support ends in November 2028, or `net10.0` and `net12.0` together before that if a feature is worth two builds.
