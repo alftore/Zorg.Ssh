@@ -75,6 +75,35 @@ public sealed class UserKeyAlgorithmTests
         }
     }
 
+    // OpenSSH CVE-2026-35387: allowing one ECDSA algorithm also let in the other ECDSA curves. Algorithm lists are exact names:
+    // with only nistp256 named, a nistp384 user key is refused before the handler, and a nistp256 one logs in.
+    [Theory]
+    [InlineData("ecdsa-sha2-nistp256", "ecdsa-sha2-nistp384", false)]
+    [InlineData("ecdsa-sha2-nistp256", "ecdsa-sha2-nistp521", false)]
+    [InlineData("ecdsa-sha2-nistp384", "ecdsa-sha2-nistp256", false)]
+    [InlineData("ecdsa-sha2-nistp256", "ecdsa-sha2-nistp256", true)]
+    public async Task OpenSSH_CVE_2026_35387_naming_one_ECDSA_algorithm_admits_no_other_curve(string allowed, string keyType, bool logsIn)
+    {
+        using SshPrivateKey key = SshPrivateKey.GenerateEcdsa(keyType);
+        int handlerCalls = 0;
+        (SshServer server, SshHostKey hostKey) = await StartAsync(new SshAlgorithms { UserKeys = [allowed, "ssh-ed25519"] }, _ => handlerCalls++);
+        await using (server)
+        using (hostKey)
+        {
+            if (logsIn)
+            {
+                await using SshClient client = await SshClient.ConnectAsync(Options(server, hostKey, key), Ct);
+                Assert.True(handlerCalls > 0);
+            }
+            else
+            {
+                // The client is free to sign with this curve (its own list names it), so the refusal is the server's.
+                await Assert.ThrowsAsync<SshAuthenticationException>(() => SshClient.ConnectAsync(Options(server, hostKey, key, new SshAlgorithms { UserKeys = [keyType] }), Ct));
+                Assert.Equal(0, handlerCalls);
+            }
+        }
+    }
+
     [Fact]
     public async Task A4_an_ed25519_user_key_still_logs_in_when_UserKeys_is_narrowed()
     {

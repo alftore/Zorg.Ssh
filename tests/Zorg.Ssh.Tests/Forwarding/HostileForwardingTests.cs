@@ -64,6 +64,46 @@ public sealed class HostileForwardingTests
         }
     }
 
+    // Apache MINA CVE-2021-30129: unbounded buffers in port forwarding. A server that sends a forwarded channel far more than its
+    // window, to a target that never reads, ends the connection with a protocol error. The relay holds at most one window.
+    [Fact]
+    public async Task Mina_CVE_2021_30129_a_flood_past_the_window_on_a_forwarded_channel_ends_the_connection()
+    {
+        await using TcpService target = new(static (_, ct) => Task.Delay(Timeout.Infinite, ct), receiveBufferSize: 4096);
+        (ScriptedServer server, SshClient client) = await ConnectAsync(Ct);
+        await using (server)
+        await using (client)
+        {
+            await using SshRemoteForward forward = await GrantAsync(server, client, 8000, target.Port);
+            await server.SendAsync(ForwardedOpen(1, Address, 8000), Ct);
+            (uint? refusal, uint channel) = await server.OpenReplyAsync(Ct);
+            Assert.Null(refusal);
+
+            // Several windows' worth: a whole window is 2 MiB, so this can't fit in what the socket and the pipe take.
+            byte[] chunk = new byte[32 * 1024];
+            try
+            {
+                for (int i = 0; i < 300; i++)
+                {
+                    await server.SendAsync(
+                        Message(w =>
+                        {
+                            w.Byte(MessageNumber.ChannelData);
+                            w.UInt32(channel);
+                            w.Bytes(chunk);
+                        }),
+                        Ct);
+                }
+            }
+            catch (SshException)
+            {
+                // The connection ended under the sends, which is the point.
+            }
+
+            Assert.IsType<SshProtocolException>(await client.WaitForCloseAsync(Ct).WaitAsync(Limit, Ct));
+        }
+    }
+
     [Fact]
     public async Task A_forwarded_channel_for_another_port_than_the_one_asked_for_is_refused()
     {

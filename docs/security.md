@@ -11,7 +11,7 @@ These are the rules the library is built around. Each has tests, and a change th
 3. **A hostile peer can't cause unbounded memory, a hang or an unhandled exception type.** Buffers, queues and counts have limits, and waits can be cancelled. Failures a peer causes reach you as `SshException` or a derived type.
 4. **Secrets never reach logs or exception messages, and are zeroed after use.** See the limits on this under [Secrets](#secrets).
 
-Published SSH advisories in other implementations each have a named regression test. They include Terrapin, Erlang CVE-2025-32433 and CVE-2025-46712, AsyncSSH CVE-2023-46445 and CVE-2023-46446, Go CVE-2025-22869 and CVE-2026-39828, and libssh CVE-2025-8277 and CVE-2026-59848.
+Published SSH advisories in other implementations each have a named regression test, or a reason here why they can't apply. See [Published advisories](#published-advisories).
 
 ### Secrets
 
@@ -123,6 +123,43 @@ Why each is acceptable as an opt-in, and why it stays opt-in:
 Trimming and Native AOT leave the finite-field code out of an application that never uses `LegacyUnsafe` (checked with a trimmed publish: none of the finite-field types are left). The SHA-1 MAC and signature paths are a few lines in shared classes and stay.
 
 BouncyCastle provides Ed25519, X25519, ML-KEM, sntrup761 and Poly1305 (for ChaCha20-Poly1305) where the .NET libraries don't. The ChaCha20 cipher itself is Zorg.Ssh's own code, which has no secret-dependent branch or index, and whose key words are zeroed on dispose. Its working state lives in registers and stack slots, which managed code can't zero. This project hasn't reviewed BouncyCastle's code, and our own code has had internal reviews only. See [dependencies.md](dependencies.md).
+
+## Published advisories
+
+Advisories in other SSH and SFTP implementations, and where this library stands on each. A test named for the advisory is in `tests/Zorg.Ssh.Tests`; search for the advisory id. It means a regression test exists, not that the code has been audited.
+
+| Advisory | What went wrong | Test, or why it can't apply |
+|---|---|---|
+| Terrapin, CVE-2023-48795 | Packets injected before `KEXINIT` shift the sequence numbers | `HostilePeerTests.Strict_KEX_rejects_a_KEXINIT_that_is_not_the_first_packet` |
+| Erlang CVE-2025-46712 | Optional messages passed in a strict initial exchange | `HostilePeerTests.Strict_KEX_rejects_optional_messages_after_KEXINIT` |
+| libssh CVE-2025-8277, CVE-2023-1667 | A wrong first-packet guess in a rekey leaked memory or crashed | `HostilePeerTests.A_wrong_guess_drops_one_packet_and_a_second_stray_packet_is_refused`, `TransportFindingsTests.T3_CVE_2023_1667_*` |
+| Go CVE-2025-22869 | A stalled key exchange made the writer buffer without limit | `TransportTests.Writers_wait_while_a_rekey_is_stalled_and_nothing_grows` |
+| Go CVE-2026-46597 | A padding length wrapped in a byte | `PacketCipherTests.Regression_Go_CVE_2026_46597_*` |
+| SSH.NET GHSA-h5q6-2gr6-3g3m | An endless banner line grew memory | `PacketReaderTests.An_endless_line_without_a_line_feed_is_capped` |
+| SSH.NET GHSA-vhpg-4g9v-rppq | A channel packet size of 0 made the send loop spin | `ConnectionEndTests.SshNet_GHSA_vhpg_4g9v_rppq_*` |
+| libssh2 CVE-2026-55199 | `EXT_INFO` parser looped on a huge count | `TransportFindingsTests.CVE_2026_55199_*` |
+| OpenSSH CVE-2025-26466 | `PING` flood before login | `TransportFindingsTests.CVE_2025_26466_*` |
+| Erlang CVE-2025-32433 | Channel requests acted on before login | `MessagePolicyTests.Connection_messages_before_auth_end_the_connection`, `PublicServerTests.A_connection_message_before_login_closes_the_connection_and_runs_nothing` |
+| AsyncSSH CVE-2023-46445, CVE-2023-46446 | Auth and `EXT_INFO` messages out of order | `MessagePolicyTests.Auth_messages_only_flow_the_right_way_in_the_auth_phase`, `AuthTests.USERAUTH_SUCCESS_before_the_auth_phase_ends_the_connection` |
+| Go CVE-2026-39828 | Permissions lost after a partial login | `AuthTests.Every_key_proven_in_a_partial_login_stays_on_the_record` |
+| Go CVE-2024-45337 | The last key queried was trusted, not the key proven | `AuthTests.Go_CVE_2024_45337_*` |
+| libssh CVE-2023-2283 | Signature check failed open on an error | `SshKeyTests.Libssh_CVE_2023_2283_*`, `AuthTests.Libssh_CVE_2023_2283_*`, `HostilePeerTests.Libssh_CVE_2023_2283_*` |
+| libssh CVE-2026-59849 | The client's credential loop never ended | `AuthTests.Libssh_CVE_2026_59849_*` |
+| OpenSSH CVE-2026-35414 | A comma in a certificate principal matched a part of it | `HostileCertificateTests.OpenSSH_CVE_2026_35414_*` |
+| OpenSSH CVE-2026-35387 | One ECDSA algorithm in a list admitted the other curves | `UserKeyAlgorithmTests.OpenSSH_CVE_2026_35387_*` |
+| Go CVE-2026-39830 | Unsolicited global replies blocked the read loop | `HostileForwardingTests.A_flood_of_global_replies_is_dropped_and_cannot_answer_a_later_request` |
+| Apache MINA CVE-2021-30129 | Unbounded buffers in SFTP and port forwarding | `HostileForwardingTests.Mina_CVE_2021_30129_*`, `SftpHostileServerTests.Mina_CVE_2021_30129_*`, `ConnectionEndTests.Data_past_the_window_disconnects_with_protocol_error` |
+| libssh CVE-2026-59850 | Data delivered on a closed channel | `ConnectionEndTests.Libssh_CVE_2026_59850_*` |
+| libssh CVE-2026-59848 | SFTP replies with unknown ids were kept | `SftpHostileServerTests.Libssh_CVE_2026_59848_*` |
+| SSH.NET GHSA-q939-rpr3-3284, JSch CVE-2016-5725, OpenSSH CVE-2026-59995 | A recursive download wrote outside the destination from hostile names | `SftpNamesTests.SshNet_2026_*`, which cover SFTP downloads |
+| Apache MINA CVE-2023-35887 | A rooted file system showed whether paths outside the root exist | `SftpServerPathTests.Mina_CVE_2023_35887_*` |
+| Erlang CVE-2026-23942 | Root checked as a string prefix, so `user1` admitted `user10` | `SftpServerPathTests.Erlang_CVE_2026_23942_*` |
+| Erlang CVE-2026-32147 | A handle kept the client's path, so it could act outside the root | `SftpServerPathTests.Erlang_CVE_2026_32147_*` |
+| Go CVE-2026-46595 | A certificate `source-address` was not enforced | Can't apply: the server doesn't accept user certificates (`ServerCertificateTests`). A certificate is a failed attempt and the handler never sees it |
+| PuTTY CVE-2024-31497 | Biased ECDSA nonces leaked P-521 keys | Can't apply: ECDSA signing is the platform's `ECDsa.SignData`, with a fresh random nonce each time. The library has no nonce code of its own |
+| OpenSSH compression advisories | Compression side channel and oversized output | Can't apply: only `none` compression is offered or accepted |
+| SSH.NET GHSA-mggc-4xg6-vcxf | An SCP path went into a shell command | Can't apply: there is no SCP |
+| libssh CVE-2025-5318, CVE-2025-5449, CVE-2026-15370, CVE-2026-0968, the 2026 `sftp-extensions` advisory; libssh2 CVE-2019-3858, CVE-2019-3860 | C memory errors in SFTP: out-of-bounds reads, length overflow, a stack overflow on a long name, a null dereference | Can't apply as memory errors. In C# the same input could only cause the wrong exception type, which the fuzz targets `SftpParser response readers` and `SftpServerSession.DispatchAsync` check. The client reads the long name and skips it, and `SftpHostileServerTests.Too_many_extensions_are_refused` and `SftpServerProtocolTests.A_handle_of_the_wrong_length_is_refused` cover the extension and handle cases |
 
 ## Out of scope
 
