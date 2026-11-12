@@ -9,6 +9,7 @@ Zorg.Ssh is an async SSH client and server library for .NET 10. It has had inter
 - [Troubleshooting](troubleshooting.md): each exception, and what to do about it.
 - [Benchmarks](benchmarks.md): measured results against SSH.NET and Tmds.Ssh, and their limits.
 - [Dependencies](dependencies.md): every third-party package, and why it's there.
+- [.NET versions](dotnet-versions.md): what each .NET release means for the library, and what to check at the next one.
 
 ## Known limits
 
