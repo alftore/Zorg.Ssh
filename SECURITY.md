@@ -20,7 +20,7 @@ Expect a first answer within 7 days. Confirmed problems are fixed in a new relea
 
 From 0.1.0, releases go through `.github/workflows/release.yml`:
 
-- Nobody pushes to `main` directly, administrators included. Every change arrives through a pull request with signed commits and passing checks on Windows, Linux, Native AOT and the interop suite.
+- Nobody pushes to `main` directly, administrators included. Every change arrives through a pull request with signed commits and passing checks on Windows, Linux, macOS, the .NET 11 runtime, Native AOT and the interop suite.
 - A release runs only from a `v*` tag on a commit that's on `main`, and it waits for approval in the `nuget` environment.
 - Packages are published with NuGet trusted publishing. There's no long-lived API key: each release gets a key that lasts one hour.
 - The job that publishes doesn't run repository code. The job that builds has no access to publishing credentials.
@@ -30,9 +30,10 @@ From 0.1.0, releases go through `.github/workflows/release.yml`:
 
 ## Verifying a package
 
-Each release from the workflow has a build provenance attestation for the packages it built. To check one, download the `packages` artifact from the release's workflow run and run:
+Each release from the workflow has a build provenance attestation for the packages it built. The same files are attached to the GitHub Release. To check one:
 
 ```
+gh release download v<version> --repo alftore/Zorg.Ssh --pattern '*.nupkg'
 gh attestation verify Zorg.Ssh.<version>.nupkg --repo alftore/Zorg.Ssh
 ```
 

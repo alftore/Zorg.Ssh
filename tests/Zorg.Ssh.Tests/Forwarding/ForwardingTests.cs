@@ -488,7 +488,10 @@ public sealed class ForwardingTests : IDisposable
         await using TcpService echo = TcpService.Echo();
         await using SshServer server = await StartOpenServerAsync(this);
         SshClient client = await SshClient.ConnectAsync(ClientOptions(server), Ct);
-        SshLocalForward forward = await client.ForwardLocalPortAsync("127.0.0.1", echo.Port, Ct);
+
+        // A port below every system's ephemeral range: macOS gave a freed ephemeral port to another test's listener at once,
+        // and the late connect below reached that. Nothing that binds port 0 gets one of these.
+        SshLocalForward forward = await client.ForwardLocalPortAsync("127.0.0.1", echo.Port, new IPEndPoint(IPAddress.Loopback, FreePortBelowEphemeralRange()), Ct);
         using TcpClient connection = await ConnectAsync(forward);
         await AssertEchoesAsync(connection.GetStream());
 
@@ -498,6 +501,26 @@ public sealed class ForwardingTests : IDisposable
         using TcpClient late = new();
         await Assert.ThrowsAnyAsync<SocketException>(() => late.ConnectAsync(forward.LocalEndPoint, Ct).AsTask());
         await Assert.ThrowsAsync<SshConnectionException>(() => client.ForwardLocalPortAsync("127.0.0.1", echo.Port, Ct));
+    }
+
+    /// <summary>A free loopback port from 20000 to 29999, which no system hands out for port 0.</summary>
+    private static int FreePortBelowEphemeralRange()
+    {
+        for (int port = 20000 + RandomNumberGenerator.GetInt32(5000); port < 30000; port++)
+        {
+            try
+            {
+                using Socket probe = new(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+                probe.Bind(new IPEndPoint(IPAddress.Loopback, port));
+                return port;
+            }
+            catch (SocketException)
+            {
+                // In use; try the next.
+            }
+        }
+
+        throw new InvalidOperationException("No free port from 20000 to 29999.");
     }
 
     [Fact]
