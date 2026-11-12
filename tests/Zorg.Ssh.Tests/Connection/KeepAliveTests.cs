@@ -585,8 +585,15 @@ public class KeepAliveTests
         {
             await rig.IntervalsAsync(1);
             int done = rig.Connection.Transport.CompletedKeyExchanges;
+            int peerDone = rig.Peer.CompletedKeyExchanges;
             rig.Connection.Transport.RequestRekey();
-            await rig.UntilAsync(() => rig.Connection.Transport.CompletedKeyExchanges == done + 1);
+
+            // The connection counts the exchange as done when the peer's NEWKEYS arrives, while its own may still be
+            // going out. A tick then sees a key exchange running and rightly holds the probe back, so the clock may
+            // only move once both sides are through.
+            await rig.UntilAsync(() =>
+                rig.Connection.Transport.CompletedKeyExchanges == done + 1 && rig.Peer.CompletedKeyExchanges == peerDone + 1 &&
+                !rig.Connection.Transport.KeyExchangeRunning && !rig.Peer.KeyExchangeRunning);
         }
 
         await rig.IntervalsAsync(3);

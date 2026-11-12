@@ -145,15 +145,23 @@ public class ReviewRegressionTests
             Task c = DrainAsync(client, null, stop.Token);
             Task s = DrainAsync(server, _ => Interlocked.Increment(ref received), stop.Token);
 
+            // A request while an exchange runs does nothing, and a fast machine can queue a whole batch during the first
+            // one. So batches go on until two exchanges have completed after the first, which the assert needs.
             const int Rounds = 300;
             byte[] data = [MessageNumber.ChannelData, 1];
-            for (int i = 0; i < Rounds; i++)
+            int sent = 0;
+            for (int batch = 0; batch < 20 && (batch == 0 || client.CompletedKeyExchanges <= 2); batch++)
             {
-                client.RequestRekey();
-                await client.SendAsync(data, Ct);
+                for (int i = 0; i < Rounds; i++)
+                {
+                    client.RequestRekey();
+                    await client.SendAsync(data, Ct);
+                    sent++;
+                }
+
+                await WaitForAsync(() => Volatile.Read(ref received) == sent);
             }
 
-            await WaitForAsync(() => Volatile.Read(ref received) == Rounds);
             await stop.CancelAsync();
             await Task.WhenAll(c, s);
             Assert.True(client.CompletedKeyExchanges > 2);
