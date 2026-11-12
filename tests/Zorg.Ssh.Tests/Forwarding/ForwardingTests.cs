@@ -271,11 +271,18 @@ public sealed class ForwardingTests : IDisposable
 #pragma warning disable CA2025 // Awaited below, before the source is disposed.
         Task rekeys = RekeyUntilAsync(client, done.Token);
 #pragma warning restore CA2025
-        await Task.WhenAll(Enumerable.Range(0, 2 + round).Select(async _ =>
+
+        // A fast machine can move the data in less time than two rekeys take (a run took 28 ms, and Task.Delay(5) is
+        // about 15 ms on Windows), so the traffic goes on until at least two rekeys have overlapped it.
+        for (int pass = 0; pass < 20 && (pass == 0 || client.CompletedKeyExchanges < 3); pass++)
         {
-            using TcpClient connection = await ConnectAsync(forward);
-            await AssertEchoesAsync(connection.GetStream(), 6_000_000);
-        }));
+            await Task.WhenAll(Enumerable.Range(0, 2 + round).Select(async _ =>
+            {
+                using TcpClient connection = await ConnectAsync(forward);
+                await AssertEchoesAsync(connection.GetStream(), 6_000_000);
+            }));
+        }
+
         await done.CancelAsync();
         await rekeys;
 
