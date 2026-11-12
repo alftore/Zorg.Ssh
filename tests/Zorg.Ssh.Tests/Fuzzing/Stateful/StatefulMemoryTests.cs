@@ -39,7 +39,7 @@ public sealed class StatefulMemoryTests
     {
         List<long> heap = [];
         List<string> broken = [];
-        using ServerRig rig = new(preAuth: false);
+        using ServerRig rig = new(preAuth: false) { PatientAwaits = true };
         rig.Probe = () =>
         {
             if (ServerRig.CheckBounds(rig.Connection, 10) is { } why)
@@ -88,7 +88,7 @@ public sealed class StatefulMemoryTests
     {
         List<long> heap = [];
         List<string> broken = [];
-        using ClientRig rig = new();
+        using ClientRig rig = new() { PatientAwaits = true };
         rig.Probe = client =>
         {
             if (client is not null && ServerRig.CheckBounds(client.Connection, 256) is { } why)
@@ -108,6 +108,10 @@ public sealed class StatefulMemoryTests
             FuzzOp.Send(Wire.AuthFailure(false, "password")),
             FuzzOp.Await(MessageNumber.UserAuthRequest),
             FuzzOp.Send(Wire.AuthSuccess()),
+
+            // The app op gives the client's connect only a moment to finish, and on a loaded machine it can take longer. If it
+            // hadn't, no channel would be opened and the rest would answer a channel that was never asked for. A probe waits for it.
+            FuzzOp.Of(OpKind.Probe),
             FuzzOp.App(0),
             FuzzOp.Await(MessageNumber.ChannelOpen),
             FuzzOp.Send(Wire.ChannelOpenConfirmation(0, 100)),

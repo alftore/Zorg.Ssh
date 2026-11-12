@@ -316,6 +316,12 @@ internal sealed class SequenceExecutor
 
     public int AwaitMisses { get; private set; }
 
+    /// <summary>Gets how long one await op waits for its message before the sequence goes on without it.</summary>
+    public TimeSpan AwaitLimit { get; init; } = StatefulLimits.AwaitLimit;
+
+    /// <summary>Gets how long all the await ops together may wait.</summary>
+    public TimeSpan AwaitBudget { get; init; } = StatefulLimits.AwaitBudget;
+
     /// <summary>Gets or sets what starts a rekey from the SUT's side.</summary>
     public Func<Task>? SutRekey { get; set; }
 
@@ -722,14 +728,14 @@ internal sealed class SequenceExecutor
 
     private async Task AwaitMessageAsync(byte number)
     {
-        if (_awaitSpent >= StatefulLimits.AwaitBudget)
+        if (_awaitSpent >= AwaitBudget)
         {
             AwaitMisses++;
             return;
         }
 
         Stopwatch watch = Stopwatch.StartNew();
-        int found = await _peer.WaitForAsync(_awaitCursor, m => m.Number == number, StatefulLimits.AwaitLimit).ConfigureAwait(false);
+        int found = await _peer.WaitForAsync(_awaitCursor, m => m.Number == number, AwaitLimit).ConfigureAwait(false);
         _awaitSpent += watch.Elapsed;
         if (found >= 0)
         {
