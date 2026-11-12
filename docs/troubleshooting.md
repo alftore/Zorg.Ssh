@@ -229,6 +229,17 @@ During `DownloadDirectoryAsync`, a name from the server couldn't safely become a
 - **A write never finishes, and the connection stays up.** The peer answers keepalives but grants no window. That's a live peer, not a dead one, so keepalive leaves it alone. Pass the write a token.
 - **No time limit on a live peer.** Keepalive ends a connection to a peer that has gone. Apart from that and `ConnectTimeout`, nothing limits how long a command or transfer takes. Use a `CancellationToken`.
 
+## Known issues
+
+### Occasional 10 to 25 ms delays over loopback on Windows
+
+A client and server in the same process, or a very fast server on the same machine, sometimes see a short request and reply, such as `ExecuteAsync`, take 10 to 25 ms instead of about 0.2 ms. It happens on Windows only, when both ends of one loopback connection send within microseconds of each other: in `ExecuteAsync`, the client's end of stdin crosses the server's output, exit status and close. The delay is inside Windows' loopback TCP; .NET is idle while it lasts. The median isn't affected, only the average.
+
+- **How often:** about 5 in 1000 round trips on .NET 10. .NET 11's thread pool makes both ends send at the same moment more often, so 10 to 75 in 1000.
+- **Where it doesn't happen:** against OpenSSH or Dropbear in a container on the same machine, and on Linux. A connection over a real network and a native Windows OpenSSH on the same machine haven't been tried.
+- **Workarounds:** on .NET 11, setting `System.Threading.ThreadPool.UnfairSemaphoreSpinLimit` to 0 in your app's runtimeconfig brings it back to the .NET 10 rate, at about 50 µs more per round trip. For your own commands that don't read stdin, starting them with `StartProcessAsync` and keeping `StandardInput` open until the process exits avoids the crossing.
+- **Why the library doesn't work around it:** waiting a few milliseconds before sending the end of stdin removes the delays, but every command that reads stdin, such as `cat` or `sort`, would then wait that long on every platform.
+
 ## Logging
 
 Pass an `ILoggerFactory` as `LoggerFactory`. At `Debug` level the logs show the peer's identification, the negotiated algorithms and why a connection ended. They aren't meant to hold secrets. On the server, `A session handler failed` at `Error` level carries the exception your handler threw.
