@@ -1,6 +1,6 @@
 # Zorg.Ssh
 
-An async SSH client and server library for .NET 10, with SFTP, written in C# only.
+An async SSH client and server library for .NET 10, with SFTP, written in C# only. It also runs on .NET 11, where the same tests run on every change.
 
 Status: early, version 0.1. The public API can still change before 1.0. It has had internal reviews, fuzzing and interop tests against real OpenSSH and Dropbear, but no external security audit. The repository's `docs/security.md` lists what has and hasn't been checked.
 
@@ -23,4 +23,4 @@ await using FileStream local = File.OpenRead("report.pdf");
 await sftp.UploadFileAsync(local, "report.pdf", cancellationToken);
 ```
 
-No SCP, compression or agent forwarding. See the [repository](https://github.com/alftore/Zorg.Ssh) for documentation, the security notes, the changelog and benchmarks. Report vulnerabilities privately, as its `SECURITY.md` describes.
+No SCP, compression or agent forwarding. See the [repository](https://github.com/alftore/Zorg.Ssh) for documentation, the security notes, the changelog and benchmarks, and the [known issues](https://github.com/alftore/Zorg.Ssh/blob/main/docs/troubleshooting.md#known-issues). Report vulnerabilities privately, as its `SECURITY.md` describes.
