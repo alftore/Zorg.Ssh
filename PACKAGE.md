@@ -23,4 +23,4 @@ await using FileStream local = File.OpenRead("report.pdf");
 await sftp.UploadFileAsync(local, "report.pdf", cancellationToken);
 ```
 
-No SCP, compression or agent forwarding. See the [repository](https://github.com/alftore/Zorg.Ssh) for documentation, the security notes, the changelog and benchmarks, and the [known issues](https://github.com/alftore/Zorg.Ssh/blob/main/docs/troubleshooting.md#known-issues). Report vulnerabilities privately, as its `SECURITY.md` describes.
+No SCP, compression or agent forwarding. See the [repository](https://github.com/alftore/Zorg.Ssh) for documentation, the security notes, the changelog and benchmarks. Report vulnerabilities privately, as its `SECURITY.md` describes.
