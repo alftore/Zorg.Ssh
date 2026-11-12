@@ -221,10 +221,19 @@ public sealed class SftpServerPathTests : IDisposable
 
         Assert.Equal(PermissionDenied, (await client.RequestAsync(SftpMessage.OpenDir, Path("sibling"))).Status);
 
-        // A link to it can't be made either.
+        // A link that climbs to it can't be made either.
         Assert.NotEqual(Ok, (await client.RequestAsync(SftpMessage.SymLink, Path("../user10").Text("made"))).Status);
-        Assert.NotEqual(Ok, (await client.RequestAsync(SftpMessage.SymLink, Path(user10.Replace('\\', '/')).Text("made"))).Status);
         Assert.DoesNotContain("made", Directory.GetFileSystemEntries(user1).Select(System.IO.Path.GetFileName));
+
+        // An absolute target is re-rooted, like any absolute path: off Windows the link is made, and it leads to a path inside
+        // the root that isn't there. Windows refuses the drive letter.
+        uint absolute = (await client.RequestAsync(SftpMessage.SymLink, Path(user10.Replace('\\', '/')).Text("made-absolute"))).Status;
+        if (absolute == Ok)
+        {
+            Assert.False(OperatingSystem.IsWindows());
+            Assert.Equal(NoSuchFile, (await client.RequestAsync(SftpMessage.Stat, Path("made-absolute/secret.txt"))).Status);
+            Assert.Equal(NoSuchFile, (await client.OpenAsync("made-absolute/secret.txt", OpenRead)).Status);
+        }
 
         Assert.Equal(SftpServerSandbox.Secret, await File.ReadAllTextAsync(secretFile, TestContext.Current.CancellationToken));
         Assert.Equal(["secret.txt"], Directory.GetFileSystemEntries(user10).Select(System.IO.Path.GetFileName));
@@ -289,10 +298,11 @@ public sealed class SftpServerPathTests : IDisposable
         // are both just missing.
         await AssertSameAnswersAsync(client, "../secret.txt", "../no-such-file.txt");
         await AssertSameAnswersAsync(client, "../outside/secret.txt", "../outside/no-such-file.txt");
-        await AssertSameAnswersAsync(client, System.IO.Path.Combine(_sandbox.Outside, "secret.txt").Replace('\\', '/'), System.IO.Path.Combine(_sandbox.Outside, "no-such-file.txt").Replace('\\', '/'));
-
-        Assert.Equal(before, _sandbox.SnapshotOutside());
         client.AssertNothingLeaked(_sandbox.Base);
+
+        // Last, because this time the client sends the real path itself, and REALPATH answers with it, re-rooted.
+        await AssertSameAnswersAsync(client, System.IO.Path.Combine(_sandbox.Outside, "secret.txt").Replace('\\', '/'), System.IO.Path.Combine(_sandbox.Outside, "no-such-file.txt").Replace('\\', '/'));
+        Assert.Equal(before, _sandbox.SnapshotOutside());
     }
 
     /// <summary>Reads a file the server still has open for writing.</summary>
