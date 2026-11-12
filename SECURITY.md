@@ -20,7 +20,7 @@ Expect a first answer within 7 days. Confirmed problems are fixed in a new relea
 
 From 0.1.0, releases go through `.github/workflows/release.yml`:
 
-- Nobody pushes to `main` directly, administrators included. Every change arrives through a pull request with signed commits and passing checks on Windows, Linux, Native AOT and the interop suite.
+- Nobody pushes to `main` directly, administrators included. Every change arrives through a pull request with signed commits and passing checks on Windows, Linux, macOS, the .NET 11 runtime, Native AOT and the interop suite.
 - A release runs only from a `v*` tag on a commit that's on `main`, and it waits for approval in the `nuget` environment.
 - Packages are published with NuGet trusted publishing. There's no long-lived API key: each release gets a key that lasts one hour.
 - The job that publishes doesn't run repository code. The job that builds has no access to publishing credentials.

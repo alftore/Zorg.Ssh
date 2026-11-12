@@ -153,7 +153,7 @@ Signed, with no co-author or generator lines. The README covers how the library 
 ## Releases
 
 1. Through a pull request: set `VersionPrefix` and `VersionSuffix` in `Directory.Build.props` to the version the tag will have (the workflow builds with the tag's version), move the lines of `PublicAPI.Unshipped.txt` into `PublicAPI.Shipped.txt`, and turn the Unreleased section of `CHANGELOG.md` into the new version with its date.
-2. Run CI by hand once (Actions > CI > Run workflow), so the macOS job runs on the same commit.
+2. Check that CI passed on that commit of `main`, on all three operating systems.
 3. Sign and push a tag `vMAJOR.MINOR.PATCH`, with an optional `-prerelease`, on that commit of `main`.
 4. `.github/workflows/release.yml` builds, runs the unit tests and packs. Check the `packages` artifact, then approve the `nuget` environment. The publish job attests the packages and pushes them with NuGet trusted publishing.
 

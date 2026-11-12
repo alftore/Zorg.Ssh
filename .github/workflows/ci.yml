@@ -21,11 +21,13 @@ jobs:
   build:
     name: Build and test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-latest]
+        # macos-latest is the only place the macOS code (the lstat and stat layouts in LocalFile) runs. It uses macOS's
+        # own ssh and ssh-keygen.
+        os: [windows-latest, ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@v7.0.1
         with:
@@ -78,30 +80,6 @@ jobs:
         run: |
           dotnet --list-runtimes
           tests/Zorg.Ssh.Tests/bin/Release/net10.0/Zorg.Ssh.Tests
-
-  # Manual only: Actions > CI > Run workflow. macOS minutes cost several times Linux ones on a private repository.
-  # Once the repository is public, standard runners are free: consider moving macos-latest into the matrix above and
-  # deleting this job. It's the only place the macOS code (lstat and stat layouts in LocalFile) runs.
-  # The tests use macOS's own ssh and ssh-keygen. CI=true is set by GitHub, so a missing tool fails, as on the other runners.
-  macos:
-    name: Build and test (macos-latest)
-    if: github.event_name == 'workflow_dispatch'
-    runs-on: macos-latest
-    timeout-minutes: 25
-    steps:
-      - uses: actions/checkout@v7.0.1
-        with:
-          persist-credentials: false
-
-      - uses: actions/setup-dotnet@v6.0.0
-        with:
-          global-json-file: global.json
-
-      - name: Build
-        run: dotnet build Zorg.Ssh.slnx -c Release
-
-      - name: Test
-        run: dotnet test --project tests/Zorg.Ssh.Tests -c Release --no-build
 
   interop:
     name: Interop tests (ubuntu-latest, Docker)
