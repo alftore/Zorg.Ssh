@@ -179,8 +179,13 @@ public class AuthTests
         });
 
     /// <summary>A publickey request with a real signature over this session.</summary>
-    private static byte[] SignedKeyRequest(SshTransport client, SshPrivateKey key)
+    private static byte[] SignedKeyRequest(SshTransport client, SshPrivateKey key) => SignedKeyRequest(client, key, key);
+
+    /// <summary>A publickey request that names <paramref name="named"/> and carries a signature made by <paramref name="signer"/>.</summary>
+    private static byte[] SignedKeyRequest(SshTransport client, SshPrivateKey named, SshPrivateKey signer)
     {
+        SshPrivateKey key = named;
+        string algorithm = named.SignatureAlgorithms[0];
         byte[] blob = key.PublicKey.Blob.ToArray();
         SshWriter signed = new(512);
         byte[] data;
@@ -192,7 +197,7 @@ public class AuthTests
             signed.WriteUtf8String("ssh-connection");
             signed.WriteUtf8String("publickey");
             signed.WriteBoolean(true);
-            signed.WriteUtf8String("ssh-ed25519");
+            signed.WriteUtf8String(algorithm);
             signed.WriteBinary(blob);
             data = signed.ToArray();
         }
@@ -201,15 +206,32 @@ public class AuthTests
             signed.Dispose();
         }
 
-        byte[] signature = key.Sign("ssh-ed25519", data);
+        byte[] signature = signer.Sign(algorithm, data);
         return Request("alice", "ssh-connection", "publickey", w =>
         {
             w.Bool(true);
-            w.String("ssh-ed25519");
+            w.String(algorithm);
             w.Bytes(blob);
             w.Bytes(signature);
         });
     }
+
+    /// <summary>A publickey request with a given signature blob, whatever it holds.</summary>
+    private static byte[] KeyRequestWithSignature(SshPrivateKey key, byte[] signature) => Request("alice", "ssh-connection", "publickey", w =>
+    {
+        w.Bool(true);
+        w.String(key.SignatureAlgorithms[0]);
+        w.Bytes(key.PublicKey.Blob.ToArray());
+        w.Bytes(signature);
+    });
+
+    /// <summary>A publickey request that only asks whether the key would be accepted: no signature.</summary>
+    private static byte[] KeyQuery(SshPrivateKey key) => Request("alice", "ssh-connection", "publickey", w =>
+    {
+        w.Bool(false);
+        w.String(key.SignatureAlgorithms[0]);
+        w.Bytes(key.PublicKey.Blob.ToArray());
+    });
 
     private static byte[] PasswordRequest() => Request("alice", "ssh-connection", "password", w =>
     {
@@ -262,6 +284,152 @@ public class AuthTests
             Assert.True(user.ProvenKeys[1].Blob.Span.SequenceEqual(second.PublicKey.Blob.Span));
             Assert.True(user.Key!.Blob.Span.SequenceEqual(second.PublicKey.Blob.Span));
         });
+
+    // Go x/crypto/ssh CVE-2024-45337: applications trusted the last key the callback saw. A client can query key A, query key B,
+    // then prove A, so "the last key seen" is not "the key proven". What the server records is the key whose signature verified.
+    [Fact]
+    public Task Go_CVE_2024_45337_the_key_on_the_record_is_the_one_proven_not_the_last_one_queried() => WithRawClient(
+        new ServerAuthOptions { PublicKey = (_, _, _) => ValueTask.FromResult(AuthDecision.Accept) },
+        async (client, auth) =>
+        {
+            using SshPrivateKey a = SshPrivateKey.GenerateEd25519();
+            using SshPrivateKey b = SshPrivateKey.GenerateEd25519();
+
+            await client.SendAsync(KeyQuery(a), Ct);
+            Assert.Equal(60, (await client.ReceiveAsync(Ct)).Span[0]);
+            await client.SendAsync(KeyQuery(b), Ct);
+            Assert.Equal(60, (await client.ReceiveAsync(Ct)).Span[0]);
+
+            // A request that names B but carries A's signature proves neither key.
+            await client.SendAsync(SignedKeyRequest(client, b, a), Ct);
+            Assert.False(await ExpectFailureAsync(client));
+            Assert.False(auth.IsCompleted);
+
+            await client.SendAsync(SignedKeyRequest(client, a), Ct);
+            AuthenticatedUser user = await auth.WaitAsync(TimeSpan.FromSeconds(20), Ct);
+
+            Assert.True(user.Key!.Blob.Span.SequenceEqual(a.PublicKey.Blob.Span));
+            Assert.Single(user.ProvenKeys);
+            Assert.True(user.ProvenKeys[0].Blob.Span.SequenceEqual(a.PublicKey.Blob.Span));
+        });
+
+    public static TheoryData<string, int> HostileSignatures()
+    {
+        TheoryData<string, int> data = [];
+        foreach (string keyType in new[] { "ssh-ed25519", "ecdsa-sha2-nistp256" })
+        {
+            for (int kind = 0; kind < 7; kind++)
+            {
+                data.Add(keyType, kind);
+            }
+        }
+
+        return data;
+    }
+
+    // libssh CVE-2023-2283: signature verification returned success when a step in it failed. Here every way a signature can be
+    // wrong or malformed, with a handler that accepts every key, is a failed attempt: never a login, never an exception that
+    // isn't an SshException.
+    [Theory]
+    [MemberData(nameof(HostileSignatures))]
+    public Task Libssh_CVE_2023_2283_a_signature_that_fails_to_verify_in_any_way_is_a_refusal(string keyType, int kind) => WithRawClient(
+        new ServerAuthOptions { PublicKey = (_, _, _) => ValueTask.FromResult(AuthDecision.Accept) },
+        async (client, auth) =>
+        {
+            using SshPrivateKey key = keyType == "ssh-ed25519" ? SshPrivateKey.GenerateEd25519() : SshPrivateKey.GenerateEcdsa(keyType);
+            using SshPrivateKey other = SshPrivateKey.GenerateEd25519();
+            byte[] request = SignedKeyRequest(client, key);
+            byte[] good = SignatureOf(request);
+
+            byte[] signature = kind switch
+            {
+                0 => [],
+                1 => [0],
+                2 => [.. Enumerable.Repeat((byte)0xAA, 64)],
+                3 => [.. good[..^1], (byte)(good[^1] ^ 1)],
+                4 => good[..^1],
+                5 => [.. good, 0],
+                _ => other.Sign("ssh-ed25519", "x"u8),
+            };
+            await client.SendAsync(KeyRequestWithSignature(key, signature), Ct);
+
+            ReadOnlyMemory<byte> reply = await client.ReceiveAsync(Ct);
+            Assert.Equal(MessageNumber.UserAuthFailure, reply.Span[0]);
+            Assert.False(auth.IsCompleted);
+
+            // And the real signature still works on the same connection, so the refusal was about the signature.
+            await client.SendAsync(request, Ct);
+            AuthenticatedUser user = await auth.WaitAsync(TimeSpan.FromSeconds(20), Ct);
+            Assert.True(user.Key!.Blob.Span.SequenceEqual(key.PublicKey.Blob.Span));
+        });
+
+    /// <summary>Takes the signature blob out of a signed publickey request.</summary>
+    private static byte[] SignatureOf(byte[] request)
+    {
+        SshReader reader = new(request);
+        reader.ReadByte();
+        reader.ReadUtf8String();
+        reader.ReadUtf8String();
+        reader.ReadUtf8String();
+        reader.ReadBoolean();
+        reader.ReadUtf8String();
+        reader.ReadBinary();
+        return reader.ReadBinary().ToArray();
+    }
+
+    // libssh CVE-2026-59849: the client's credential iterator restarted at the end of the list, so a server that never stopped
+    // saying "failure" kept it looping for ever. Here each credential is tried a bounded number of times and the login ends with
+    // SshAuthenticationException, with partial success claimed or not.
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Libssh_CVE_2026_59849_a_server_that_always_says_failure_cant_make_the_client_loop(bool partialSuccess)
+    {
+        (SshTransport client, SshTransport server) = await ConnectAsync(ClientOptions(), ServerOptions(), Ct);
+        await using (client)
+        await using (server)
+        {
+            using SshPrivateKey key = SshPrivateKey.GenerateEd25519();
+            SshCredential[] credentials =
+            [
+                SshCredential.FromPassword("one"),
+                SshCredential.FromPassword("two"),
+                new PrivateKeyCredential(() => key, ownsKey: false),
+                SshCredential.FromKeyboardInteractive((_, _) => throw new InvalidOperationException("the server never asks")),
+            ];
+            Task clientAuth = new ClientAuthenticator(client, "alice", null).AuthenticateAsync(credentials, Ct);
+
+            server.SetPhase(TransportPhase.AwaitService);
+            await server.ReceiveAsync(Ct);
+            SshRequestWriter accept = new();
+            accept.Byte(MessageNumber.ServiceAccept);
+            accept.String("ssh-userauth");
+            await server.SendAsync(accept.ToArray(), Ct);
+            server.SetPhase(TransportPhase.Auth);
+
+            int requests = 0;
+            while (requests <= 100)
+            {
+                Task<ReadOnlyMemory<byte>> next = server.ReceiveAsync(Ct).AsTask();
+                if (await Task.WhenAny(next, clientAuth) == clientAuth)
+                {
+                    break;
+                }
+
+                requests++;
+                SshRequestWriter failure = new();
+                failure.Byte(MessageNumber.UserAuthFailure);
+                failure.Bytes("password,publickey,keyboard-interactive"u8.ToArray());
+                failure.Bool(partialSuccess);
+                await server.SendAsync(failure.ToArray(), Ct);
+            }
+
+            await Assert.ThrowsAsync<SshAuthenticationException>(() => clientAuth.WaitAsync(TimeSpan.FromSeconds(20), Ct));
+
+            // One "none" probe, then at most a query and a signed request for each credential.
+            Assert.InRange(requests, 1, 1 + (2 * credentials.Length));
+        }
+    }
 
     [Fact]
     public Task The_same_key_offered_twice_is_recorded_once() => WithRawClient(

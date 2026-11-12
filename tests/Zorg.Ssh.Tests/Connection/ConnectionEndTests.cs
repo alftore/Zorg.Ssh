@@ -4,6 +4,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Xunit;
 using Zorg.Ssh.Connection;
+using Zorg.Ssh.Protocol;
 using Zorg.Ssh.Tests.Transport;
 using Zorg.Ssh.Transport;
 
@@ -93,6 +94,88 @@ public sealed class ConnectionEndTests
         }
 
         await AssertProtocolErrorAsync(rig);
+    }
+
+    // SSH.NET GHSA-vhpg-4g9v-rppq: a channel whose peer gave a maximum packet size of 0 made the send loop slice zero bytes for ever.
+    // Here the confirmation is a protocol error, and nothing is left waiting.
+    [Fact]
+    public async Task SshNet_GHSA_vhpg_4g9v_rppq_a_channel_confirmed_with_maximum_packet_size_zero_ends_the_connection()
+    {
+        await using ChannelRig rig = await ChannelRig.StartAsync(Ct);
+
+        await Assert.ThrowsAnyAsync<SshException>(() => rig.OpenAsync(1, maxPacket: 0));
+
+        await AssertProtocolErrorAsync(rig);
+    }
+
+    // libssh CVE-2026-59850: data callbacks ran on a channel that was already closed. Here nothing reaches the reader after the
+    // peer's CLOSE: data, extended data and EOF each end the connection with a protocol error, and the reader sees only the end.
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(2)]
+    public async Task Libssh_CVE_2026_59850_data_after_the_peers_close_never_reaches_the_reader(int what)
+    {
+        await using ChannelRig rig = await ChannelRig.StartAsync(Ct);
+        SshChannel channel = await rig.OpenAsync(1);
+        await rig.SendDataAsync(channel.LocalId, "before"u8.ToArray());
+        byte[] buffer = new byte[16];
+        Assert.Equal(6, await channel.Output.ReadAsync(buffer, Ct).AsTask().WaitAsync(Limit, Ct));
+
+        await rig.SendAsync(MessageNumber.ChannelClose, channel.LocalId);
+        await channel.Closed.WaitAsync(Limit, Ct);
+        try
+        {
+            switch (what)
+            {
+                case 0:
+                    await rig.SendDataAsync(channel.LocalId, "late"u8.ToArray());
+                    break;
+                case 1:
+                    await rig.SendDataAsync(channel.LocalId, "late"u8.ToArray(), extended: true);
+                    break;
+                default:
+                    await rig.SendAsync(MessageNumber.ChannelEof, channel.LocalId);
+                    break;
+            }
+        }
+        catch (SshException)
+        {
+            // The connection ended under the send.
+        }
+
+        await AssertProtocolErrorAsync(rig);
+        int read = 0;
+        try
+        {
+            read = await channel.Output.ReadAsync(buffer, Ct).AsTask().WaitAsync(Limit, Ct);
+        }
+        catch (SshException)
+        {
+            // The reader may be told the connection failed, which is also an end.
+        }
+
+        Assert.Equal(0, read);
+    }
+
+    // The same advisory, the other half: our own close races data already on the wire. That is legal until the peer closes too, so
+    // the data is dropped and credited, the reader never sees it, and the connection stays up.
+    [Fact]
+    public async Task Libssh_CVE_2026_59850_data_in_flight_after_our_close_is_dropped_and_the_connection_stays_up()
+    {
+        await using ChannelRig rig = await ChannelRig.StartAsync(Ct);
+        SshChannel channel = await rig.OpenAsync(1);
+        await channel.DisposeAsync();
+
+        await rig.SendDataAsync(channel.LocalId, "in flight"u8.ToArray());
+        await rig.SendDataAsync(channel.LocalId, "in flight"u8.ToArray(), extended: true);
+        await rig.SendAsync(MessageNumber.ChannelClose, channel.LocalId);
+        await channel.Closed.WaitAsync(Limit, Ct);
+
+        Assert.False(rig.Connection.CloseReason.IsCompleted);
+        SshChannel next = await rig.OpenAsync(2);
+        Assert.NotEqual(channel.LocalId, next.LocalId);
+        Assert.False(rig.Connection.CloseReason.IsCompleted);
     }
 
     private static async Task AssertProtocolErrorAsync(ChannelRig rig)

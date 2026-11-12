@@ -1,5 +1,6 @@
 using System;
 using System.Globalization;
+using System.Linq;
 using System.Numerics;
 using System.Reflection;
 using System.Security.Cryptography;
@@ -606,6 +607,58 @@ public class SshKeyTests
     }
 
     private delegate void WriteBody(ref SshWriter writer);
+
+    public static TheoryData<string, int> HostileSignatureBlobs()
+    {
+        TheoryData<string, int> data = [];
+        foreach (string algorithm in HostKeyAlgorithms.Default)
+        {
+            for (int kind = 0; kind < 10; kind++)
+            {
+                data.Add(algorithm, kind);
+            }
+        }
+
+        return data;
+    }
+
+    // libssh CVE-2023-2283: verification reported success when a step in it failed. Every key type's Verify, which both the
+    // client's host key check and the server's user key check go through, answers false to a signature that is malformed,
+    // truncated, padded, for another algorithm or another message. It never answers true and never throws.
+    [Theory]
+    [MemberData(nameof(HostileSignatureBlobs))]
+    public void Libssh_CVE_2023_2283_a_signature_that_is_wrong_in_any_way_verifies_as_false(string algorithm, int kind)
+    {
+        using KeyHolder holder = new(algorithm);
+        SshPrivateKey key = holder.Key;
+        byte[] good = key.Sign(algorithm, Message);
+        Assert.True(key.PublicKey.Verify(algorithm, Message, good));
+
+        // The signature's own bytes, as the second string of the blob.
+        SshReader reader = new(good);
+        reader.ReadBinary();
+        byte[] inner = reader.ReadBinary().ToArray();
+        byte[] bad = kind switch
+        {
+            0 => [],
+            1 => [0],
+            2 => [.. Enumerable.Repeat((byte)0xAA, 64)],
+            3 => [.. good[..^1], (byte)(good[^1] ^ 1)],
+            4 => good[..^1],
+            5 => [.. good, 0],
+            6 => SignatureBlob.Write("ssh-dss", inner),
+            7 => SignatureBlob.Write(algorithm, new byte[inner.Length]),
+            8 => SignatureBlob.Write(algorithm, []),
+            _ => [0xFF, 0xFF, 0xFF, 0xFF, .. good],
+        };
+
+        Assert.False(key.PublicKey.Verify(algorithm, Message, bad));
+
+        // The right signature for the wrong message, and the wrong algorithm name for the right one.
+        Assert.False(key.PublicKey.Verify(algorithm, "another message"u8, good));
+        Assert.False(key.PublicKey.Verify("ssh-dss", Message, good));
+        Assert.False(key.PublicKey.Verify(string.Empty, Message, good));
+    }
 
     private delegate void WriteBody<in T>(ref SshWriter writer, T state);
 

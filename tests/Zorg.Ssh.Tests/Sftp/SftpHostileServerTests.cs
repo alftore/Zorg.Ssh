@@ -458,6 +458,37 @@ public class SftpHostileServerTests
         await fake.WaitForRequestsAsync(1, r => r.Type == SftpMessage.Close);
     }
 
+    // Apache MINA CVE-2021-30129: unbounded buffers in SFTP. A server that never stops answering a read-all or a listing meets a
+    // local limit in each case, and the number of requests in flight is capped too (see Outstanding_requests_are_capped...).
+    [Fact(Timeout = Limit)]
+    public async Task Mina_CVE_2021_30129_endless_replies_to_a_file_and_to_a_listing_each_stop_at_a_local_limit()
+    {
+        FakeFiles files = new() { Files = { ["f"] = [] } };
+        await using FakeSftpServer fake = await FakeSftpServer.StartAsync((server, request) => request.Type switch
+        {
+            SftpMessage.Read => server.SendDataAsync(request.Id, new byte[request.ReadArguments().Length]),
+            SftpMessage.ReadDir => server.SendNamesAsync(request.Id, "a", "b", "c", "d"),
+            SftpMessage.OpenDir => server.SendHandleAsync(request.Id, [1]),
+            SftpMessage.Close => server.SendStatusAsync(request.Id),
+            _ => files.HandleAsync(server, request),
+        });
+
+        fake.Client.Options = new SftpClientOptions { MaxReadAllBytes = 256 * 1024, MaxDirectoryEntries = 100 };
+        SftpException file = await Assert.ThrowsAsync<SftpException>(() => fake.Client.ReadAllBytesAsync("f", Ct));
+        Assert.True(file.IsLocalLimit);
+        SftpException listing = await Assert.ThrowsAsync<SftpException>(async () =>
+        {
+            await foreach (SftpEntry entry in fake.Client.ListDirectoryAsync("d", Ct))
+            {
+                _ = entry;
+            }
+        });
+        Assert.True(listing.IsLocalLimit);
+
+        // Local limits, not protocol failures: the session is still usable.
+        Assert.False(await fake.Client.ExistsAsync("missing", Ct));
+    }
+
     [Fact(Timeout = Limit)]
     public async Task An_endless_listing_can_be_cancelled()
     {

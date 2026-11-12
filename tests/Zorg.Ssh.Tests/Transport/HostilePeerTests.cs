@@ -174,6 +174,42 @@ public class HostilePeerTests
         Assert.IsType<SshHostKeyException>(failure);
     }
 
+    // libssh CVE-2023-2283: verification failed open. A key exchange reply whose signature is malformed rather than just wrong
+    // is a host key failure too: the client never gets as far as trusting the key or installing keys.
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(3)]
+    public async Task Libssh_CVE_2023_2283_a_KEX_reply_with_a_malformed_signature_is_a_host_key_failure(int kind)
+    {
+        using Zorg.Ssh.Crypto.KeyExchangeMethod method = Zorg.Ssh.Crypto.KeyExchangeCatalog.Create("curve25519-sha256")!;
+        SshException failure = await RunAsync(SshRole.Client, async peer =>
+        {
+            await peer.SendAsync(RawPeer.KexInitPayload(SshRole.Server), Ct);
+            byte[] init = await peer.ReceiveAsync(MessageNumber.KexEcdhInit, 0, Ct);
+            byte[] clientPublic = init.AsSpan(5).ToArray();
+            byte[] serverPublic = method.ServerRespond(clientPublic, out byte[] _);
+
+            byte[] signature = kind switch
+            {
+                0 => [],
+                1 => [0],
+                2 => new byte[80],
+                _ => HostKey.Sign("ssh-ed25519", "not the exchange hash"u8)[..^1],
+            };
+            SshWriter writer = new();
+            writer.WriteByte(MessageNumber.KexEcdhReply);
+            writer.WriteBinary(HostKey.PublicKey.Blob.Span);
+            writer.WriteBinary(serverPublic);
+            writer.WriteBinary(signature);
+            byte[] reply = writer.ToArray();
+            writer.Dispose();
+            await peer.SendAsync(reply, Ct);
+        });
+        Assert.IsType<SshHostKeyException>(failure);
+    }
+
     // libssh CVE-2025-8277 shape: a wrong guess drops exactly one packet, and the exchange still completes.
     [Fact]
     public async Task A_wrong_guess_drops_one_packet_and_a_second_stray_packet_is_refused()
