@@ -59,6 +59,14 @@ internal static class StatefulLimits
     /// <summary>Gets how long one input may spend in all its waits for expected messages together.</summary>
     public static TimeSpan AwaitBudget { get; } = FuzzSettings.LongRun is null ? TimeSpan.FromMilliseconds(250) : TimeSpan.FromMilliseconds(1000);
 
+    /// <summary>
+    /// How long an await op waits in a test that needs every one of its messages to arrive (the long memory sequences). The
+    /// fuzzer's short wait is for inputs where a mutation may have removed the cause, and on a loaded machine it is shorter than
+    /// the SUT's own scheduling delay, so the scripted peer would send its next message before the SUT had asked for anything.
+    /// A message that is there ends the wait at once, so this costs nothing unless one never comes.
+    /// </summary>
+    public static readonly TimeSpan PatientAwait = TimeSpan.FromSeconds(10);
+
     public static readonly SshAlgorithms FastAlgorithms = new() { KeyExchange = ["curve25519-sha256"] };
 
     /// <summary>
@@ -341,6 +349,9 @@ internal sealed class ServerRig : IDisposable
     /// <summary>Gets or sets what a probe op runs. For tests that measure the connection while it is busy.</summary>
     public Func<Task>? Probe { get; set; }
 
+    /// <summary>Gets or sets whether await ops wait for as long as the SUT needs, for a test that needs every message to arrive.</summary>
+    public bool PatientAwaits { get; set; }
+
     public Depth Depth { get; }
 
     public CaptureLoggerFactory Logs { get; }
@@ -523,7 +534,12 @@ internal sealed class ServerRig : IDisposable
 
             notes.Milliseconds["handshake"] = watch.Elapsed.TotalMilliseconds;
             watch.Restart();
-            executor = new SequenceExecutor(peer, app: null, Probe) { SutRekey = StartRekeyAsync };
+            executor = new SequenceExecutor(peer, app: null, Probe)
+            {
+                SutRekey = StartRekeyAsync,
+                AwaitLimit = PatientAwaits ? StatefulLimits.PatientAwait : StatefulLimits.AwaitLimit,
+                AwaitBudget = PatientAwaits ? StatefulLimits.PatientAwait * 6 : StatefulLimits.AwaitBudget,
+            };
             await executor.RunAsync(ops).ConfigureAwait(false);
             survived = await executor.BarrierAsync().ConfigureAwait(false);
             await executor.RequireCanariesEndedAsync().ConfigureAwait(false);

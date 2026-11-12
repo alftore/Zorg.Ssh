@@ -23,6 +23,9 @@ internal sealed class ClientRig(Depth depth = Depth.Channel) : IDisposable
     /// <summary>Gets or sets what a probe op runs. For tests that measure the connection while it is busy.</summary>
     public Func<SshClient?, Task>? Probe { get; set; }
 
+    /// <summary>Gets or sets whether await ops wait for as long as the SUT needs, for a test that needs every message to arrive.</summary>
+    public bool PatientAwaits { get; set; }
+
     /// <summary>Gets what the peer saw at the end of the last input.</summary>
     public string LastDescription { get; private set; } = string.Empty;
 
@@ -94,9 +97,11 @@ internal sealed class ClientRig(Depth depth = Depth.Channel) : IDisposable
 
             notes.Milliseconds["handshake"] = watch.Elapsed.TotalMilliseconds;
             watch.Restart();
-            executor = new SequenceExecutor(peer, action => StartAppAsync(connect, action, apps, appFailures), Probe is null ? null : async () => await Probe(connect.IsCompletedSuccessfully ? await connect.ConfigureAwait(false) : null).ConfigureAwait(false))
+            executor = new SequenceExecutor(peer, action => StartAppAsync(connect, action, apps, appFailures), Probe is null ? null : async () => await Probe(await ConnectedForProbeAsync(connect).ConfigureAwait(false)).ConfigureAwait(false))
             {
                 SutRekey = async () => (await connect.WaitAsync(StatefulLimits.AwaitLimit * 2).ConfigureAwait(false)).RequestRekey(),
+                AwaitLimit = PatientAwaits ? StatefulLimits.PatientAwait : StatefulLimits.AwaitLimit,
+                AwaitBudget = PatientAwaits ? StatefulLimits.PatientAwait * 6 : StatefulLimits.AwaitBudget,
             };
             await executor.RunAsync(ops).ConfigureAwait(false);
             survived = await executor.BarrierAsync().ConfigureAwait(false);
@@ -283,6 +288,23 @@ internal sealed class ClientRig(Depth depth = Depth.Channel) : IDisposable
         byte[] buffer = new byte[4096];
         while (await stream.ReadAsync(buffer).ConfigureAwait(false) > 0)
         {
+        }
+    }
+
+    /// <summary>
+    /// Waits for the connect to finish, for a probe. An app op gives the connect only a moment, which suits a fuzz input but
+    /// not a test that needs its application call to run: it puts a probe first, and on a loaded machine the client can take
+    /// longer than that moment to finish logging in. Returns null if the connect failed or didn't finish.
+    /// </summary>
+    private static async Task<SshClient?> ConnectedForProbeAsync(Task<SshClient> connect)
+    {
+        try
+        {
+            return await connect.WaitAsync(StatefulLimits.EndLimit).ConfigureAwait(false);
+        }
+        catch (Exception)
+        {
+            return null;
         }
     }
 

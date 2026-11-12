@@ -22,8 +22,8 @@ public sealed class KeepAliveInteropTests : IDisposable
     private static readonly TimeSpan Quiet = TimeSpan.FromSeconds(6);
 
     // About one probe a second is the best case, and a container on a loaded machine can answer late, so the test
-    // that wants at least three allows ten seconds, as the silent-command test does.
-    private static readonly TimeSpan IdleStretch = TimeSpan.FromSeconds(10);
+    // that wants at least three waits for them, for up to this long.
+    private static readonly TimeSpan IdleLimit = TimeSpan.FromSeconds(60);
 
     private readonly string _directory = Directory.CreateTempSubdirectory("zorg-ssh-keepalive").FullName;
     private readonly SshHostKey _hostKey = SshHostKey.GenerateEd25519();
@@ -63,10 +63,26 @@ public sealed class KeepAliveInteropTests : IDisposable
         await using SshPeerContainer container = await StartAsync(peer);
         await using SshClient client = await SshClient.ConnectAsync(ClientOptions(container), TestContext.Current.CancellationToken);
 
-        await Task.Delay(IdleStretch, Ct);
+        // The connection stays idle for the whole wait, so every probe counted here went out in a quiet stretch. A fixed wait
+        // assumed the peer (a container on a loaded or shared machine) answers on time, and it can be seconds late, which
+        // says nothing about whether it answers keepalives. Wait for the third answer instead, and fail only if it doesn't
+        // come in a generous time, or the connection is dropped first, which is what a peer that ignores probes would cause.
+        using CancellationTokenSource limit = CancellationTokenSource.CreateLinkedTokenSource(Ct);
+        limit.CancelAfter(IdleLimit);
+        try
+        {
+            while (client.Connection.KeepAlive!.ProbesAnswered < 3 && !client.Connection.Ended.IsCompleted)
+            {
+                await Task.Delay(50, limit.Token);
+            }
+        }
+        catch (OperationCanceledException) when (!Ct.IsCancellationRequested)
+        {
+            // Reported below with the count.
+        }
 
         int answered = client.Connection.KeepAlive!.ProbesAnswered;
-        Assert.True(answered >= 3, $"{peer} answered {answered} probes.");
+        Assert.True(answered >= 3, $"{peer} answered {answered} probes in {IdleLimit.TotalSeconds:0} s.");
         SshCommandResult result = await client.ExecuteAsync("echo still here", Ct);
         Assert.Equal("still here\n", result.StandardOutput);
     }
