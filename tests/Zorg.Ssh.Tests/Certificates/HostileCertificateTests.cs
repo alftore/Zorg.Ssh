@@ -190,6 +190,25 @@ public sealed class HostileCertificateTests : IDisposable
         Assert.True(await TrustingCa().CheckAsync(Host, 22, new CertificateBuilder(Subject, Ca) { Principals = [principal, Host] }.Parse(), Ct));
     }
 
+    // OpenSSH CVE-2026-35414: principal matching treated a comma inside a certificate's principal as a separator, so one principal
+    // "a,b" passed for "a" or "b". Each principal is one exact name here, whatever characters it has.
+    [Theory]
+    [InlineData("host.example.com,other.example.com")]
+    [InlineData("other.example.com,host.example.com")]
+    [InlineData("host.example.com,")]
+    [InlineData(",host.example.com")]
+    [InlineData("host.example.com ,x")]
+    [InlineData("host.example.com\0")]
+    [InlineData("host.example.com\n")]
+    public async Task OpenSSH_CVE_2026_35414_a_principal_with_a_comma_or_other_extra_text_matches_no_part_of_it(string principal)
+    {
+        SshCertificate certificate = new CertificateBuilder(Subject, Ca) { Principals = [principal] }.Parse();
+        Assert.Contains("isn't valid for this host name", await RefusedAsync(certificate));
+
+        // The exact name beside it is still accepted.
+        Assert.True(await TrustingCa().CheckAsync(Host, 22, new CertificateBuilder(Subject, Ca) { Principals = [principal, Host] }.Parse(), Ct));
+    }
+
     [Fact]
     public async Task A_certificate_with_no_principals_is_refused()
     {
