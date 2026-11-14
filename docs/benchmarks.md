@@ -279,6 +279,30 @@ What the rest of a transfer costs: on the client, copying and clearing buffers i
 - **Read chunk size.** Requests are 32 KiB with 64 in flight. OpenSSH accepts larger reads, but the path, not the request count, limits the download here.
 - **Not measured:** Linux and other file systems, many sessions at once (requests that use a path take one process-wide gate), and a real network.
 
+## Soak run
+
+`--soak` checks that memory, handles and threads stay flat on both ends over a long run. It starts a `SshServer` on 127.0.0.1 (a generated ed25519 host key, password and public key login, exec, SFTP in a temp directory and direct TCP to a loopback echo listener) and runs the Zorg.Ssh client against it from several workers in the same process. Clients pin the host key's fingerprint. Nothing listens on any other address, so it runs on Windows, Linux and in a container.
+
+```
+dotnet run -c Release --project benchmarks/Zorg.Ssh.Benchmarks -- --soak --minutes 60 --interval 30
+```
+
+Options: `--minutes N` (10), `--interval S` (seconds between samples, 30), `--concurrency N` (workers, 8), `--out path.csv` (a file in the temp directory, whose path is printed), `--warmup-minutes N` (2, or 20% of the run if that is shorter) and `--think-ms N` (the average pause between a worker's operations, 50; this keeps a Windows machine from running out of ephemeral ports on closed loopback connections, and a count of connects that failed at the TCP level that way, or from a dropped SYN, is printed and not treated as an error).
+
+Each worker picks operations at random by weight: connect and log in (password, one in four with a public key) and run a command; reuse one connection for 40 commands; stream 1 MiB through a command with stdin, stdout and stderr read together; 50 small SFTP files (1 to 16 KiB) uploaded, downloaded, compared and deleted; a directory listing; one SFTP file of 8 to 32 MiB with its SHA-256 checked; a local port forward to the echo listener; a wrong password; a connection cut by a reset in the middle of a transfer (through a loopback relay the harness owns); and a cancellation in the middle of a connect, a command or an upload. Each sample forces a blocking compacting GC, then writes one CSV row and one console line: ops per kind, errors, managed heap, gen 2 and LOH size, working set, private bytes, handle count, `/proc/self/fd` entries on Linux, threads, pool threads, bytes allocated, connections the harness holds open and sessions running on the server.
+
+At the end it fits a least-squares line to each metric over the samples after warmup and prints the slope per hour. A metric passes when its slope is under the tolerance:
+
+| Metric | Tolerance (slope per hour) |
+|---|---:|
+| Managed heap after a full GC | 2 MiB |
+| Private bytes | 20 MiB |
+| Handles, `/proc/self/fd` entries, OS threads, pool threads | 5 each |
+
+Working set, gen 2 and LOH size are reported without a limit. It also fails if more connections were open at once than there are workers, or if any connection or server session is left after the workers stop. Any exception that is not a designed refusal or cancellation (an `SshException` from a wrong password or a cut connection, an `OperationCanceledException` from a cancelled call) is printed with its stack, and so is a task that faulted unobserved or an operation that took over 90 seconds (180 for the large file). The exit code is 0 for a pass, 1 for a failed tolerance or check, 2 for an unexpected exception. Ctrl+C stops the workers after their current operations and still writes the summary.
+
+A run with under 10 minutes after warmup extrapolates noise into the per-hour slopes, so a slope over its tolerance is shown as "short run" and doesn't fail the run: use it as a smoke test. For a verdict run an hour or more. To publish for Linux: `dotnet publish benchmarks/Zorg.Ssh.Benchmarks -c Release -r linux-x64 --self-contained -o <dir>`, then run `<dir>/Zorg.Ssh.Benchmarks --soak ...`.
+
 ## Limits
 
 - **One machine, one run setup.** No other hardware, operating system or server was tried. A Linux client would avoid the Windows to WSL hop altogether.
