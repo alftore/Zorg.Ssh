@@ -24,7 +24,7 @@ namespace Zorg.Ssh.Benchmarks;
 /// run ends with a least-squares line per metric and a PASS or FAIL against the tolerances below. Run it with
 /// <c>--soak</c>. Options: <c>--minutes N</c> (10), <c>--interval S</c> (sample seconds, 30), <c>--concurrency N</c>
 /// (workers, 8), <c>--out path.csv</c> (a file in the temp directory), <c>--warmup-minutes N</c> (2, or 20% of the run if
-/// that is shorter). Exit code: 0 pass, 1 a metric or a check failed, 2 an exception that should not happen.
+/// that is shorter), <c>--quiet-every N</c> (a quiet sample every N samples, 4; 0 turns them off). Exit code: 0 pass, 1 a metric or a check failed, 2 an exception that should not happen.
 /// </summary>
 internal sealed class Soak : IDisposable
 {
@@ -32,6 +32,11 @@ internal sealed class Soak : IDisposable
     private const double HeapSlopeMiBPerHour = 2;
     private const double PrivateSlopeMiBPerHour = 20;
     private const double CountSlopePerHour = 5;
+
+    // The verdict needs this many quiet samples after warmup. Quiet samples are taken with the workers parked and nothing open.
+    private const int MinQuietSamples = 5;
+    private static readonly TimeSpan QuietWait = TimeSpan.FromSeconds(60);
+    private static readonly TimeSpan QuietSettle = TimeSpan.FromSeconds(2);
 
     private const string User = "soak";
     private const string KeyUser = "soakkey";
@@ -62,6 +67,7 @@ internal sealed class Soak : IDisposable
     private readonly int _concurrency;
     private readonly string _outPath;
     private readonly double _warmupMinutes;
+    private readonly int _quietEvery;
 
     private readonly CancellationTokenSource _stop = new();
     private readonly CancellationTokenSource _hard = new();
@@ -69,6 +75,7 @@ internal sealed class Soak : IDisposable
     private readonly ConcurrentDictionary<string, Distinct> _distinct = new();
     private readonly ConcurrentQueue<string> _stale = new();
     private readonly List<Sample> _samples = [];
+    private readonly List<Sample> _quiet = [];
 
     private string _root = "";
     private SshHostKey? _hostKey;
@@ -83,14 +90,18 @@ internal sealed class Soak : IDisposable
     private int _serverSessions;
     private int _maxLive;
     private long _serial;
+    private volatile TaskCompletionSource? _gate;
+    private int _parked;
+    private int _quietTimeouts;
 
-    private Soak(double minutes, double intervalSeconds, int concurrency, string outPath, double warmupMinutes)
+    private Soak(double minutes, double intervalSeconds, int concurrency, string outPath, double warmupMinutes, int quietEvery)
     {
         _minutes = minutes;
         _intervalSeconds = intervalSeconds;
         _concurrency = concurrency;
         _outPath = outPath;
         _warmupMinutes = warmupMinutes;
+        _quietEvery = quietEvery;
     }
 
     public static async Task<int> RunAsync(string[] args)
@@ -99,15 +110,16 @@ internal sealed class Soak : IDisposable
         double interval = Number(args, "--interval", 30);
         int concurrency = (int)Number(args, "--concurrency", 8);
         double warmup = Number(args, "--warmup-minutes", Math.Min(2, minutes * 0.2));
+        int quietEvery = (int)Number(args, "--quiet-every", 4);
         string? outPath = Text(args, "--out");
         outPath ??= Path.Combine(Path.GetTempPath(), string.Create(CultureInfo.InvariantCulture, $"zorg-soak-{DateTime.UtcNow:yyyyMMdd-HHmmss}.csv"));
-        if (minutes <= 0 || interval <= 0 || concurrency < 1 || warmup < 0)
+        if (minutes <= 0 || interval <= 0 || concurrency < 1 || warmup < 0 || quietEvery < 0)
         {
-            Console.Error.WriteLine("Soak: --minutes and --interval must be above 0, --concurrency at least 1, --warmup-minutes not negative.");
+            Console.Error.WriteLine("Soak: --minutes and --interval must be above 0, --concurrency at least 1, --warmup-minutes and --quiet-every not negative.");
             return 3;
         }
 
-        using Soak soak = new(minutes, interval, concurrency, outPath, warmup) { _thinkMs = (int)Number(args, "--think-ms", 50) };
+        using Soak soak = new(minutes, interval, concurrency, outPath, warmup, quietEvery) { _thinkMs = (int)Number(args, "--think-ms", 50) };
         return await soak.ExecuteAsync();
     }
 
@@ -200,9 +212,10 @@ internal sealed class Soak : IDisposable
     private async Task<int> RunWorkloadAsync()
     {
         string os = $"{Environment.OSVersion} ({System.Runtime.InteropServices.RuntimeInformation.RuntimeIdentifier}), {Environment.ProcessorCount} logical CPUs, server GC {GCSettings.IsServerGC}, .NET {Environment.Version}";
-        Console.WriteLine($"Soak: {F(_minutes)} min, sample every {F(_intervalSeconds, "F0")} s, {_concurrency} workers, warmup {F(_warmupMinutes)} min, server 127.0.0.1:{_port}, SFTP root {_root}");
+        Console.WriteLine($"Soak: {F(_minutes)} min, sample every {F(_intervalSeconds, "F0")} s, {_concurrency} workers, warmup {F(_warmupMinutes)} min, quiet sample every {_quietEvery} samples, server 127.0.0.1:{_port}, SFTP root {_root}");
         Console.WriteLine("Soak: " + os);
-        Console.WriteLine("Soak: tolerances (slope after warmup, per hour): heap after GC " + F(HeapSlopeMiBPerHour) + " MiB, private bytes " + F(PrivateSlopeMiBPerHour) + " MiB, handles, fds, threads and pool threads " + F(CountSlopePerHour, "F0") + " each; live connections at most " + _concurrency + " and 0 at the end; no unexpected exception.");
+        Console.WriteLine("Soak: verdict on quiet samples only (workers parked, no connection or session open, full GC), at least " + MinQuietSamples + " after warmup; run samples are info.");
+        Console.WriteLine("Soak: tolerances (slope of quiet samples after warmup, per hour): heap after GC " + F(HeapSlopeMiBPerHour) + " MiB, private bytes " + F(PrivateSlopeMiBPerHour) + " MiB, handles, fds, threads and pool threads " + F(CountSlopePerHour, "F0") + " each; live connections at most " + _concurrency + " and 0 at the end; no unexpected exception.");
         Console.WriteLine("Soak: CSV " + _outPath);
 
         using StreamWriter csv = new(_outPath, append: false, new UTF8Encoding(false)) { AutoFlush = true };
@@ -217,6 +230,11 @@ internal sealed class Soak : IDisposable
         for (int k = 0; !_stop.IsCancellationRequested; k++)
         {
             RecordSample("run", clock, csv);
+            if (_quietEvery > 0 && (k + 1) % _quietEvery == 0 && clock.Elapsed < duration)
+            {
+                await TryQuietSampleAsync(clock, csv);
+            }
+
             TimeSpan next = TimeSpan.FromTicks(interval.Ticks * (k + 1));
             TimeSpan wait = (next < duration ? next : duration) - clock.Elapsed;
             if (clock.Elapsed >= duration)
@@ -250,6 +268,73 @@ internal sealed class Soak : IDisposable
 
         Sample final = RecordSample("final", clock, csv);
         return Report(final);
+    }
+
+    private async Task TryQuietSampleAsync(Stopwatch clock, StreamWriter csv)
+    {
+        TaskCompletionSource gate = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        _gate = gate;
+        try
+        {
+            Stopwatch wait = Stopwatch.StartNew();
+            while (!Idle())
+            {
+                if (wait.Elapsed > QuietWait)
+                {
+                    _quietTimeouts++;
+                    Console.WriteLine($"[{F(clock.Elapsed.TotalSeconds, "F0"),6}s quiet] skipped: not idle after {F(QuietWait.TotalSeconds, "F0")} s (parked {Volatile.Read(ref _parked)} of {_concurrency}, live {Volatile.Read(ref _live)}, srv {Volatile.Read(ref _serverSessions)}).");
+                    return;
+                }
+
+                await Task.Delay(50, _stop.Token);
+            }
+
+            await Task.Delay(QuietSettle, _stop.Token);
+            if (!Idle())
+            {
+                _quietTimeouts++;
+                Console.WriteLine($"[{F(clock.Elapsed.TotalSeconds, "F0"),6}s quiet] skipped: something opened again during the settle.");
+                return;
+            }
+
+            RecordSample("quiet", clock, csv);
+        }
+        catch (OperationCanceledException)
+        {
+            // Stopping: the final sample follows.
+        }
+        finally
+        {
+            _gate = null;
+            gate.TrySetResult();
+        }
+    }
+
+    private bool Idle() =>
+        Volatile.Read(ref _parked) == _concurrency && Volatile.Read(ref _live) == 0 && Volatile.Read(ref _serverSessions) == 0;
+
+    // Workers call this between operations. The wait is not work: it is outside the operation and the think time.
+    private async Task PassGateAsync()
+    {
+        TaskCompletionSource? gate = _gate;
+        if (gate is null)
+        {
+            return;
+        }
+
+        Interlocked.Increment(ref _parked);
+        try
+        {
+            await gate.Task.WaitAsync(_stop.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            // Stopping.
+        }
+        finally
+        {
+            Interlocked.Decrement(ref _parked);
+        }
     }
 
     private Sample RecordSample(string phase, Stopwatch clock, StreamWriter csv)
@@ -300,6 +385,10 @@ internal sealed class Soak : IDisposable
         {
             _samples.Add(sample);
         }
+        else if (phase == "quiet")
+        {
+            _quiet.Add(sample);
+        }
 
         csv.WriteLine(F(sample.Elapsed, "F1") + "," + phase + "," + opsNow.Sum().ToString(CultureInfo.InvariantCulture) + "," +
             string.Join(',', opsNow) + "," + sample.Expected.ToString(CultureInfo.InvariantCulture) + "," + sample.Unexpected.ToString(CultureInfo.InvariantCulture) + "," +
@@ -307,6 +396,37 @@ internal sealed class Soak : IDisposable
         Console.WriteLine(
             $"[{F(sample.Elapsed, "F0"),6}s {phase,-5}] ops {opsNow.Sum()} (refused as designed {sample.Expected}, unexpected {sample.Unexpected}) heap {F(Mib(heap))} MiB gen2 {F(Mib(gen2))} loh {F(Mib(loh))} ws {F(Mib(workingSet), "F0")} private {F(Mib(privateBytes), "F0")} handles {handles} fds {fds} threads {threads} pool {ThreadPool.ThreadCount} live {_live} srv {_serverSessions} alloc {F(Mib(sample.Allocated), "F0")} MiB");
         return sample;
+    }
+
+    private static bool PrintFit(List<Sample> fit, double spanMinutes, bool judge)
+    {
+        bool failed = false;
+        Console.WriteLine($"{"metric",-18} {"start",12} {"end",12} {"change",12} {"slope/hour",12} {"R2",5} {"tolerance",10}  verdict");
+        double[] hours = [.. fit.Select(s => s.Elapsed / 3600)];
+        for (int m = 0; m < Metrics.Length; m++)
+        {
+            Metric metric = Metrics[m];
+            double[] ys = [.. fit.Select(s => s.Values[m] / (metric.IsBytes ? 1024.0 * 1024 : 1))];
+            if (ys.All(y => y < 0) || (metric.Name == "handles" && ys.All(y => y == 0)))
+            {
+                Console.WriteLine($"{metric.Name,-18} {"n/a on this OS",12}");
+                continue;
+            }
+
+            (double slope, double r2) = Regression.Fit(hours, ys);
+            string unit = metric.IsBytes ? " MiB" : string.Empty;
+            string verdict = "info";
+            if (judge && metric.Tolerance is double tolerance)
+            {
+                bool ok = slope < tolerance;
+                verdict = ok ? "PASS" : spanMinutes < 10 ? "short run" : "FAIL";
+                failed |= !ok && spanMinutes >= 10;
+            }
+
+            Console.WriteLine($"{metric.Name,-18} {F(ys[0]),12} {F(ys[^1]),12} {F(ys[^1] - ys[0]),12} {F(slope),12} {F(r2, "F2"),5} {(metric.Tolerance is double t ? "< " + F(t) + unit : "-"),10}  {verdict}  ({metric.Description})");
+        }
+
+        return failed;
     }
 
     private int Report(Sample final)
@@ -321,14 +441,14 @@ internal sealed class Soak : IDisposable
 
         bool failed = false;
         double warmupSeconds = _warmupMinutes * 60;
-        List<Sample> fit = [.. _samples.Where(s => s.Elapsed >= warmupSeconds)];
-        double spanMinutes = fit.Count > 1 ? (fit[^1].Elapsed - fit[0].Elapsed) / 60 : 0;
         Console.WriteLine();
-        Console.WriteLine($"Fit over {fit.Count} samples after {F(_warmupMinutes)} min of warmup ({F(spanMinutes)} min).");
-        if (fit.Count < 3)
+        Console.WriteLine($"Quiet samples: {_quiet.Count} taken, {_quietTimeouts} skipped because the process never went idle within {F(QuietWait.TotalSeconds, "F0")} s (a connection or session that never ends is worth a look).");
+        List<Sample> fit = [.. _quiet.Where(s => s.Elapsed >= warmupSeconds)];
+        double spanMinutes = fit.Count > 1 ? (fit[^1].Elapsed - fit[0].Elapsed) / 60 : 0;
+        Console.WriteLine($"Verdict fit: {fit.Count} quiet samples after {F(_warmupMinutes)} min of warmup ({F(spanMinutes)} min).");
+        if (fit.Count < MinQuietSamples)
         {
-            Console.WriteLine("Too few samples after warmup to fit a line: FAIL. Run longer, or sample more often.");
-            failed = true;
+            Console.WriteLine($"Too few quiet samples (need {MinQuietSamples} after warmup): no verdict on slopes. Run longer, sample more often, or lower --quiet-every.");
         }
         else
         {
@@ -337,30 +457,29 @@ internal sealed class Soak : IDisposable
                 Console.WriteLine("Note: under 10 minutes of fit window, the per-hour slopes extrapolate noise (a GC, a buffer in flight). A slope over its tolerance is shown as 'short run' and doesn't fail the run: read these as a smoke test, not a verdict.");
             }
 
-            Console.WriteLine($"{"metric",-18} {"start",12} {"end",12} {"change",12} {"slope/hour",12} {"R2",5} {"tolerance",10}  verdict");
-            double[] hours = [.. fit.Select(s => s.Elapsed / 3600)];
-            for (int m = 0; m < Metrics.Length; m++)
+            failed |= PrintFit(fit, spanMinutes, judge: true);
+            foreach (string name in new[] { "handles", "fds" })
             {
-                Metric metric = Metrics[m];
-                double[] ys = [.. fit.Select(s => s.Values[m] / (metric.IsBytes ? 1024.0 * 1024 : 1))];
-                if (ys.All(y => y < 0) || (metric.Name == "handles" && ys.All(y => y == 0)))
+                int m = Array.FindIndex(Metrics, x => x.Name == name);
+                long[] v = [.. fit.Select(s => s.Values[m])];
+                if (v.Any(x => x >= 0) && !(name == "handles" && v.All(x => x == 0)))
                 {
-                    Console.WriteLine($"{metric.Name,-18} {"n/a on this OS",12}");
-                    continue;
+                    Console.WriteLine($"{name} at quiet points: min {v.Min()}, max {v.Max()}, first {v[0]}, last {v[^1]}.");
                 }
-
-                (double slope, double r2) = Regression.Fit(hours, ys);
-                string unit = metric.IsBytes ? " MiB" : string.Empty;
-                string verdict = "info";
-                if (metric.Tolerance is double tolerance)
-                {
-                    bool ok = slope < tolerance;
-                    verdict = ok ? "PASS" : spanMinutes < 10 ? "short run" : "FAIL";
-                    failed |= !ok && spanMinutes >= 10;
-                }
-
-                Console.WriteLine($"{metric.Name,-18} {F(ys[0]),12} {F(ys[^1]),12} {F(ys[^1] - ys[0]),12} {F(slope),12} {F(r2, "F2"),5} {(metric.Tolerance is double t ? "< " + F(t) + unit : "-"),10}  {verdict}  ({metric.Description})");
             }
+        }
+
+        List<Sample> runFit = [.. _samples.Where(s => s.Elapsed >= warmupSeconds)];
+        Console.WriteLine();
+        if (runFit.Count < 3)
+        {
+            Console.WriteLine($"Run samples after warmup: {runFit.Count}, too few for an info fit.");
+        }
+        else
+        {
+            double runSpan = (runFit[^1].Elapsed - runFit[0].Elapsed) / 60;
+            Console.WriteLine($"Run samples (taken with work in flight, so they swing with the connections open; info only): {runFit.Count} samples, {F(runSpan)} min.");
+            PrintFit(runFit, runSpan, judge: false);
         }
 
         int liveIndex = Array.FindIndex(Metrics, m => m.Name == "live_connections");
@@ -560,6 +679,12 @@ internal sealed class Soak : IDisposable
         int totalWeight = Weights.Sum();
         while (!_stop.IsCancellationRequested)
         {
+            await PassGateAsync();
+            if (_stop.IsCancellationRequested)
+            {
+                break;
+            }
+
             int pick = rng.Next(totalWeight);
             int kind = 0;
             while (pick >= Weights[kind])
