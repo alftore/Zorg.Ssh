@@ -24,7 +24,7 @@ namespace Zorg.Ssh.Benchmarks;
 /// run ends with a least-squares line per metric and a PASS or FAIL against the tolerances below. Run it with
 /// <c>--soak</c>. Options: <c>--minutes N</c> (10), <c>--interval S</c> (sample seconds, 30), <c>--concurrency N</c>
 /// (workers, 8), <c>--out path.csv</c> (a file in the temp directory), <c>--warmup-minutes N</c> (2, or 20% of the run if
-/// that is shorter), <c>--quiet-every N</c> (a quiet sample every N samples, 4; 0 turns them off). Exit code: 0 pass, 1 a metric or a check failed, 2 an exception that should not happen.
+/// that is shorter), <c>--quiet-every N</c> (a quiet sample every N samples, 4; 0 turns them off), <c>--only kinds</c> (a comma-separated list of operation kinds to run, all by default). On Windows each quiet sample also counts handles by type. Exit code: 0 pass, 1 a metric or a check failed, 2 an exception that should not happen.
 /// </summary>
 internal sealed class Soak : IDisposable
 {
@@ -46,6 +46,17 @@ internal sealed class Soak : IDisposable
         ["connect", "reuse", "stream", "sftp_small", "sftp_large", "list", "forward", "bad_login", "abrupt", "cancel"];
 
     private static readonly int[] Weights = [20, 8, 10, 10, 3, 8, 10, 8, 6, 8];
+
+    private static string HandleTypeChanges(Dictionary<string, int> from, Dictionary<string, int> to)
+    {
+        IEnumerable<string> changes = from.Keys.Union(to.Keys, StringComparer.Ordinal)
+            .Select(type => (type, delta: to.GetValueOrDefault(type) - from.GetValueOrDefault(type)))
+            .Where(c => c.delta != 0)
+            .OrderBy(c => c.type, StringComparer.Ordinal)
+            .Select(c => c.type + " " + c.delta.ToString("+0;-0", CultureInfo.InvariantCulture));
+        string text = string.Join(", ", changes);
+        return text.Length == 0 ? "none" : text;
+    }
 
     private static readonly Metric[] Metrics =
     [
@@ -94,6 +105,7 @@ internal sealed class Soak : IDisposable
     private volatile TaskCompletionSource? _gate;
     private int _parked;
     private int _quietTimeouts;
+    private readonly List<(double Elapsed, Dictionary<string, int> Types)> _handleTypes = [];
 
     private Soak(double minutes, double intervalSeconds, int concurrency, string outPath, double warmupMinutes, int quietEvery)
     {
@@ -112,6 +124,23 @@ internal sealed class Soak : IDisposable
         int concurrency = (int)Number(args, "--concurrency", 8);
         double warmup = Number(args, "--warmup-minutes", Math.Min(2, minutes * 0.2));
         int quietEvery = (int)Number(args, "--quiet-every", 4);
+        if (Text(args, "--only") is { } only)
+        {
+            HashSet<string> keep = [.. only.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)];
+            if (!keep.IsSubsetOf(Kinds))
+            {
+                Console.Error.WriteLine("Soak: --only takes a comma-separated list of: " + string.Join(", ", Kinds) + ".");
+                return 2;
+            }
+
+            for (int i = 0; i < Kinds.Length; i++)
+            {
+                if (!keep.Contains(Kinds[i]))
+                {
+                    Weights[i] = 0;
+                }
+            }
+        }
         string? outPath = Text(args, "--out");
         outPath ??= Path.Combine(Path.GetTempPath(), string.Create(CultureInfo.InvariantCulture, $"zorg-soak-{DateTime.UtcNow:yyyyMMdd-HHmmss}.csv"));
         if (minutes <= 0 || interval <= 0 || concurrency < 1 || warmup < 0 || quietEvery < 0)
@@ -389,6 +418,15 @@ internal sealed class Soak : IDisposable
         else if (phase == "quiet")
         {
             _quiet.Add(sample);
+            if (HandleTypes.Count() is { } types)
+            {
+                _handleTypes.Add((sample.Elapsed, types));
+                (double _, Dictionary<string, int> baseline) = _handleTypes.Find(t => t.Elapsed >= _warmupMinutes * 60);
+                if (baseline is not null && baseline != types)
+                {
+                    Console.WriteLine("         handle types against the first quiet sample after warmup: " + HandleTypeChanges(baseline, types));
+                }
+            }
         }
 
         csv.WriteLine(F(sample.Elapsed, "F1") + "," + phase + "," + opsNow.Sum().ToString(CultureInfo.InvariantCulture) + "," +
@@ -447,6 +485,17 @@ internal sealed class Soak : IDisposable
 
         bool failed = false;
         double warmupSeconds = _warmupMinutes * 60;
+        List<(double Elapsed, Dictionary<string, int> Types)> typed = [.. _handleTypes.Where(t => t.Elapsed >= warmupSeconds)];
+        if (typed.Count > 1)
+        {
+            Console.WriteLine();
+            Console.WriteLine($"Handles by type at quiet points after warmup ({typed.Count} samples): type, first, last, min, max");
+            foreach (string type in typed.SelectMany(t => t.Types.Keys).Distinct(StringComparer.Ordinal).OrderBy(t => t, StringComparer.Ordinal))
+            {
+                int[] v = [.. typed.Select(t => t.Types.GetValueOrDefault(type))];
+                Console.WriteLine($"  {type,-24} {v[0],6} {v[^1],6} {v.Min(),6} {v.Max(),6}{(v[^1] != v[0] ? "   change " + (v[^1] - v[0]).ToString("+0;-0", CultureInfo.InvariantCulture) : string.Empty)}");
+            }
+        }
         Console.WriteLine();
         Console.WriteLine($"Quiet samples: {_quiet.Count} taken, {_quietTimeouts} skipped because the process never went idle within {F(QuietWait.TotalSeconds, "F0")} s (a connection or session that never ends is worth a look).");
         List<Sample> fit = [.. _quiet.Where(s => s.Elapsed >= warmupSeconds)];
@@ -753,7 +802,8 @@ internal sealed class Soak : IDisposable
                 return;
             }
 
-            if (e is SshConnectionException { InnerException: SocketException { SocketErrorCode: SocketError.AddressAlreadyInUse or SocketError.NoBufferSpaceAvailable or SocketError.TimedOut } })
+            if (e is SshConnectionException { InnerException: SocketException { SocketErrorCode: SocketError.AddressAlreadyInUse or SocketError.NoBufferSpaceAvailable or SocketError.TimedOut } }
+                || (kind == 6 && e is SocketException { SocketErrorCode: SocketError.AddressAlreadyInUse or SocketError.NoBufferSpaceAvailable }))
             {
                 // The machine ran out of ephemeral ports (Windows keeps closed loopback connections in TIME_WAIT for two minutes), or a SYN was dropped.
                 // That is the harness's rate, not the library: count it, and say so in the report.
