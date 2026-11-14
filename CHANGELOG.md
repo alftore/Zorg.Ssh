@@ -4,9 +4,19 @@ All notable changes to Zorg.Ssh are listed here, newest first. The format follow
 
 ## Unreleased
 
+## 0.1.1 (2026-11-14)
+
 ### Fixed
 
 - An SFTP request cancelled while its write was still waiting no longer leaves an unobserved task exception behind when the session then ends.
+
+### Documentation and repository
+
+- The package readme on nuget.org now says what the library does, how it handles a hostile peer, what it's tested with, and where the documentation is.
+- Tested on the .NET 11 runtime, and on macOS on every change. A page on .NET versions says what each one offers the library.
+- Each remaining published SSH advisory has a named regression test, listed in the security page.
+- Leak tests check that disposed clients, servers and sessions are collected, and a soak mode in the benchmarks tracks memory, handles and threads over hours. The results are in the benchmarks page.
+- The GitHub Actions dependencies are locked, and the troubleshooting page lists a known issue: occasional 10 to 25 ms delays over loopback on Windows.
 
 ## 0.1.0 (2026-11-09)
 
