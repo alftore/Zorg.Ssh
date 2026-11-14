@@ -2,6 +2,8 @@
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
+    <!-- HandleTypes.cs reads the Windows handle table through LibraryImport. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <!-- Tmds.Ssh depends on the public API analyzers, and central pinning switches them on here. This project has no API to track. -->
     <NoWarn>$(NoWarn);RS0016;RS0017;RS0037</NoWarn>
   </PropertyGroup>

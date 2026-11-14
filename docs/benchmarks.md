@@ -279,6 +279,61 @@ What the rest of a transfer costs: on the client, copying and clearing buffers i
 - **Read chunk size.** Requests are 32 KiB with 64 in flight. OpenSSH accepts larger reads, but the path, not the request count, limits the download here.
 - **Not measured:** Linux and other file systems, many sessions at once (requests that use a path take one process-wide gate), and a real network.
 
+## Soak run
+
+`--soak` checks that memory, handles and threads stay flat on both ends over a long run. It starts a `SshServer` on 127.0.0.1 (a generated ed25519 host key, password and public key login, exec, SFTP in a temp directory and direct TCP to a loopback echo listener) and runs the Zorg.Ssh client against it from several workers in the same process. Clients pin the host key's fingerprint. Nothing listens on any other address, so it runs on Windows, Linux and in a container.
+
+```
+dotnet run -c Release --project benchmarks/Zorg.Ssh.Benchmarks -- --soak --minutes 60 --interval 30
+```
+
+Options: `--minutes N` (10), `--interval S` (seconds between samples, 30), `--concurrency N` (workers, 8), `--out path.csv` (a file in the temp directory, whose path is printed), `--warmup-minutes N` (2, or 20% of the run if that is shorter), `--quiet-every N` (a quiet sample every N samples, 4, so every 2 minutes at 30 s; 0 turns them off), `--only kinds` (a comma-separated list of the operation kinds to run: `connect`, `reuse`, `stream`, `sftp_small`, `sftp_large`, `list`, `forward`, `bad_login`, `abrupt`, `cancel`; all by default) and `--think-ms N` (the average pause between a worker's operations, 50; this keeps a Windows machine from running out of ephemeral ports on closed loopback connections, and a count of connects that failed at the TCP level that way, or from a dropped SYN, is printed and not treated as an error).
+
+Each worker picks operations at random by weight: connect and log in (password, one in four with a public key) and run a command; reuse one connection for 40 commands; stream 1 MiB through a command with stdin, stdout and stderr read together; 50 small SFTP files (1 to 16 KiB) uploaded, downloaded, compared and deleted; a directory listing; one SFTP file of 8 to 32 MiB with its SHA-256 checked; a local port forward to the echo listener; a wrong password; a connection cut by a reset in the middle of a transfer (through a loopback relay the harness owns); and a cancellation in the middle of a connect, a command or an upload. Each sample forces a blocking compacting GC, then writes one CSV row and one console line: ops per kind, errors, managed heap, gen 2 and LOH size, working set, private bytes, handle count, `/proc/self/fd` entries on Linux, threads, pool threads, bytes allocated, connections the harness holds open and sessions running on the server.
+
+Samples taken while work is in flight don't compare with each other: each live connection holds several handles and threads, so handles swing by tens with the number of connections open at that moment, and a least-squares line through them is mostly that swing. So every N samples the sampler takes a **quiet sample**. It closes a gate that the workers check between operations, the workers finish their current operation and park, and the sampler waits (up to 60 s) until all of them are parked and no connection is open on the client and no session is running on the server. Then it waits 2 s for background teardown, forces the blocking compacting GC with a wait for finalizers, records a sample with phase `quiet` in the CSV and console, and opens the gate. Parked time is not work: it counts in no operation and in no think time. If the process doesn't go idle within 60 s the quiet sample is skipped and counted in the summary: a session or connection that never ends is itself a finding.
+
+At the end it fits a least-squares line to each metric over the **quiet samples** after warmup and prints the slope per hour; the normal `run` samples stay in the CSV and console, and their slopes are printed too, as info only. For handles and fds it also prints the quiet minimum, maximum, first and last values, to tell drift from noise. A verdict needs at least 5 quiet samples after warmup: with fewer it prints "too few quiet samples" and doesn't fail on slopes (the end-of-run checks below still apply). A metric passes when its quiet slope is under the tolerance:
+
+| Metric | Tolerance (slope per hour) |
+|---|---:|
+| Managed heap after a full GC | 2 MiB |
+| Private bytes | 20 MiB |
+| Handles, `/proc/self/fd` entries, OS threads, pool threads | 5 each |
+
+The tolerances are unchanged by the move to quiet samples. Working set, gen 2 and LOH size are reported without a limit. It also fails if more connections were open at once than there are workers, or if any connection or server session is left after the workers stop. Any exception that is not a designed refusal or cancellation (an `SshException` from a wrong password or a cut connection, an `OperationCanceledException` from a cancelled call) is printed with its stack, and so is a task that faulted unobserved or an operation that took over 90 seconds (180 for the large file). The exit code is 0 for a pass, 1 for a failed tolerance or check, 2 for an unexpected exception. Ctrl+C stops the workers after their current operations and still writes the summary.
+
+A run with under 10 minutes between the first and last quiet sample after warmup extrapolates noise into the per-hour slopes, so a slope over its tolerance is shown as "short run" and doesn't fail the run: use it as a smoke test. For a verdict run an hour or more. To publish for Linux: `dotnet publish benchmarks/Zorg.Ssh.Benchmarks -c Release -r linux-x64 --self-contained -o <dir>`, then run `<dir>/Zorg.Ssh.Benchmarks --soak ...`.
+
+A command on a reused connection that the server refuses at its session limit (reason 4) is counted and printed as a note, not as an error. The server frees a session slot once the session's handler has ended, a moment after the client sees the channel close, so a connection reused as hard as the soak reuses it can meet the limit of 10 in that moment. It happened about once in 60,000 reuse operations.
+
+### 14 November: two hours on Windows and Linux
+
+Each run was 120 minutes with the defaults (8 workers, 30 s samples, a quiet sample every 2 minutes, 10 minutes of warmup), so the verdict is a fit over 55 quiet samples and 108 minutes. Windows is the development machine (16 logical CPUs). Linux is an 8-core x64 machine on Ubuntu with kernel 6.8, a self-contained `linux-x64` build. Both ran .NET 10.0.15 with workstation GC.
+
+| Quiet samples after warmup | Windows | Linux |
+|---|---:|---:|
+| Operations | 527,000 | 705,000 |
+| Managed heap after a full GC | 38.8 → 39.1 MiB (0.5 MiB/h) | 33.1 → 33.8 MiB (0.2 MiB/h) |
+| Private bytes | 78.9 → 85.0 MiB (1.8 MiB/h) | 266 → 277 MiB (5.9 MiB/h) |
+| Handles (Linux: and fds) | 483 → 559 (28.7/h, range 483–567) | 104 → 106 (1.5/h) |
+| OS threads | 29 → 32 (0.5/h) | 25 → 23 (0.0/h) |
+| Connections and sessions open at the end | 0 and 0 | 0 and 0 |
+| Unexpected exceptions | 0 | 1, a session-limit refusal on reuse (above) |
+
+The managed heap, private bytes and threads are flat on both. On Linux, handles and file descriptors are flat too. On Windows the handle count drifts up by about 76 in 108 minutes, against about 116,000 connections and 527,000 operations, so it is not a handle per connection or per operation.
+
+On Windows each quiet sample also counts the process's handles by type, and the summary prints each type's first, last, lowest and highest count. That narrowed the drift down:
+
+- **Only kernel Event handles grow,** about 50 an hour with the full mix. Every other type stays level, and Thread handles follow the thread count.
+- **They aren't .NET objects.** Heap dumps 30 minutes apart (`dotnet-gcdump`) show 47 more Event handles but only 5 more `SafeWaitHandle`s, so no managed object holds the rest, and the library can't release them. They come from native code, in the runtime or in Windows.
+- **Zorg.Ssh's traffic triggers them.** Plain loopback TCP with the same pattern (8 workers, 1 to 16 MiB a connection, some cancelled, the same quiet samples) stays level over 152,000 connections.
+- **They follow concurrent work on one connection.** Run one kind at a time with `--only` and correct for the thread count: a reused connection with 4 commands at once, a stream with stdout and stderr read together, pipelined large SFTP files, and cancellations grow 38 to 62 an hour; connects, failed logins and forwards grow 4 to 9 an hour.
+
+Which native call creates them needs a native handle trace (WinDbg's `!htrace` or Application Verifier), which hasn't been done. At this rate a busy process gains about 1,200 Event handles a day, a few hundred KiB of kernel memory, with no effect on managed memory, private bytes or threads. Linux shows no growth at all. An earlier one-hour Linux run, on the build before the fix for it, also found an SFTP write that a cancelled request left behind faulting unobserved; that is fixed and has a regression test.
+
+Disposed objects are checked separately by `Leaks/CollectabilityTests.cs` in the test project, which runs in CI: a client after a command, SFTP, a process and forwards, a server and its sessions, and connections that failed login, were cut, hit a protocol error or never connected, are all collected once disposed.
+
 ## Limits
 
 - **One machine, one run setup.** No other hardware, operating system or server was tried. A Linux client would avoid the Windows to WSL hop altogether.

@@ -250,6 +250,86 @@ public sealed class StatefulRegressionTests
     private static async Task SendThatFailsAsync(SftpSession session, CancellationToken test) =>
         await Assert.ThrowsAnyAsync<SshException>(async () => (await session.SendAsync(SftpFrames.Path("x"), SftpMessage.Stat, SftpMessage.Attrs, test)).Response.Dispose());
 
+    // Found by the soak run (benchmarks --soak): an SFTP upload cancelled by its caller after 30 to 300 ms. SendAsync stops waiting for a write the
+    // caller cancelled, but the write goes on so the frame isn't torn. When the session then ended, that write failed with nobody awaiting it, and
+    // its SshConnectionException surfaced through TaskScheduler.UnobservedTaskException.
+    [Fact]
+    public async Task A_write_left_behind_by_a_cancelled_request_leaves_no_unobserved_task_exception()
+    {
+        CancellationToken test = TestContext.Current.CancellationToken;
+        UnobservedTasks.Install();
+        UnobservedTasks.Drain();
+        Pipe fromServer = new();
+        byte[] version = [0, 0, 0, 5, SftpMessage.Version, 0, 0, 0, 3];
+        await fromServer.Writer.WriteAsync(version, test);
+        StallsAfterOneWrite output = new();
+        SftpSession session = await SftpSession.StartAsync(fromServer.Reader.AsStream(), output, null, SftpLimits.Default, test);
+
+        await SendThenCancelAsync(session, output, test);
+        await session.DisposeAsync();
+        await fromServer.Writer.CompleteAsync();
+
+        List<Exception> unobserved = UnobservedTasks.Drain();
+        Exception? ours = unobserved.FirstOrDefault(e => e.ToString().Contains("couldn't be sent", StringComparison.Ordinal));
+        Assert.True(ours is null, $"A faulted {ours?.Data["task"]} was never observed: {ours}");
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static async Task SendThenCancelAsync(SftpSession session, StallsAfterOneWrite output, CancellationToken test)
+    {
+        using CancellationTokenSource cancel = CancellationTokenSource.CreateLinkedTokenSource(test);
+        Task send = session.SendAsync(SftpFrames.Path("x"), SftpMessage.Stat, SftpMessage.Attrs, cancel.Token).AsTask();
+        await output.Stalled.WaitAsync(TimeSpan.FromSeconds(20), test);
+        await cancel.CancelAsync();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => send.WaitAsync(TimeSpan.FromSeconds(20), test));
+    }
+
+    private sealed class StallsAfterOneWrite : Stream
+    {
+        private readonly TaskCompletionSource _stalled = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _writes;
+
+        public Task Stalled => _stalled.Task;
+
+        public override bool CanRead => false;
+
+        public override bool CanSeek => false;
+
+        public override bool CanWrite => true;
+
+        public override long Length => throw new NotSupportedException();
+
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override void Flush()
+        {
+        }
+
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        public override async ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            if (++_writes == 1)
+            {
+                return;
+            }
+
+            // Like a channel with no window: the write waits until the session shuts down, and then fails.
+            _stalled.TrySetResult();
+            await Task.Delay(Timeout.Infinite, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
     private sealed class BreaksAfterOneWrite : Stream
     {
         public const string Message = "the test stream broke on the second write";
