@@ -84,6 +84,7 @@ internal sealed class Soak : IDisposable
     private int _echoPort;
     private long _expected;
     private long _portExhaustion;
+    private long _sessionLimit;
     private int _thinkMs = 50;
     private long _unexpected;
     private int _live;
@@ -434,6 +435,11 @@ internal sealed class Soak : IDisposable
         Console.WriteLine();
         Console.WriteLine("Operations completed: " + string.Join(", ", Kinds.Select((k, i) => k + " " + Volatile.Read(ref _ops[i]))));
         Console.WriteLine($"Refused or cancelled as designed: {_expected}. Unexpected exceptions: {_unexpected}.");
+        if (_sessionLimit > 0)
+        {
+            Console.WriteLine($"Note: {_sessionLimit} reuse operations were refused at the session limit (reason 4): the server frees a slot a moment after the client sees a channel close (not counted as errors).");
+        }
+
         if (_portExhaustion > 0)
         {
             Console.WriteLine($"Note: {_portExhaustion} connects failed at the TCP level, from ephemeral port exhaustion or a dropped SYN (not counted as errors). Raise --think-ms or lower --concurrency.");
@@ -752,6 +758,14 @@ internal sealed class Soak : IDisposable
                 // The machine ran out of ephemeral ports (Windows keeps closed loopback connections in TIME_WAIT for two minutes), or a SYN was dropped.
                 // That is the harness's rate, not the library: count it, and say so in the report.
                 Interlocked.Increment(ref _portExhaustion);
+                return;
+            }
+
+            if (kind == 1 && e is SshException { InnerException: null } && e.Message.Contains("(reason 4)", StringComparison.Ordinal))
+            {
+                // The server frees a session slot once the session's handler has ended, a moment after the client sees the channel close. A
+                // connection reused as hard as this one can run into the limit of 10 for that moment. Counted and reported, not hidden.
+                Interlocked.Increment(ref _sessionLimit);
                 return;
             }
 

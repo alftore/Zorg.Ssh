@@ -305,6 +305,26 @@ The tolerances are unchanged by the move to quiet samples. Working set, gen 2 an
 
 A run with under 10 minutes between the first and last quiet sample after warmup extrapolates noise into the per-hour slopes, so a slope over its tolerance is shown as "short run" and doesn't fail the run: use it as a smoke test. For a verdict run an hour or more. To publish for Linux: `dotnet publish benchmarks/Zorg.Ssh.Benchmarks -c Release -r linux-x64 --self-contained -o <dir>`, then run `<dir>/Zorg.Ssh.Benchmarks --soak ...`.
 
+A command on a reused connection that the server refuses at its session limit (reason 4) is counted and printed as a note, not as an error. The server frees a session slot once the session's handler has ended, a moment after the client sees the channel close, so a connection reused as hard as the soak reuses it can meet the limit of 10 in that moment. It happened about once in 60,000 reuse operations.
+
+### 14 November: two hours on Windows and Linux
+
+Each run was 120 minutes with the defaults (8 workers, 30 s samples, a quiet sample every 2 minutes, 10 minutes of warmup), so the verdict is a fit over 55 quiet samples and 108 minutes. Windows is the development machine (16 logical CPUs). Linux is an 8-core x64 machine on Ubuntu with kernel 6.8, a self-contained `linux-x64` build. Both ran .NET 10.0.15 with workstation GC.
+
+| Quiet samples after warmup | Windows | Linux |
+|---|---:|---:|
+| Operations | 527,000 | 705,000 |
+| Managed heap after a full GC | 38.8 → 39.1 MiB (0.5 MiB/h) | 33.1 → 33.8 MiB (0.2 MiB/h) |
+| Private bytes | 78.9 → 85.0 MiB (1.8 MiB/h) | 266 → 277 MiB (5.9 MiB/h) |
+| Handles (Linux: and fds) | 483 → 559 (28.7/h, range 483–567) | 104 → 106 (1.5/h) |
+| OS threads | 29 → 32 (0.5/h) | 25 → 23 (0.0/h) |
+| Connections and sessions open at the end | 0 and 0 | 0 and 0 |
+| Unexpected exceptions | 0 | 1, a session-limit refusal on reuse (above) |
+
+The managed heap, private bytes and threads are flat on both. On Linux, handles and file descriptors are flat too. On Windows the handle count drifts up by about 76 in 108 minutes, against about 116,000 connections and 527,000 operations, so it is not a handle per connection or per operation; what holds them (the runtime's own pools, or something in the library) isn't identified yet. An earlier one-hour Linux run, on the build before the fix for it, also found an SFTP write that a cancelled request left behind faulting unobserved; that is fixed and has a regression test.
+
+Disposed objects are checked separately by `Leaks/CollectabilityTests.cs` in the test project, which runs in CI: a client after a command, SFTP, a process and forwards, a server and its sessions, and connections that failed login, were cut, hit a protocol error or never connected, are all collected once disposed.
+
 ## Limits
 
 - **One machine, one run setup.** No other hardware, operating system or server was tried. A Linux client would avoid the Windows to WSL hop altogether.
