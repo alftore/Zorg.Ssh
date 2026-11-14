@@ -1,3 +1,4 @@
+using System;
 using BenchmarkDotNet.Running;
 using Zorg.Ssh.Benchmarks;
 
@@ -16,6 +17,12 @@ if (args is ["--phases"])
 if (args is ["--sftp-server", ..])
 {
     await SftpServerSmallFiles.RunAsync(args);
+    return;
+}
+
+if (args is ["--soak", ..])
+{
+    Environment.ExitCode = await Soak.RunAsync(args);
     return;
 }
 

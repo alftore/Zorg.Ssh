@@ -187,6 +187,14 @@ internal sealed class SftpSession : IAsyncDisposable
                 if (!handedOver)
                 {
                     pending.Abandon();
+
+                    // A caller that cancelled stops waiting, but the write carries on. If the session ends before it finishes, it
+                    // fails, and with no one awaiting it that failure would surface as an unobserved task exception.
+                    _ = write.ContinueWith(
+                        static t => _ = t.Exception,
+                        CancellationToken.None,
+                        TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+                        TaskScheduler.Default);
                 }
             }
         }
