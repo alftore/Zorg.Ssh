@@ -4,6 +4,10 @@ All notable changes to Zorg.Ssh are listed here, newest first. The format follow
 
 ## Unreleased
 
+### Fixed
+
+- An SFTP request cancelled while its write was still waiting no longer leaves an unobserved task exception behind when the session then ends.
+
 ## 0.1.0 (2026-11-09)
 
 The first release. No changes to the library since 0.1.0-preview.3. Documentation and repository changes:
