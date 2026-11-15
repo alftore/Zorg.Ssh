@@ -20,7 +20,7 @@
     <EmbedUntrackedSources>true</EmbedUntrackedSources>
 
     <!-- Packaging metadata -->
-    <VersionPrefix>0.1.1</VersionPrefix>
+    <VersionPrefix>0.1.2</VersionPrefix>
     <Authors>Zorg.Ssh contributors</Authors>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageReadmeFile>README.md</PackageReadmeFile>
