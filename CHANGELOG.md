@@ -4,9 +4,15 @@ All notable changes to Zorg.Ssh are listed here, newest first. The format follow
 
 ## Unreleased
 
+## 0.1.2 (2026-11-15)
+
 ### Fixed
 
 - A connect cancelled or timed out during the identification exchange could throw a raw `IOException` when the socket reported the abort that way, which Windows can do. It now throws `OperationCanceledException` when cancelled and `SshConnectionException` when timed out. An 8-hour soak found it.
+
+### Documentation and repository
+
+- The benchmarks page has the results of 8-hour soaks on Windows and Linux. Memory, threads and Linux handles stay flat; the slow growth of Windows Event handles slows down over the run.
 
 ## 0.1.1 (2026-11-14)
 
