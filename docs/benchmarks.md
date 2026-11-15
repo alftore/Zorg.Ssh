@@ -330,7 +330,30 @@ On Windows each quiet sample also counts the process's handles by type, and the 
 - **Zorg.Ssh's traffic triggers them.** Plain loopback TCP with the same pattern (8 workers, 1 to 16 MiB a connection, some cancelled, the same quiet samples) stays level over 152,000 connections.
 - **They follow concurrent work on one connection.** Run one kind at a time with `--only` and correct for the thread count: a reused connection with 4 commands at once, a stream with stdout and stderr read together, pipelined large SFTP files, and cancellations grow 38 to 62 an hour; connects, failed logins and forwards grow 4 to 9 an hour.
 
-Which native call creates them needs a native handle trace (WinDbg's `!htrace` or Application Verifier), which hasn't been done. At this rate a busy process gains about 1,200 Event handles a day, a few hundred KiB of kernel memory, with no effect on managed memory, private bytes or threads. Linux shows no growth at all. An earlier one-hour Linux run, on the build before the fix for it, also found an SFTP write that a cancelled request left behind faulting unobserved; that is fixed and has a regression test.
+Which native call creates them needs a native handle trace (WinDbg's `!htrace` or Application Verifier), which hasn't been done. The 8-hour run below shows the growth slowing down, so the two-hour rate doesn't carry on for a day. Linux shows no growth at all. An earlier one-hour Linux run, on the build before the fix for it, also found an SFTP write that a cancelled request left behind faulting unobserved; that is fixed and has a regression test.
+
+### 15 November: eight hours on Windows and Linux
+
+The same setup, for 480 minutes, so the verdict is a fit over 235 quiet samples and 468 minutes. Linux ran commit `2b50845` (0.1.1). Windows ran `5530b83`, the fix below, because the first Windows attempt stopped early.
+
+| Quiet samples after warmup | Windows | Linux |
+|---|---:|---:|
+| Operations | 2,121,000 | 2,822,000 |
+| Managed heap after a full GC | 39.4 → 40.4 MiB (0.2 MiB/h) | 33.9 → 33.4 MiB (0.0 MiB/h) |
+| Private bytes | 76.9 → 83.2 MiB (0.4 MiB/h) | 283 → 291 MiB (0.6 MiB/h) |
+| Handles (Linux: and fds) | 512 → 584 (5.4/h, range 489–590) | 104 → 104 (0.0/h) |
+| OS threads | 33 → 33 (0.0/h) | 25 → 23 (−0.1/h) |
+| Connections and sessions open at the end | 0 and 0 | 0 and 0 |
+| Unexpected exceptions | 0 | 0 |
+| Result | FAIL, handles only (5.4/h against 5) | PASS |
+
+Fitting the first and second halves of the quiet samples separately shows what the two-hour runs couldn't:
+
+- **Windows handles slow down:** 11.3 an hour in the first half, 3.2 in the second. Event handles were about 40 above the first quiet sample after one hour and 70 above it after eight, while every other type stayed level. Growth that slows like this looks like a native cache or pool filling up, not a handle lost per operation, though which one is still unknown.
+- **Linux private bytes level off:** 1.5 MiB an hour in the first half, 0.5 in the second, against 5.9 an hour over the two-hour run. That is the allocator settling, not a leak.
+- **Nothing else moves** on either system: the managed heap, threads and pool threads are flat over 2.1 and 2.8 million operations.
+
+The first Windows attempt found a bug three hours in. A connect cancelled as its socket read failed could throw a raw `IOException`, because Windows can report a cancelled read that way, instead of `OperationCanceledException`. It happened once in about 57,000 cancellations. It is fixed, and `Transport/HandshakeCancelTests.cs` reproduces it. That attempt's three hours of samples agree with the full run.
 
 Disposed objects are checked separately by `Leaks/CollectabilityTests.cs` in the test project, which runs in CI: a client after a command, SFTP, a process and forwards, a server and its sessions, and connections that failed login, were cut, hit a protocol error or never connected, are all collected once disposed.
 
