@@ -586,7 +586,8 @@ internal sealed class Soak : IDisposable
             (_, d) => d with { Count = d.Count + 1 });
         if (first)
         {
-            Console.Error.WriteLine($"UNEXPECTED in {context}: {e.GetType().FullName}: {e.Message}");
+            // The whole exception, stack included: a run that stops early still says where it came from.
+            Console.Error.WriteLine($"UNEXPECTED in {context}: {e}");
         }
     }
 

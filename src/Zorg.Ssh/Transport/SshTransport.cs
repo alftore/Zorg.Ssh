@@ -452,7 +452,18 @@ internal sealed partial class SshTransport : IAsyncDisposable
         {
             throw Fail(ex, null);
         }
-        catch (Exception ex) when (ex is not SshException && !cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex) when (ex is IOException or ObjectDisposedException && cancellationToken.IsCancellationRequested)
+        {
+            // A socket read cancelled as it fails can end with an IOException rather than a cancellation. The caller
+            // cancelled, so that is what they see; the stream's failure stays inside.
+            Fail(Translate(ex), null);
+            throw new OperationCanceledException("The connection was cancelled during the identification exchange.", ex, cancellationToken);
+        }
+        catch (Exception ex) when (ex is not SshException)
         {
             throw Fail(Translate(ex), null);
         }
