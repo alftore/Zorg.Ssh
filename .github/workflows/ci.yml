@@ -33,7 +33,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: actions/setup-dotnet@v6.0.0
+      - uses: actions/setup-dotnet@v6.1.0
         with:
           global-json-file: global.json
 
@@ -64,7 +64,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: actions/setup-dotnet@v6.0.0
+      - uses: actions/setup-dotnet@v6.1.0
         with:
           global-json-file: global.json
           dotnet-version: 11.0.x
@@ -90,7 +90,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: actions/setup-dotnet@v6.0.0
+      - uses: actions/setup-dotnet@v6.1.0
         with:
           global-json-file: global.json
 
@@ -119,7 +119,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: actions/setup-dotnet@v6.0.0
+      - uses: actions/setup-dotnet@v6.1.0
         with:
           global-json-file: global.json
 
