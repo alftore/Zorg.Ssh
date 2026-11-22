@@ -7,7 +7,7 @@
   <!-- docs/dependencies.md records the licence and risk review for every package here. -->
   <ItemGroup Label="Runtime">
     <PackageVersion Include="BouncyCastle.Cryptography" Version="2.7.0" />
-    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.14" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="11.0.0" />
   </ItemGroup>
 
   <ItemGroup Label="Build">
@@ -16,7 +16,7 @@
 
   <ItemGroup Label="Tests">
     <PackageVersion Include="coverlet.MTP" Version="10.1.0" />
-    <PackageVersion Include="xunit.v3" Version="4.0.2" />
+    <PackageVersion Include="xunit.v3" Version="4.0.3" />
   </ItemGroup>
 
   <ItemGroup Label="Fuzzing">
@@ -25,7 +25,7 @@
 
   <ItemGroup Label="Benchmarks">
     <PackageVersion Include="BenchmarkDotNet" Version="0.15.8" />
-    <PackageVersion Include="SSH.NET" Version="2026.0.0" />
+    <PackageVersion Include="SSH.NET" Version="2026.0.1" />
     <PackageVersion Include="Tmds.Ssh" Version="0.26.0" />
   </ItemGroup>
 </Project>
